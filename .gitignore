@@ -1,0 +1,27 @@
+# Disposable upstream source and build state
+/work/
+/output/
+/cache/
+
+# Local-only overrides; keep the guide tracked
+/local/*
+!/local/README.md
+
+# Secrets and environment files
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Python and editor state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+
+# Superpowers execution scratch space
+/.superpowers/
+
