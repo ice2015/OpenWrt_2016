@@ -51,6 +51,9 @@ FEED_ROOT=${FEED_ROOT:-"$SOURCE_DIR/.feeds-pinned"}
 DOWNLOAD_DIR=${DOWNLOAD_DIR:-"$SOURCE_DIR/dl"}
 CCACHE_DIR=${CCACHE_DIR:-"$SOURCE_DIR/.ccache"}
 mkdir -p "$FEED_ROOT" "$DOWNLOAD_DIR" "$CCACHE_DIR"
+if command -v ccache >/dev/null 2>&1; then
+	CCACHE_DIR="$CCACHE_DIR" ccache -M 5G >/dev/null 2>&1 || true
+fi
 
 FEEDS_CONF="$SOURCE_DIR/feeds.conf"
 : > "$FEEDS_CONF"
