@@ -61,12 +61,39 @@ class WorkflowContractTests(unittest.TestCase):
     def test_workflows_delegate_native_build_logic_to_scripts(self) -> None:
         combined = "\n".join(
             self.workflow(name)
-            for name in ("validate.yml", "build.yml", "reusable-build.yml")
+            for name in (
+                "validate.yml",
+                "build.yml",
+                "reusable-build.yml",
+                "build-lite.yml",
+                "build-uboot.yml",
+            )
         )
 
         self.assertNotIn("pull_request_target", combined)
         self.assertNotRegex(combined, r"(?m)^\s+run: (?:make|git clone|\./scripts/feeds)")
         self.assertNotIn("secrets:", combined)
+
+    def test_lite_workflow_pins_source_and_gates_firmware_outputs(self) -> None:
+        workflow = self.workflow("build-lite.yml")
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("runs-on: ubuntu-22.04", workflow)
+        self.assertIn("cc777dfa3c1964518ddb2c310e8570830b11e954", workflow)
+        self.assertIn("ec9ef10efc65da1e6d1de4e2c043c0e13d08eed8", workflow)
+        self.assertIn("scripts/build-lite.sh", workflow)
+        self.assertIn("actions/cache@", workflow)
+        self.assertIn("actions/cache@", workflow)
+        self.assertIn("actions/upload-artifact@", workflow)
+
+    def test_uboot_workflow_is_independent_and_pinned(self) -> None:
+        workflow = self.workflow("build-uboot.yml")
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("f6b361ed80012244b1ed33be1b5080b4d65e83fb", workflow)
+        self.assertIn("scripts/build-uboot.sh", workflow)
+        self.assertIn("MULTI_LAYOUT=1", (ROOT / "scripts/build-uboot.sh").read_text(encoding="utf-8"))
+        self.assertNotIn("256mb", workflow.lower())
 
 
 if __name__ == "__main__":

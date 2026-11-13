@@ -67,6 +67,10 @@ class RepositoryContractTests(unittest.TestCase):
             "docs/architecture.md",
             "docs/configuration-layers.md",
             "docs/adding-a-device.md",
+            "docs/LITE-README.md",
+            "docs/UBOOT-SAFETY.md",
+            "docs/WIREGUARD-VPS-ROUTING.md",
+            "docs/TEST-PLAN.md",
         ]
 
         self.assertEqual([], [path for path in documents if not (ROOT / path).is_file()])

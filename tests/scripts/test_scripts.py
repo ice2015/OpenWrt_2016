@@ -15,6 +15,13 @@ SCRIPTS = (
     "prepare.sh",
     "build.sh",
     "clean.sh",
+    "configure-lite.sh",
+    "build-lite.sh",
+    "build-uboot.sh",
+    "preflight.sh",
+    "plant-profile.sh",
+    "plant-access.sh",
+    "lite-uplink-watch.sh",
 )
 
 
@@ -52,6 +59,52 @@ class ScriptInterfaceTests(unittest.TestCase):
         )
         for result in results.values():
             self.assertIn("Usage:", result.stdout)
+
+    def test_lite_shell_scripts_are_posix_syntax(self) -> None:
+        scripts = (
+            "configure-lite.sh",
+            "build-lite.sh",
+            "build-uboot.sh",
+            "preflight.sh",
+            "plant-profile.sh",
+            "plant-access.sh",
+            "lite-common.sh",
+            "lite-uplink-watch.sh",
+        )
+        for name in scripts:
+            with self.subTest(script=name):
+                result = subprocess.run(
+                    [bash_executable(), "-n", (ROOT / "scripts" / name).as_posix()],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_lite_network_input_validation(self) -> None:
+        helper = (ROOT / "scripts" / "lite-common.sh").as_posix()
+        command = (
+            f'. "{helper}"; '
+            'lite_valid_ipv4 192.168.10.254 && '
+            'lite_valid_cidr 192.168.10.254/24 && '
+            'lite_cidr_contains 192.168.10.0/24 192.168.10.254 && '
+            'lite_cidr_matches_netmask 192.168.10.0/24 255.255.255.0 && '
+            'lite_check_address_not_network_or_broadcast 192.168.10.254 24 && '
+            'lite_valid_port 65535 && '
+            '! lite_valid_ipv4 224.0.0.1 && '
+            '! lite_valid_ipv4 192.168.010.1 && '
+            '! lite_valid_cidr 192.168.10.0/08 && '
+            '! lite_valid_port 0'
+        )
+        result = subprocess.run(
+            [bash_executable(), "-c", command],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_validation_runs_outside_repository(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,55 @@
+name: TR3000 DHCP U-Boot
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tr3000-dhcp-uboot
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      UBOOT_REPOSITORY: https://github.com/weekdaycare/bl-mt798x-dhcpd.git
+      UBOOT_SHA: f6b361ed80012244b1ed33be1b5080b4d65e83fb
+    steps:
+      - name: Check out this build project
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install pinned-build prerequisites
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/uboot-artifact/logs"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bison device-tree-compiler flex gcc-aarch64-linux-gnu \
+            libssl-dev qemu-user-static
+
+      - name: Clone pinned U-Boot source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/tr3000-uboot" "$GITHUB_WORKSPACE/uboot-artifact/logs"
+          git clone --filter=blob:none --no-checkout "$UBOOT_REPOSITORY" "$RUNNER_TEMP/tr3000-uboot/source"
+          git -C "$RUNNER_TEMP/tr3000-uboot/source" checkout --detach "$UBOOT_SHA"
+          test "$(git -C "$RUNNER_TEMP/tr3000-uboot/source" rev-parse HEAD)" = "$UBOOT_SHA"
+      - name: Build and verify only the 128 MiB multi-layout target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sh scripts/build-uboot.sh \
+            --source-dir "$RUNNER_TEMP/tr3000-uboot/source" \
+            --artifact-dir "$GITHUB_WORKSPACE/uboot-artifact"
+
+      - name: Upload U-Boot artifacts and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tr3000-dhcp-uboot-128m-multilayout
+          path: uboot-artifact/
+          if-no-files-found: error
+          retention-days: 30

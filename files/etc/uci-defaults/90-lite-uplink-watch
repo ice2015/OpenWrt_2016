@@ -1,0 +1,4 @@
+#!/bin/sh
+
+/etc/init.d/lite-uplink-watch enable
+/etc/init.d/lite-uplink-watch start

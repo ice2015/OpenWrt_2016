@@ -1,0 +1,39 @@
+# TR3000 Lite package delta, applied over the upstream 128muboot.config.
+CONFIG_PACKAGE_ca-bundle=y
+CONFIG_CCACHE=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_ip-full=y
+CONFIG_PACKAGE_iputils-arping=y
+CONFIG_PACKAGE_kmod-usb-net=y
+CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+CONFIG_PACKAGE_kmod-usb-net-rndis=y
+CONFIG_PACKAGE_kmod-wireguard=y
+CONFIG_PACKAGE_luci=y
+CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+CONFIG_PACKAGE_luci-proto-wireguard=y
+CONFIG_PACKAGE_luci-ssl-openssl=y
+CONFIG_PACKAGE_openssh-server=y
+CONFIG_PACKAGE_openssh-sftp-server=y
+CONFIG_PACKAGE_tcpdump-mini=y
+CONFIG_PACKAGE_ubi-utils=y
+CONFIG_PACKAGE_wireguard-tools=y
+
+# These are intentionally excluded even if selected by the upstream baseline.
+# CONFIG_PACKAGE_adguardhome is not set
+# CONFIG_PACKAGE_cloudflared is not set
+# CONFIG_PACKAGE_docker is not set
+# CONFIG_PACKAGE_dockerd is not set
+# CONFIG_PACKAGE_kmod-usb-net-ipheth is not set
+# CONFIG_PACKAGE_luci-app-mwan3 is not set
+# CONFIG_PACKAGE_luci-app-aurora-config is not set
+# CONFIG_PACKAGE_luci-app-bandix is not set
+# CONFIG_PACKAGE_luci-app-dockerman is not set
+# CONFIG_PACKAGE_luci-app-openclash is not set
+# CONFIG_PACKAGE_luci-app-passwall is not set
+# CONFIG_PACKAGE_luci-app-upnp is not set
+# CONFIG_PACKAGE_luci-theme-aurora is not set
+# CONFIG_PACKAGE_miniupnpd is not set
+# CONFIG_PACKAGE_mwan3 is not set
+# CONFIG_PACKAGE_sing-box is not set
+# CONFIG_PACKAGE_tailscale is not set
+# CONFIG_PACKAGE_dropbear is not set

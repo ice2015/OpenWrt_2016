@@ -1,0 +1,145 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+SOURCE_DIR=
+BASE_CONFIG=
+SEED="$REPO_ROOT/configs/lite.seed"
+
+usage() {
+	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE]\n' "$0"
+}
+
+fail() {
+	printf 'Error: %s\n' "$*" >&2
+	exit 1
+}
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--source-dir)
+			[ "$#" -ge 2 ] || fail "--source-dir requires a value"
+			SOURCE_DIR=$2
+			shift 2
+			;;
+		--base-config)
+			[ "$#" -ge 2 ] || fail "--base-config requires a value"
+			BASE_CONFIG=$2
+			shift 2
+			;;
+		--seed)
+			[ "$#" -ge 2 ] || fail "--seed requires a value"
+			SEED=$2
+			shift 2
+			;;
+		--help)
+			usage
+			exit 0
+			;;
+		*)
+			fail "unknown argument: $1"
+			;;
+	esac
+done
+
+[ -n "$SOURCE_DIR" ] || fail "--source-dir is required"
+[ -n "$BASE_CONFIG" ] || fail "--base-config is required"
+[ -d "$SOURCE_DIR/scripts" ] || fail "not an OpenWrt source tree: $SOURCE_DIR"
+[ -f "$BASE_CONFIG" ] || fail "base config not found: $BASE_CONFIG"
+[ -f "$SEED" ] || fail "Lite seed not found: $SEED"
+
+SOURCE_DIR=$(CDPATH= cd -- "$SOURCE_DIR" && pwd)
+BASE_CONFIG=$(CDPATH= cd -- "$(dirname -- "$BASE_CONFIG")" && pwd)/$(basename -- "$BASE_CONFIG")
+SEED=$(CDPATH= cd -- "$(dirname -- "$SEED")" && pwd)/$(basename -- "$SEED")
+DTS="$SOURCE_DIR/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts"
+[ -f "$DTS" ] || fail "expected U-Boot Mod DTS not found: $DTS"
+grep -Fq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' "$BASE_CONFIG" ||
+	fail "base config does not select cudy_tr3000-v1-ubootmod"
+grep -Fq 'reg = <0x5c0000 0x7000000>;' "$DTS" ||
+	fail "upstream DTS is not the verified 112 MiB UBI layout"
+if grep -Fq 'reg = <0x5c0000 0x7a40000>;' "$DTS"; then
+	fail "refusing the 122 MiB DTS layout"
+fi
+
+TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.lite.XXXXXX")
+trap 'rm -f "$TEMP_CONFIG"' EXIT HUP INT TERM
+awk '
+	function key(line, value) {
+		if (line ~ /^# CONFIG_[A-Za-z0-9_]+ is not set$/) {
+			sub(/^# /, "", line)
+			sub(/ is not set$/, "", line)
+			return line
+		}
+		if (line ~ /^CONFIG_[A-Za-z0-9_]+=*/) {
+			sub(/=.*/, "", line)
+			return line
+		}
+		return ""
+	}
+	FNR == NR {
+		line = $0
+		symbol = key(line)
+		if (symbol != "") {
+			replacement[symbol] = line
+			order[++count] = symbol
+		}
+		next
+	}
+	{
+		symbol = key($0)
+		if (symbol == "" || !(symbol in replacement))
+			print
+	}
+	END {
+		for (i = 1; i <= count; i++)
+			print replacement[order[i]]
+	}
+' "$SEED" "$BASE_CONFIG" > "$TEMP_CONFIG"
+
+cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
+(
+	cd "$SOURCE_DIR"
+	make defconfig
+)
+
+grep -Fq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' "$SOURCE_DIR/.config" ||
+	fail "make defconfig changed the selected device profile"
+[ "$(grep -c '^CONFIG_TARGET_mediatek_filogic_DEVICE_.*=y$' "$SOURCE_DIR/.config")" -eq 1 ] ||
+	fail "configuration must select exactly one mediatek filogic device profile"
+for package in \
+	ca-bundle curl ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
+	kmod-usb-net-rndis kmod-wireguard luci \
+	luci-i18n-base-zh-cn luci-proto-wireguard luci-ssl-openssl \
+	openssh-server openssh-sftp-server tcpdump-mini ubi-utils wireguard-tools
+do
+	grep -Fq "CONFIG_PACKAGE_$package=y" "$SOURCE_DIR/.config" ||
+		fail "required Lite package was not selected: $package"
+done
+for package in \
+	adguardhome cloudflared docker dockerd kmod-usb-net-ipheth \
+	luci-app-aurora-config luci-app-bandix luci-app-dockerman \
+	luci-app-openclash luci-app-passwall luci-app-upnp \
+	luci-app-mwan3 luci-theme-aurora miniupnpd mwan3 sing-box tailscale dropbear
+do
+	if grep -Fq "CONFIG_PACKAGE_$package=y" "$SOURCE_DIR/.config"; then
+		fail "excluded package remained selected after defconfig: $package"
+	fi
+done
+
+mkdir -p "$SOURCE_DIR/files"
+cp -R "$REPO_ROOT/files/." "$SOURCE_DIR/files/"
+mkdir -p "$SOURCE_DIR/files/root/scripts"
+for script in plant-profile.sh plant-access.sh preflight.sh lite-common.sh lite-uplink-watch.sh; do
+	install -m 0755 "$SCRIPT_DIR/$script" "$SOURCE_DIR/files/root/scripts/$script"
+done
+mkdir -p "$SOURCE_DIR/files/usr/sbin" "$SOURCE_DIR/files/etc/init.d" "$SOURCE_DIR/files/etc/uci-defaults"
+install -m 0755 "$SCRIPT_DIR/lite-uplink-watch.sh" \
+	"$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
+install -m 0644 "$SCRIPT_DIR/lite-common.sh" \
+	"$SOURCE_DIR/files/usr/sbin/lite-common.sh"
+install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
+	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
+install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
+	"$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch"
+printf 'Lite configuration validated for the 112 MiB U-Boot Mod profile.\n'
