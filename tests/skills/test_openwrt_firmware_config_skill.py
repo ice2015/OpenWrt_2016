@@ -9,16 +9,35 @@ SKILL_FILE = SKILL_DIR / "SKILL.md"
 
 
 class OpenWrtFirmwareConfigSkillTests(unittest.TestCase):
+    def test_frontmatter_parser_rejects_ambiguous_colon_scalars(self):
+        malformed = (
+            "name: openwrt-firmware-config\n"
+            "description: Use when: this is not a valid plain YAML scalar"
+        )
+        with self.assertRaises(ValueError):
+            self.parse_frontmatter(malformed)
+
+    @staticmethod
+    def parse_frontmatter(frontmatter):
+        metadata = {}
+        lines = frontmatter.splitlines()
+        if len(lines) != 2:
+            raise ValueError("frontmatter must contain exactly name and description")
+        for line in lines:
+            match = re.fullmatch(r"([a-z][a-z0-9_-]*): ([^:\r\n]+)", line)
+            if match is None or match.group(1) in metadata:
+                raise ValueError(f"invalid frontmatter scalar: {line}")
+            metadata[match.group(1)] = match.group(2)
+        if set(metadata) != {"name", "description"}:
+            raise ValueError("frontmatter requires name and description only")
+        return metadata
+
     def read_skill(self):
         self.assertTrue(SKILL_FILE.is_file(), f"missing project skill: {SKILL_FILE}")
         text = SKILL_FILE.read_text(encoding="utf-8")
         match = re.match(r"\A---\s*\n(.*?)\n---\s*\n(.*)\Z", text, re.DOTALL)
         self.assertIsNotNone(match, "SKILL.md must have YAML frontmatter")
-        metadata = {}
-        for line in match.group(1).splitlines():
-            key, separator, value = line.partition(":")
-            if separator:
-                metadata[key.strip()] = value.strip().strip('"\'')
+        metadata = self.parse_frontmatter(match.group(1))
         return text, metadata, match.group(2)
 
     def test_skill_frontmatter_and_structure(self):
@@ -68,6 +87,24 @@ class OpenWrtFirmwareConfigSkillTests(unittest.TestCase):
                     text,
                     r"(?is)(OpenWrt|ImmortalWrt).{0,160}(配置|firmware configuration)",
                 )
+
+    def test_evaluation_viewer_inputs_preserve_verbatim_outputs(self):
+        workspace = SKILL_DIR.parent / "openwrt-firmware-config-workspace" / "iteration-1"
+        for scenario in workspace.iterdir():
+            if not scenario.is_dir():
+                continue
+            for configuration in ("without_skill", "with_skill"):
+                run_dir = scenario / configuration
+                direct = run_dir / "output.md"
+                viewer = run_dir / "outputs" / "output.md"
+                if direct.exists() or viewer.exists():
+                    with self.subTest(scenario=scenario.name, configuration=configuration):
+                        self.assertTrue(direct.is_file())
+                        self.assertTrue(viewer.is_file())
+                        self.assertEqual(
+                            direct.read_text(encoding="utf-8"),
+                            viewer.read_text(encoding="utf-8"),
+                        )
 
 
 if __name__ == "__main__":
