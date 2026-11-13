@@ -1,6 +1,5 @@
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -50,6 +49,74 @@ def run_script(name: str, *arguments: str, cwd: Path | None = None) -> subproces
     )
 
 
+def lite_base_config() -> str:
+    required_packages = (
+        "ca-bundle", "curl", "ip-full", "iputils-arping", "kmod-usb-net",
+        "kmod-usb-net-cdc-ether", "kmod-usb-net-rndis", "kmod-wireguard",
+        "luci", "luci-i18n-base-zh-cn", "luci-proto-wireguard",
+        "luci-ssl-openssl", "openssh-server", "openssh-sftp-server",
+        "tcpdump-mini", "ubi-utils", "wireguard-tools",
+    )
+    lines = [
+        "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
+        'CONFIG_CCACHE_DIR="/workdir/.ccache"',
+    ]
+    lines.extend(f"CONFIG_PACKAGE_{package}=y" for package in required_packages)
+    return "\n".join(lines) + "\n"
+
+
+def run_lite_configure(
+    base_contents: str,
+    *,
+    seed_contents: str | None = None,
+    ccache_dir: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "source"
+        (source / "scripts").mkdir(parents=True)
+        dts = source / "target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts"
+        dts.parent.mkdir(parents=True)
+        dts.write_text("reg = <0x5c0000 0x7000000>;\n", encoding="utf-8")
+        base_config = root / "base.config"
+        base_config.write_text(base_contents, encoding="utf-8")
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        fake_make = fake_bin / "make"
+        fake_make.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_make.chmod(0o755)
+        environment = dict(os.environ)
+        environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+        arguments = [
+            bash_executable(),
+            (ROOT / "scripts/configure-lite.sh").as_posix(),
+            "--source-dir", source.as_posix(),
+            "--base-config", base_config.as_posix(),
+        ]
+        if seed_contents is not None:
+            seed = root / "lite.seed"
+            seed.write_text(seed_contents, encoding="utf-8")
+            arguments.extend(("--seed", seed.as_posix()))
+        if ccache_dir is not None:
+            arguments.extend(("--ccache-dir", ccache_dir))
+
+        result = subprocess.run(
+            arguments,
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        generated_path = source / ".config"
+        generated_config = (
+            generated_path.read_text(encoding="utf-8")
+            if generated_path.is_file()
+            else ""
+        )
+    return result, generated_config
+
+
 class ScriptInterfaceTests(unittest.TestCase):
     def test_every_script_supports_help(self) -> None:
         results = {name: run_script(name, "--help") for name in SCRIPTS}
@@ -84,48 +151,34 @@ class ScriptInterfaceTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
 
     def test_lite_config_merge_handles_hyphenated_package_symbols(self) -> None:
-        configure_script = (ROOT / "scripts" / "configure-lite.sh").read_text(
-            encoding="utf-8"
+        base_config = (
+            lite_base_config()
+            + "CONFIG_PACKAGE_luci-app-openclash=y\n"
         )
-        match = re.search(
-            r"\nawk '\n(?P<program>.*?)\n' \"\$SEED\" \"\$BASE_CONFIG\"",
-            configure_script,
-            re.DOTALL,
+        seed = (
+            "# CONFIG_PACKAGE_luci-app-openclash is not set\n"
+            "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y\n"
         )
-        self.assertIsNotNone(match, "could not locate the Lite config merge program")
-
-        with tempfile.TemporaryDirectory() as directory:
-            seed = Path(directory) / "lite.seed"
-            base_config = Path(directory) / "base.config"
-            seed.write_text(
-                "# CONFIG_PACKAGE_luci-app-openclash is not set\n"
-                "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y\n",
-                encoding="utf-8",
-            )
-            base_config.write_text(
-                "CONFIG_PACKAGE_luci-app-openclash=y\n"
-                "CONFIG_PACKAGE_luci=y\n",
-                encoding="utf-8",
-            )
-            result = subprocess.run(
-                [
-                    bash_executable(),
-                    "-c",
-                    'awk "$1" "$2" "$3"',
-                    "awk",
-                    match.group("program"),
-                    str(seed),
-                    str(base_config),
-                ],
-                text=True,
-                capture_output=True,
-                check=False,
-            )
+        result, generated_config = run_lite_configure(
+            base_config,
+            seed_contents=seed,
+        )
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("CONFIG_PACKAGE_luci-i18n-base-zh-cn=y", result.stdout)
-        self.assertNotIn("CONFIG_PACKAGE_luci-app-openclash=y", result.stdout)
-        self.assertIn("CONFIG_PACKAGE_luci=y", result.stdout)
+        self.assertIn("CONFIG_PACKAGE_luci-i18n-base-zh-cn=y", generated_config)
+        self.assertNotIn("CONFIG_PACKAGE_luci-app-openclash=y", generated_config)
+        self.assertIn("CONFIG_PACKAGE_luci=y", generated_config)
+
+    def test_lite_config_uses_requested_ccache_directory(self) -> None:
+        requested_cache = "/tmp/openwrt-test-ccache"
+        result, generated_config = run_lite_configure(
+            lite_base_config(),
+            ccache_dir=requested_cache,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(f'CONFIG_CCACHE_DIR="{requested_cache}"', generated_config)
+        self.assertNotIn('CONFIG_CCACHE_DIR="/workdir/.ccache"', generated_config)
 
     def test_lite_network_input_validation(self) -> None:
         helper = (ROOT / "scripts" / "lite-common.sh").as_posix()

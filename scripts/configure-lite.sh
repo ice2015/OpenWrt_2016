@@ -5,10 +5,11 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 SOURCE_DIR=
 BASE_CONFIG=
+CCACHE_DIR_OVERRIDE=
 SEED="$REPO_ROOT/configs/lite.seed"
 
 usage() {
-	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE]\n' "$0"
+	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE] [--ccache-dir DIR]\n' "$0"
 }
 
 fail() {
@@ -33,6 +34,11 @@ while [ "$#" -gt 0 ]; do
 			SEED=$2
 			shift 2
 			;;
+		--ccache-dir)
+			[ "$#" -ge 2 ] || fail "--ccache-dir requires a value"
+			CCACHE_DIR_OVERRIDE=$2
+			shift 2
+			;;
 		--help)
 			usage
 			exit 0
@@ -48,6 +54,14 @@ done
 [ -d "$SOURCE_DIR/scripts" ] || fail "not an OpenWrt source tree: $SOURCE_DIR"
 [ -f "$BASE_CONFIG" ] || fail "base config not found: $BASE_CONFIG"
 [ -f "$SEED" ] || fail "Lite seed not found: $SEED"
+case "$CCACHE_DIR_OVERRIDE" in
+	'') ;;
+	/*) ;;
+	*) fail "--ccache-dir must be an absolute Unix path" ;;
+esac
+case "$CCACHE_DIR_OVERRIDE" in
+	*\"*) fail "--ccache-dir must not contain a double quote" ;;
+esac
 
 SOURCE_DIR=$(CDPATH= cd -- "$SOURCE_DIR" && pwd)
 BASE_CONFIG=$(CDPATH= cd -- "$(dirname -- "$BASE_CONFIG")" && pwd)/$(basename -- "$BASE_CONFIG")
@@ -64,7 +78,7 @@ fi
 
 TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.lite.XXXXXX")
 trap 'rm -f "$TEMP_CONFIG"' EXIT HUP INT TERM
-awk '
+awk -v ccache_dir="$CCACHE_DIR_OVERRIDE" '
 	function key(line, value) {
 		if (line ~ /^# CONFIG_[A-Za-z0-9_-]+ is not set$/) {
 			sub(/^# /, "", line)
@@ -80,6 +94,8 @@ awk '
 	FNR == NR {
 		line = $0
 		symbol = key(line)
+		if (ccache_dir != "" && symbol == "CONFIG_CCACHE_DIR")
+			next
 		if (symbol != "") {
 			replacement[symbol] = line
 			order[++count] = symbol
@@ -88,12 +104,16 @@ awk '
 	}
 	{
 		symbol = key($0)
+		if (ccache_dir != "" && symbol == "CONFIG_CCACHE_DIR")
+			next
 		if (symbol == "" || !(symbol in replacement))
 			print
 	}
 	END {
 		for (i = 1; i <= count; i++)
 			print replacement[order[i]]
+		if (ccache_dir != "")
+			print "CONFIG_CCACHE_DIR=\"" ccache_dir "\""
 	}
 ' "$SEED" "$BASE_CONFIG" > "$TEMP_CONFIG"
 

@@ -98,7 +98,8 @@ done < "$REPO_ROOT/feeds/devices/tr3000-lite.lock"
 )
 sh "$SCRIPT_DIR/configure-lite.sh" \
 	--source-dir "$SOURCE_DIR" \
-	--base-config "$UPSTREAM_DIR/config/128muboot.config"
+	--base-config "$UPSTREAM_DIR/config/128muboot.config" \
+	--ccache-dir "$CCACHE_DIR"
 cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/build.config"
 
 if [ -n "${SOURCE_SHA:-}" ]; then
