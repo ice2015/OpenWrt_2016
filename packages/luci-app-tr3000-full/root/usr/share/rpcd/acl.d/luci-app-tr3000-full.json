@@ -1,0 +1,14 @@
+{
+  "luci-app-tr3000-full": {
+    "description": "Manage fixed TR3000 Full remote services",
+    "read": {},
+    "write": {
+      "file": {
+        "/usr/sbin/tr3000-full-service": [ "exec" ]
+      },
+      "ubus": {
+        "file": [ "exec" ]
+      }
+    }
+  }
+}

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 import subprocess
 import unittest
@@ -83,6 +84,38 @@ class RepositoryContractTests(unittest.TestCase):
         missing = sorted(link for link in local_links if link and not (ROOT / link).exists())
 
         self.assertEqual([], missing)
+
+    def test_full_luci_package_is_admin_only_and_uses_fixed_controller(self) -> None:
+        package = ROOT / "packages/luci-app-tr3000-full"
+        menu_path = package / "root/usr/share/luci/menu.d/luci-app-tr3000-full.json"
+        acl_path = package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json"
+        view_path = package / "htdocs/luci-static/resources/view/tr3000-full/services.js"
+
+        self.assertTrue((package / "Makefile").is_file())
+        self.assertTrue(view_path.is_file())
+        menu = json.loads(menu_path.read_text(encoding="utf-8"))
+        acl = json.loads(acl_path.read_text(encoding="utf-8"))
+        entry = menu["admin/services/tr3000-full"]
+        self.assertNotIn("auth", entry)
+        self.assertEqual(["luci-app-tr3000-full"], entry["depends"]["acl"])
+        self.assertNotIn("file", acl["luci-app-tr3000-full"].get("read", {}))
+        write_files = acl["luci-app-tr3000-full"]["write"]["file"]
+        self.assertEqual(
+            {"/usr/sbin/tr3000-full-service": ["exec"]},
+            write_files,
+        )
+        view = view_path.read_text(encoding="utf-8")
+        for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
+            self.assertIn(f"'{service}'", view)
+        self.assertNotIn("/bin/sh", view)
+
+    def test_full_first_boot_policy_disables_remote_services(self) -> None:
+        defaults = (
+            ROOT / "files/etc/uci-defaults/95-tr3000-full-services"
+        ).read_text(encoding="utf-8")
+
+        for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
+            self.assertIn(f"disable {service}", defaults)
 
 
 if __name__ == "__main__":

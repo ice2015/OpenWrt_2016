@@ -22,6 +22,7 @@ SCRIPTS = (
     "build-lite.sh",
     "build-full.sh",
     "verify-image.sh",
+    "service-toggle.sh",
     "build-uboot.sh",
     "preflight.sh",
     "plant-profile.sh",
@@ -148,7 +149,7 @@ def run_full_configure(
     include_singbox: str | None = None,
     include_cloudflared: str | None = None,
     dts_contents: str = "reg = <0x5c0000 0x7000000>;\n",
-) -> tuple[subprocess.CompletedProcess[str], str]:
+) -> tuple[subprocess.CompletedProcess[str], str, set[str]]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         source = root / "source"
@@ -198,7 +199,12 @@ def run_full_configure(
             if generated_path.is_file()
             else ""
         )
-    return result, generated_config
+        installed_assets = {
+            path.relative_to(source).as_posix()
+            for path in source.rglob("*")
+            if path.is_file()
+        }
+    return result, generated_config, installed_assets
 
 
 class ScriptInterfaceTests(unittest.TestCase):
@@ -219,6 +225,7 @@ class ScriptInterfaceTests(unittest.TestCase):
             "build-lite.sh",
             "build-full.sh",
             "verify-image.sh",
+            "service-toggle.sh",
             "build-uboot.sh",
             "preflight.sh",
             "plant-profile.sh",
@@ -342,7 +349,7 @@ class ScriptInterfaceTests(unittest.TestCase):
             + "CONFIG_PACKAGE_luci-app-openclash=y\n"
         )
 
-        result, generated_config = run_full_configure(base)
+        result, generated_config, _ = run_full_configure(base)
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("CONFIG_PACKAGE_tailscale=y", generated_config)
@@ -355,7 +362,7 @@ class ScriptInterfaceTests(unittest.TestCase):
     def test_full_config_optional_switches_override_hyphenated_packages(self) -> None:
         base = full_base_config() + "CONFIG_PACKAGE_sing-box=y\n"
 
-        result, generated_config = run_full_configure(
+        result, generated_config, _ = run_full_configure(
             base,
             include_tailscale="false",
             include_singbox="false",
@@ -368,7 +375,7 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertIn("CONFIG_PACKAGE_cloudflared=y", generated_config)
 
     def test_full_config_rejects_invalid_boolean_before_writing_config(self) -> None:
-        result, generated_config = run_full_configure(
+        result, generated_config, _ = run_full_configure(
             full_base_config(),
             include_tailscale="yes",
         )
@@ -380,7 +387,7 @@ class ScriptInterfaceTests(unittest.TestCase):
     def test_full_config_uses_requested_ccache_directory(self) -> None:
         requested_cache = "/tmp/tr3000-full-ccache"
 
-        result, generated_config = run_full_configure(
+        result, generated_config, _ = run_full_configure(
             full_base_config(),
             ccache_dir=requested_cache,
         )
@@ -390,7 +397,7 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertNotIn('CONFIG_CCACHE_DIR="/workdir/.ccache"', generated_config)
 
     def test_full_config_rejects_wrong_layout_before_writing_config(self) -> None:
-        result, generated_config = run_full_configure(
+        result, generated_config, _ = run_full_configure(
             full_base_config(),
             dts_contents="reg = <0x5c0000 0x7a40000>;\n",
         )
@@ -405,10 +412,35 @@ class ScriptInterfaceTests(unittest.TestCase):
             + "CONFIG_TARGET_mediatek_filogic_DEVICE_other-device=y\n"
         )
 
-        result, _ = run_full_configure(base)
+        result, _, _ = run_full_configure(base)
 
         self.assertEqual(1, result.returncode)
         self.assertIn("exactly one", result.stderr)
+
+    def test_full_config_installs_only_expected_runtime_management_assets(self) -> None:
+        result, _, installed_assets = run_full_configure(full_base_config())
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("files/usr/sbin/tr3000-full-service", installed_assets)
+        self.assertIn("files/root/scripts/plant-access.sh", installed_assets)
+        self.assertIn("files/etc/uci-defaults/95-tr3000-full-services", installed_assets)
+        self.assertIn(
+            "package/luci-app-tr3000-full/Makefile",
+            installed_assets,
+        )
+
+    def test_service_toggle_rejects_unknown_service_without_side_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "must-not-exist"
+            result = run_script(
+                "service-toggle.sh",
+                "enable",
+                f"../../bin/sh -c touch {marker.as_posix()}",
+            )
+
+            self.assertEqual(2, result.returncode)
+            self.assertIn("unknown service", result.stderr.lower())
+            self.assertFalse(marker.exists())
 
     def test_lite_network_input_validation(self) -> None:
         helper = (ROOT / "scripts" / "lite-common.sh").as_posix()
