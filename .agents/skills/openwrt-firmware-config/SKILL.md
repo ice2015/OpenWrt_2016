@@ -1,6 +1,6 @@
 ---
 name: openwrt-firmware-config
-description: Use when changing this repository's OpenWrt or ImmortalWrt devices, firmware variants, manifests, Kconfig packages, feeds, patches, overlays, Lite seed, or when diagnosing its known configuration merge, ccache, m4, ninja, and UNRESOLVED failures.
+description: Use when changing this repository's OpenWrt or ImmortalWrt devices, firmware variants, manifests, Kconfig packages, feeds, patches, overlays, Lite seed, or when diagnosing its known configuration merge, ccache, m4, ninja, disk space, and UNRESOLVED failures.
 ---
 
 # OpenWrt 固件配置
@@ -132,6 +132,15 @@ common → distribution → device → local
 - **修复**：从精确硬件型号和指定上游 revision 核实字段；不得为让 Actions 变绿而随意填写。
 - **验证**：解析未完成目标应继续返回状态码 `3`；完成后再用仓库校验和实际上游定义确认。
 
+### GitHub Actions 构建中途报错 `No space left on device`
+
+- **症状**：固件编译执行 2 小时以上时中断，Runner 抛出 `System.IO.IOException: No space left on device`（如 Worker 诊断日志写入失败），或 make 报告写入/解包错误。
+- **已确认根因**：Ubuntu Runner 默认仅有 20~25 GB 可用空间，而 OpenWrt/ImmortalWrt 工具链、内核、多个软件包编译及 ccache 缓存全量构建峰值需要 35~45 GB 空间。若工作流未深度清理无用环境（如 Android SDK、.NET、Haskell、工具缓存、Docker 镜像），磁盘会在编译阶段被写满。
+- **修复**：
+  1. 工作流构建前执行深度清理，移除 `/usr/local/lib/android`、`/opt/hostedtoolcache`、`/opt/ghc`、`/usr/share/dotnet`、Docker 镜像等，释放 35GB+ 空间。
+  2. 脚本中配置 `ccache -M 5G` 约束编译缓存上限，避免缓存无节制增长。
+- **验证**：检查工作流 `Free runner disk space` 步骤中 `df -h` 输出的可用空间（应大于 55GB）；检查完整构建流程能够顺利完成打包与产物上传。
+
 ## 完整示例：TR3000 Lite 软件包变更
 
 用户要求：“给 TR3000 Lite 加 OpenClash，并顺手放进 common。”
@@ -162,6 +171,7 @@ common → distribution → device → local
 | m4 suffix 错误 | 对比 `CONFIG_CCACHE_DIR`、`build.config`、`config.log` |
 | 单行 ninja 不存在 | 查对应 target 和串行稳定失败，不先下结论 |
 | 通用构建状态码 3 | 核实 manifest；不要绕过 `UNRESOLVED` 门禁 |
+| No space left on device | 深度清理 Runner 磁盘（Android/hostedtoolcache 等），并限制 ccache 大小 |
 
 ## 常见错误
 
@@ -169,6 +179,7 @@ common → distribution → device → local
 - 因“以后可能用”把设备专用包放进 common。
 - 只修改 seed，不同步排除列表、feed、测试和最终配置检查。
 - 看到 cache/m4 字样就删缓存，忽略配置路径与 `config.log`。
+- 在 GitHub Actions 仅清理 dotnet/powershell，未删除 Android SDK 和 hostedtoolcache 导致空间不足。
 - 在 Windows 原生环境尝试完整固件编译并把环境失败误判为源码失败。
 - 为通过 CI 猜 revision、profile 或 artifact pattern。
 - 把未经真机验证的系统固件描述为通用刷写镜像。
