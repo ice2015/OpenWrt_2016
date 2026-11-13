@@ -23,6 +23,7 @@ SCRIPTS = (
     "build-full.sh",
     "verify-image.sh",
     "service-toggle.sh",
+    "singbox-rollback.sh",
     "build-uboot.sh",
     "preflight.sh",
     "plant-profile.sh",
@@ -226,6 +227,7 @@ class ScriptInterfaceTests(unittest.TestCase):
             "build-full.sh",
             "verify-image.sh",
             "service-toggle.sh",
+            "singbox-rollback.sh",
             "build-uboot.sh",
             "preflight.sh",
             "plant-profile.sh",
@@ -424,6 +426,9 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertIn("files/usr/sbin/tr3000-full-service", installed_assets)
         self.assertIn("files/root/scripts/plant-access.sh", installed_assets)
         self.assertIn("files/etc/uci-defaults/95-tr3000-full-services", installed_assets)
+        self.assertIn("files/etc/tr3000-full/examples/sing-box.json.example", installed_assets)
+        self.assertIn("files/etc/tr3000-full/examples/cloudflared.yml.example", installed_assets)
+        self.assertIn("files/root/scripts/singbox-rollback.sh", installed_assets)
         self.assertIn(
             "package/luci-app-tr3000-full/Makefile",
             installed_assets,

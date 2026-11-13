@@ -1,0 +1,13 @@
+# This file is inert. Copy it to the path expected by the installed
+# cloudflared package only after verifying that package's procd service.
+no-autoupdate: true
+protocol: auto
+loglevel: info
+
+ingress:
+  - hostname: hmi.example.invalid
+    service: http://192.0.2.10:80
+  - service: http_status:404
+
+# Keep the tunnel token in a separate root-only file (0600). Never place
+# tokens, credentials, PLC control ports, or customer addresses here.

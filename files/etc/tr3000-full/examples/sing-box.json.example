@@ -1,0 +1,60 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "local",
+        "address": "local"
+      }
+    ]
+  },
+  "inbounds": [],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    },
+    {
+      "type": "vless",
+      "tag": "travel-vps",
+      "server": "vps.example.invalid",
+      "server_port": 443,
+      "uuid": "REPLACE_AFTER_INSTALL",
+      "tls": {
+        "enabled": true,
+        "server_name": "vps.example.invalid"
+      },
+      "transport": {
+        "type": "ws",
+        "path": "/REPLACE_AFTER_INSTALL"
+      }
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "ip_cidr": [
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "172.16.0.0/12",
+          "192.168.0.0/16"
+        ],
+        "outbound": "direct"
+      },
+      {
+        "domain_suffix": [
+          ".example.invalid"
+        ],
+        "outbound": "travel-vps"
+      }
+    ],
+    "final": "direct"
+  }
+}

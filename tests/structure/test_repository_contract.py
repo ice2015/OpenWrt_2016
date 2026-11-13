@@ -69,8 +69,13 @@ class RepositoryContractTests(unittest.TestCase):
             "docs/configuration-layers.md",
             "docs/adding-a-device.md",
             "docs/LITE-README.md",
+            "docs/FULL-README.md",
             "docs/UBOOT-SAFETY.md",
             "docs/WIREGUARD-VPS-ROUTING.md",
+            "docs/WIREGUARD-SNAT.md",
+            "docs/TAILSCALE.md",
+            "docs/SINGBOX-SPLIT-ROUTING.md",
+            "docs/CLOUDFLARED-ACCESS.md",
             "docs/TEST-PLAN.md",
         ]
 

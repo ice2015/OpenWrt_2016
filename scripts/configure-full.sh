@@ -113,7 +113,7 @@ cp -R "$LOCAL_LUCI_PACKAGE/." "$SOURCE_DIR/package/luci-app-tr3000-full/"
 mkdir -p "$SOURCE_DIR/files"
 cp -R "$REPO_ROOT/files/." "$SOURCE_DIR/files/"
 mkdir -p "$SOURCE_DIR/files/root/scripts" "$SOURCE_DIR/files/usr/sbin"
-for SCRIPT in plant-profile.sh plant-access.sh preflight.sh lite-common.sh; do
+for SCRIPT in plant-profile.sh plant-access.sh preflight.sh lite-common.sh singbox-rollback.sh; do
 	install -m 0755 "$SCRIPT_DIR/$SCRIPT" "$SOURCE_DIR/files/root/scripts/$SCRIPT"
 done
 install -m 0755 "$SCRIPT_DIR/service-toggle.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-service"
