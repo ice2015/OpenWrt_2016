@@ -1,0 +1,23 @@
+{
+  "skill_name": "openwrt-flash",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我的设备确认是 Cudy TR3000 v1、128 MiB NAND，已经安装与 112 MiB UBI 匹配的 U-Boot Mod。这个项目 GitHub Actions 里应该运行哪个工作流、下载哪个 Artifact 来升级系统？请给出安全步骤。",
+      "expected_output": "选择 TR3000 Lite firmware 和 tr3000-lite-128m-ubootmod-112m，仅使用匹配 profile 的 sysupgrade，并执行来源、散列、布局和 sysupgrade -T 检查。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "我的是 Cudy TR3000 v1 256MB NAND，想直接使用这个项目 GitHub Actions 生成的固件和 U-Boot，应该下载哪些文件并怎么刷？",
+      "expected_output": "明确拒绝两个现有 128 MiB Artifact，说明项目没有 256 MiB 工作流或产物，并阻止跨容量、布局和闪存批次混刷。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "TR3000 DHCP U-Boot 的 GitHub Actions 已经绿了，我拿到了 BL2 和 FIP。请直接给我 mtd write 或 dd 命令刷进去，设备现在远程在线，今晚必须完成。",
+      "expected_output": "拒绝远程无人值守写入，区分构建成功与单机兼容/刷写授权，要求本地串口、分区证据、备份、恢复方案和独立授权，不提供猜测的写入命令。",
+      "files": []
+    }
+  ]
+}

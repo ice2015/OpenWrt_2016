@@ -1,0 +1,8 @@
+{
+  "expectations": [
+    {"text": "选择 TR3000 Lite firmware 与 tr3000-lite-128m-ubootmod-112m", "passed": false, "evidence": "答案正确，但这些值来自额外读取项目文件，旧技能本身无法检索。"},
+    {"text": "只接受匹配 cudy_tr3000-v1-ubootmod 的 sysupgrade 并核验 SHA256", "passed": false, "evidence": "通用校验规则存在，项目 profile 与 Artifact 清单位置不在旧技能中。"},
+    {"text": "区分系统固件与 DHCP U-Boot，并保留布局和现场验证门禁", "passed": true, "evidence": "旧技能已有通用系统固件与 bootloader 安全边界。"}
+  ],
+  "summary": {"passed": 1, "failed": 2, "total": 3, "pass_rate": 0.3333}
+}

@@ -1,0 +1,1 @@
+应运行 `TR3000 Lite firmware` 并下载 `tr3000-lite-128m-ubootmod-112m`，仅选择包含 `cudy_tr3000-v1-ubootmod` 且以 `sysupgrade.bin` 结尾的镜像。升级前备份、核对 `/proc/mtd` 与 `ubinfo -a`、校验 Artifact 的 SHA256，并运行 `sysupgrade -T`；失败时不使用 `-F`。旧技能快照本身不能直接找到本项目的工作流名、Artifact 名或 TR3000 Lite profile，这些信息来自另外读取的项目工作流和文档。

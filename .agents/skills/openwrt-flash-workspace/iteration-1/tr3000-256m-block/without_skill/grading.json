@@ -1,0 +1,8 @@
+{
+  "expectations": [
+    {"text": "明确回答当前项目没有可用于 256 MiB 的 Artifact", "passed": false, "evidence": "结论依赖额外读取项目文件，旧技能未收录项目 Artifact。"},
+    {"text": "拒绝两个现有 128 MiB Artifact 以及跨容量和布局混刷", "passed": true, "evidence": "读取项目文件后能结合旧技能通用边界拒绝。"},
+    {"text": "指出 Full 和通用 TR3000 尚未实现或仍为 UNRESOLVED", "passed": false, "evidence": "旧技能没有项目实现状态与 manifest 状态。"}
+  ],
+  "summary": {"passed": 1, "failed": 2, "total": 3, "pass_rate": 0.3333}
+}

@@ -1,0 +1,11 @@
+{
+  "eval_id": 1,
+  "eval_name": "tr3000-128m-lite",
+  "prompt": "我的设备确认是 Cudy TR3000 v1、128 MiB NAND，已经安装与 112 MiB UBI 匹配的 U-Boot Mod。这个项目 GitHub Actions 里应该运行哪个工作流、下载哪个 Artifact 来升级系统？请给出安全步骤。",
+  "assertions": [
+    "选择 TR3000 Lite firmware 与 tr3000-lite-128m-ubootmod-112m",
+    "只接受匹配 cudy_tr3000-v1-ubootmod 的 sysupgrade 并核验 SHA256",
+    "区分系统固件与 DHCP U-Boot，并保留布局和现场验证门禁"
+  ],
+  "baseline_observation": "旧技能能提供通用 sysupgrade 安全流程，但明确表示工作流、Artifact、profile 和布局信息只能从项目文件另行发现。"
+}

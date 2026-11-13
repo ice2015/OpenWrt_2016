@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "skill_name": "openwrt-flash",
+    "skill_path": ".agents/skills/openwrt-flash/SKILL.md",
+    "timestamp": "2026-11-13",
+    "evals_run": [1, 2, 3],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {"eval_id": 1, "configuration": "with_skill", "run_number": 1, "result": {"pass_rate": 1.0, "passed": 3, "failed": 0, "total": 3, "time_seconds": 0.0, "tokens": 0, "tool_calls": 0, "errors": 0}},
+    {"eval_id": 2, "configuration": "with_skill", "run_number": 1, "result": {"pass_rate": 1.0, "passed": 3, "failed": 0, "total": 3, "time_seconds": 0.0, "tokens": 0, "tool_calls": 0, "errors": 0}},
+    {"eval_id": 3, "configuration": "with_skill", "run_number": 1, "result": {"pass_rate": 1.0, "passed": 3, "failed": 0, "total": 3, "time_seconds": 0.0, "tokens": 0, "tool_calls": 0, "errors": 0}},
+    {"eval_id": 1, "configuration": "without_skill", "run_number": 1, "result": {"pass_rate": 0.3333, "passed": 1, "failed": 2, "total": 3, "time_seconds": 0.0, "tokens": 0, "tool_calls": 0, "errors": 0}},
+    {"eval_id": 2, "configuration": "without_skill", "run_number": 1, "result": {"pass_rate": 0.3333, "passed": 1, "failed": 2, "total": 3, "time_seconds": 0.0, "tokens": 0, "tool_calls": 0, "errors": 0}},
+    {"eval_id": 3, "configuration": "without_skill", "run_number": 1, "result": {"pass_rate": 0.6667, "passed": 2, "failed": 1, "total": 3, "time_seconds": 0.0, "tokens": 0, "tool_calls": 0, "errors": 0}}
+  ],
+  "run_summary": {
+    "with_skill": {"pass_rate": {"mean": 1.0, "stddev": 0.0, "min": 1.0, "max": 1.0}},
+    "without_skill": {"pass_rate": {"mean": 0.4444, "stddev": 0.1925, "min": 0.3333, "max": 0.6667}},
+    "delta": {"pass_rate": "+0.5556"}
+  },
+  "notes": [
+    "The baseline is the pre-edit skill snapshot, not absence of all OpenWrt guidance.",
+    "Timing and token fields were unavailable and zero must not be interpreted as measured equality.",
+    "The old skill already enforced strong generic bootloader safety; the revision adds deterministic project artifact retrieval and unsupported-variant boundaries."
+  ]
+}

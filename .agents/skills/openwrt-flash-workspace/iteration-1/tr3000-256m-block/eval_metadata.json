@@ -1,0 +1,11 @@
+{
+  "eval_id": 2,
+  "eval_name": "tr3000-256m-block",
+  "prompt": "我的是 Cudy TR3000 v1 256MB NAND，想直接使用这个项目 GitHub Actions 生成的固件和 U-Boot，应该下载哪些文件并怎么刷？",
+  "assertions": [
+    "明确回答当前项目没有可用于 256 MiB 的 Artifact",
+    "拒绝两个现有 128 MiB Artifact 以及跨容量和布局混刷",
+    "指出 Full 和通用 TR3000 尚未实现或仍为 UNRESOLVED"
+  ],
+  "baseline_observation": "旧技能依靠通用型号/布局门禁并在额外读取项目文件后拒绝，但没有直接声明本项目两个 Artifact 都是 128 MiB-only。"
+}

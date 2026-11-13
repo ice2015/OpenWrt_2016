@@ -1,0 +1,1 @@
+这台 Cudy TR3000 v1 256 MiB NAND 当前没有可下载并刷写的项目 Artifact。`tr3000-lite-128m-ubootmod-112m` 只适用于 128 MiB/112 MiB UBI，`tr3000-dhcp-uboot-128m-multilayout` 只生成 128 MiB multi-layout BL2/FIP。项目没有已实现的 TR3000 Full 工作流，通用 TR3000 manifest 的 target/subtarget/profile 仍是 `UNRESOLVED`。因此停止，不执行 sysupgrade 或原始写入；只能另行核实 256 MiB 专用来源和恢复路径。
