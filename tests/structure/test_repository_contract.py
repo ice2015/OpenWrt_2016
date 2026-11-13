@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -59,6 +60,25 @@ class RepositoryContractTests(unittest.TestCase):
         )
 
         self.assertEqual(1, result.returncode)
+
+    def test_operating_documents_exist(self) -> None:
+        documents = [
+            "README.md",
+            "docs/architecture.md",
+            "docs/configuration-layers.md",
+            "docs/adding-a-device.md",
+        ]
+
+        self.assertEqual([], [path for path in documents if not (ROOT / path).is_file()])
+
+    def test_readme_local_links_resolve(self) -> None:
+        readme = ROOT / "README.md"
+        links = re.findall(r"(?<!!)\[[^]]+\]\(([^)]+)\)", readme.read_text(encoding="utf-8"))
+        local_links = [link.split("#", 1)[0] for link in links if "://" not in link]
+
+        missing = sorted(link for link in local_links if link and not (ROOT / link).exists())
+
+        self.assertEqual([], missing)
 
 
 if __name__ == "__main__":
