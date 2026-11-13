@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "tr3000",
+  "display_name": "TR3000",
+  "supported_distributions": ["openwrt", "immortalwrt"],
+  "target": "UNRESOLVED",
+  "subtarget": "UNRESOLVED",
+  "profile": "UNRESOLVED",
+  "config_layers": ["configs/devices/tr3000.config"],
+  "feed_layers": [],
+  "patch_layers": [],
+  "overlay_layers": [],
+  "artifact_patterns": [],
+  "notes": ["Verify the exact manufacturer and hardware revision before selecting a native profile."]
+}
+

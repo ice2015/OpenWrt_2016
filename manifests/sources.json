@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "common_layers": {
+    "config_layers": [
+      "configs/common/base.config",
+      "configs/common/packages.config"
+    ],
+    "feed_layers": [
+      "feeds/common.conf"
+    ],
+    "patch_layers": [],
+    "overlay_layers": []
+  },
+  "sources": [
+    {
+      "id": "openwrt",
+      "repository": "https://github.com/openwrt/openwrt.git",
+      "revision": "UNRESOLVED",
+      "config_layers": [
+        "configs/distributions/openwrt.config"
+      ],
+      "feed_layers": [
+        "feeds/openwrt.conf"
+      ]
+    },
+    {
+      "id": "immortalwrt",
+      "repository": "https://github.com/immortalwrt/immortalwrt.git",
+      "revision": "UNRESOLVED",
+      "config_layers": [
+        "configs/distributions/immortalwrt.config"
+      ],
+      "feed_layers": [
+        "feeds/immortalwrt.conf"
+      ]
+    }
+  ]
+}
+
