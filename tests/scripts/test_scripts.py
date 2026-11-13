@@ -16,6 +16,7 @@ SCRIPTS = (
     "build.sh",
     "clean.sh",
     "configure-lite.sh",
+    "configure-full.sh",
     "build-lite.sh",
     "build-uboot.sh",
     "preflight.sh",
@@ -117,6 +118,85 @@ def run_lite_configure(
     return result, generated_config
 
 
+def full_base_config() -> str:
+    required_packages = (
+        "ca-bundle", "curl", "ip-full", "iputils-arping", "kmod-tun",
+        "kmod-usb-net", "kmod-usb-net-cdc-ether", "kmod-usb-net-rndis",
+        "kmod-wireguard", "luci", "luci-app-tr3000-full",
+        "luci-i18n-base-zh-cn", "luci-proto-wireguard", "luci-ssl-openssl",
+        "luci-theme-bootstrap", "openssh-server", "openssh-sftp-server",
+        "tcpdump-mini", "ubi-utils", "wireguard-tools",
+    )
+    lines = [
+        "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
+        'CONFIG_CCACHE_DIR="/workdir/.ccache"',
+    ]
+    lines.extend(f"CONFIG_PACKAGE_{package}=y" for package in required_packages)
+    return "\n".join(lines) + "\n"
+
+
+def run_full_configure(
+    base_contents: str,
+    *,
+    seed_contents: str | None = None,
+    ccache_dir: str | None = None,
+    include_tailscale: str | None = None,
+    include_singbox: str | None = None,
+    include_cloudflared: str | None = None,
+    dts_contents: str = "reg = <0x5c0000 0x7000000>;\n",
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "source"
+        (source / "scripts").mkdir(parents=True)
+        dts = source / "target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts"
+        dts.parent.mkdir(parents=True)
+        dts.write_text(dts_contents, encoding="utf-8")
+        base_config = root / "base.config"
+        base_config.write_text(base_contents, encoding="utf-8")
+        fake_bin = root / "bin"
+        fake_bin.mkdir()
+        fake_make = fake_bin / "make"
+        fake_make.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_make.chmod(0o755)
+        environment = dict(os.environ)
+        environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+        arguments = [
+            bash_executable(),
+            (ROOT / "scripts/configure-full.sh").as_posix(),
+            "--source-dir", source.as_posix(),
+            "--base-config", base_config.as_posix(),
+        ]
+        if seed_contents is not None:
+            seed = root / "full.seed"
+            seed.write_text(seed_contents, encoding="utf-8")
+            arguments.extend(("--seed", seed.as_posix()))
+        for option, value in (
+            ("--ccache-dir", ccache_dir),
+            ("--include-tailscale", include_tailscale),
+            ("--include-singbox", include_singbox),
+            ("--include-cloudflared", include_cloudflared),
+        ):
+            if value is not None:
+                arguments.extend((option, value))
+
+        result = subprocess.run(
+            arguments,
+            cwd=ROOT,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        generated_path = source / ".config"
+        generated_config = (
+            generated_path.read_text(encoding="utf-8")
+            if generated_path.is_file()
+            else ""
+        )
+    return result, generated_config
+
+
 class ScriptInterfaceTests(unittest.TestCase):
     def test_every_script_supports_help(self) -> None:
         results = {name: run_script(name, "--help") for name in SCRIPTS}
@@ -179,6 +259,84 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(f'CONFIG_CCACHE_DIR="{requested_cache}"', generated_config)
         self.assertNotIn('CONFIG_CCACHE_DIR="/workdir/.ccache"', generated_config)
+
+    def test_full_config_defaults_include_tailscale_and_singbox_only(self) -> None:
+        base = (
+            full_base_config()
+            + "CONFIG_PACKAGE_tailscale=y\n"
+            + "CONFIG_PACKAGE_sing-box=y\n"
+            + "CONFIG_PACKAGE_cloudflared=y\n"
+            + "CONFIG_PACKAGE_luci-theme-aurora=y\n"
+            + "CONFIG_PACKAGE_luci-app-openclash=y\n"
+        )
+
+        result, generated_config = run_full_configure(base)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CONFIG_PACKAGE_tailscale=y", generated_config)
+        self.assertIn("CONFIG_PACKAGE_sing-box=y", generated_config)
+        self.assertNotIn("CONFIG_PACKAGE_cloudflared=y", generated_config)
+        self.assertNotIn("CONFIG_PACKAGE_luci-theme-aurora=y", generated_config)
+        self.assertNotIn("CONFIG_PACKAGE_luci-app-openclash=y", generated_config)
+        self.assertIn("CONFIG_PACKAGE_luci-theme-bootstrap=y", generated_config)
+
+    def test_full_config_optional_switches_override_hyphenated_packages(self) -> None:
+        base = full_base_config() + "CONFIG_PACKAGE_sing-box=y\n"
+
+        result, generated_config = run_full_configure(
+            base,
+            include_tailscale="false",
+            include_singbox="false",
+            include_cloudflared="true",
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("CONFIG_PACKAGE_tailscale=y", generated_config)
+        self.assertNotIn("CONFIG_PACKAGE_sing-box=y", generated_config)
+        self.assertIn("CONFIG_PACKAGE_cloudflared=y", generated_config)
+
+    def test_full_config_rejects_invalid_boolean_before_writing_config(self) -> None:
+        result, generated_config = run_full_configure(
+            full_base_config(),
+            include_tailscale="yes",
+        )
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("true or false", result.stderr)
+        self.assertEqual("", generated_config)
+
+    def test_full_config_uses_requested_ccache_directory(self) -> None:
+        requested_cache = "/tmp/tr3000-full-ccache"
+
+        result, generated_config = run_full_configure(
+            full_base_config(),
+            ccache_dir=requested_cache,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(f'CONFIG_CCACHE_DIR="{requested_cache}"', generated_config)
+        self.assertNotIn('CONFIG_CCACHE_DIR="/workdir/.ccache"', generated_config)
+
+    def test_full_config_rejects_wrong_layout_before_writing_config(self) -> None:
+        result, generated_config = run_full_configure(
+            full_base_config(),
+            dts_contents="reg = <0x5c0000 0x7a40000>;\n",
+        )
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("112 MiB", result.stderr)
+        self.assertEqual("", generated_config)
+
+    def test_full_config_rejects_multiple_filogic_profiles(self) -> None:
+        base = (
+            full_base_config()
+            + "CONFIG_TARGET_mediatek_filogic_DEVICE_other-device=y\n"
+        )
+
+        result, _ = run_full_configure(base)
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("exactly one", result.stderr)
 
     def test_lite_network_input_validation(self) -> None:
         helper = (ROOT / "scripts" / "lite-common.sh").as_posix()
