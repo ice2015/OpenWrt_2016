@@ -66,12 +66,12 @@ TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.lite.XXXXXX")
 trap 'rm -f "$TEMP_CONFIG"' EXIT HUP INT TERM
 awk '
 	function key(line, value) {
-		if (line ~ /^# CONFIG_[A-Za-z0-9_]+ is not set$/) {
+		if (line ~ /^# CONFIG_[A-Za-z0-9_-]+ is not set$/) {
 			sub(/^# /, "", line)
 			sub(/ is not set$/, "", line)
 			return line
 		}
-		if (line ~ /^CONFIG_[A-Za-z0-9_]+=*/) {
+		if (line ~ /^CONFIG_[A-Za-z0-9_-]+=*/) {
 			sub(/=.*/, "", line)
 			return line
 		}

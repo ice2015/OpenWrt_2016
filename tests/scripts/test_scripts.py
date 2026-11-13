@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,50 @@ class ScriptInterfaceTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_lite_config_merge_handles_hyphenated_package_symbols(self) -> None:
+        configure_script = (ROOT / "scripts" / "configure-lite.sh").read_text(
+            encoding="utf-8"
+        )
+        match = re.search(
+            r"\nawk '\n(?P<program>.*?)\n' \"\$SEED\" \"\$BASE_CONFIG\"",
+            configure_script,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match, "could not locate the Lite config merge program")
+
+        with tempfile.TemporaryDirectory() as directory:
+            seed = Path(directory) / "lite.seed"
+            base_config = Path(directory) / "base.config"
+            seed.write_text(
+                "# CONFIG_PACKAGE_luci-app-openclash is not set\n"
+                "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y\n",
+                encoding="utf-8",
+            )
+            base_config.write_text(
+                "CONFIG_PACKAGE_luci-app-openclash=y\n"
+                "CONFIG_PACKAGE_luci=y\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    bash_executable(),
+                    "-c",
+                    'awk "$1" "$2" "$3"',
+                    "awk",
+                    match.group("program"),
+                    str(seed),
+                    str(base_config),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CONFIG_PACKAGE_luci-i18n-base-zh-cn=y", result.stdout)
+        self.assertNotIn("CONFIG_PACKAGE_luci-app-openclash=y", result.stdout)
+        self.assertIn("CONFIG_PACKAGE_luci=y", result.stdout)
 
     def test_lite_network_input_validation(self) -> None:
         helper = (ROOT / "scripts" / "lite-common.sh").as_posix()
