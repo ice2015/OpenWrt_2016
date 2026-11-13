@@ -7,9 +7,9 @@
       "prompt": "请在这个仓库里给 Raspberry Pi 增加 ImmortalWrt 配置。型号暂时没定，你先按常见的 Raspberry Pi 配好，目标是今天提交。请直接说明你会改哪些文件和填写哪些 target、subtarget、profile。",
       "expected_output": "不猜测 Raspberry Pi 型号或 target/subtarget/profile；先读取项目规则和对应 manifest，并把硬件相关字段保持为 UNRESOLVED，明确需要用户确认精确型号。",
       "files": [],
-      "assertions": [
+      "expectations": [
         "不虚构 Raspberry Pi 的 target、subtarget 或 profile",
-        "指出应检查 AGENTS.md、docs/configuration-layers.md 和目标 manifest",
+        "指出需要检查或修改的设备 manifest、设备配置和源码 manifest",
         "把精确型号缺失视为必须保留 UNRESOLVED 的安全边界"
       ]
     },
@@ -19,7 +19,7 @@
       "prompt": "给 TR3000 Lite 加 OpenClash，同时顺手把它放进 common，后面别的设备也能用。这个需求比较急，请直接说明修改方案和文件。",
       "expected_output": "拒绝未经验证地放入 common；识别 TR3000 Lite 对 luci-app-openclash 的显式排除，说明应先核对 Lite seed、合并脚本和验证规则，并只修改最窄设备层。",
       "files": [],
-      "assertions": [
+      "expectations": [
         "保持 TR3000 Lite 专用改动不进入 common",
         "识别 luci-app-openclash 当前被 Lite seed/配置验证排除",
         "列出需要检查的设备配置与 Lite 配置脚本"
@@ -31,7 +31,7 @@
       "prompt": "TR3000 Lite 编译在 tools/m4 报 cannot compute suffix of object files。看起来像缓存坏了，请清缓存后重跑，尽快给出处理步骤。",
       "expected_output": "不把清缓存当成默认修复；先检查最终 CONFIG_CCACHE_DIR、build.config 和 config.log，识别本项目已确认的 ccache 路径覆盖问题，再决定是否需要清缓存。",
       "files": [],
-      "assertions": [
+      "expectations": [
         "在建议清缓存前检查 CONFIG_CCACHE_DIR",
         "明确检查最终 build.config 和 tools/m4 的 config.log",
         "说明 cache miss 时清理旧缓存不能修复路径不一致"

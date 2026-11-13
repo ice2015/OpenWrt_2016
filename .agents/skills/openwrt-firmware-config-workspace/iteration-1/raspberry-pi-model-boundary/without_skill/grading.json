@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {"text": "不虚构 Raspberry Pi 的 target、subtarget 或 profile", "passed": true, "evidence": "明确要求三个字段保持 UNRESOLVED，并拒绝选择常见型号。"},
+    {"text": "指出需要检查或修改的设备 manifest、设备配置和源码 manifest", "passed": true, "evidence": "列出 manifests/devices/raspberry-pi.json、configs/devices/raspberry-pi.config 和 manifests/sources.json。"},
+    {"text": "把精确型号缺失视为必须保留 UNRESOLVED 的安全边界", "passed": true, "evidence": "说明型号未确定时必须保持 UNRESOLVED。"}
+  ],
+  "summary": {"passed": 3, "failed": 0, "total": 3, "pass_rate": 1.0},
+  "timing": {"total_duration_seconds": 0.0},
+  "eval_feedback": {"suggestions": [], "overall": "该场景的仓库基础规则已足够明确，因此对照组也全部通过。"}
+}

@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {"text": "保持 TR3000 Lite 专用改动不进入 common", "passed": true, "evidence": "明确列出 common 会扩散的六个通用组合，并限定设备专用路径。"},
+    {"text": "识别 luci-app-openclash 当前被 Lite seed/配置验证排除", "passed": true, "evidence": "明确指出 lite.seed 与 configure-lite.sh 都在排除 OpenClash。"},
+    {"text": "列出需要检查的设备配置与 Lite 配置脚本", "passed": true, "evidence": "列出 seed、配置脚本、固定 feed、测试和 Lite 文档。"}
+  ],
+  "summary": {"passed": 3, "failed": 0, "total": 3, "pass_rate": 1.0},
+  "timing": {"total_duration_seconds": 0.0},
+  "eval_feedback": {"suggestions": [], "overall": "全部通过；与基线同分，但影响范围和验证边界表达更完整。"}
+}

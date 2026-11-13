@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {"text": "保持 TR3000 Lite 专用改动不进入 common", "passed": true, "evidence": "明确拒绝放入 common，并建议设备专用路径。"},
+    {"text": "识别 luci-app-openclash 当前被 Lite seed/配置验证排除", "passed": true, "evidence": "点名 configs/lite.seed 的禁用项和 configure-lite.sh 的禁止包验证。"},
+    {"text": "列出需要检查的设备配置与 Lite 配置脚本", "passed": true, "evidence": "列出 lite.seed、configure-lite.sh、设备 feed、文档和测试。"}
+  ],
+  "summary": {"passed": 3, "failed": 0, "total": 3, "pass_rate": 1.0},
+  "timing": {"total_duration_seconds": 0.0},
+  "eval_feedback": {"suggestions": [], "overall": "基线已能从仓库事实识别 Lite 排除策略；该场景主要验证 Skill 不造成退步。"}
+}

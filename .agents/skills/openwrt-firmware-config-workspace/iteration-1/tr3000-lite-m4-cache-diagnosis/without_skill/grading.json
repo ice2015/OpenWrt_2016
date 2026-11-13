@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {"text": "在建议清缓存前检查 CONFIG_CCACHE_DIR", "passed": false, "evidence": "输出先建议删除缓存，没有检查最终 CONFIG_CCACHE_DIR。"},
+    {"text": "明确检查最终 build.config 和 tools/m4 的 config.log", "passed": false, "evidence": "提到 config.log，但没有检查 artifact 中的 build.config。"},
+    {"text": "说明 cache miss 时清理旧缓存不能修复路径不一致", "passed": false, "evidence": "没有识别固定 /workdir/.ccache 覆盖 Runner 目录的已确认根因，反而把删缓存作为第一步。"}
+  ],
+  "summary": {"passed": 0, "failed": 3, "total": 3, "pass_rate": 0.0},
+  "timing": {"total_duration_seconds": 0.0},
+  "eval_feedback": {"suggestions": [], "overall": "该场景准确暴露了无 Skill 时容易重复的错误诊断顺序。"}
+}

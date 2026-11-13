@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {"text": "在建议清缓存前检查 CONFIG_CCACHE_DIR", "passed": true, "evidence": "开头明确要求不要清缓存，先核对最终 CONFIG_CCACHE_DIR。"},
+    {"text": "明确检查最终 build.config 和 tools/m4 的 config.log", "passed": true, "evidence": "给出 build.config 路径检查和 build_dir/host/m4*/config.log 底层错误检查。"},
+    {"text": "说明 cache miss 时清理旧缓存不能修复路径不一致", "passed": true, "evidence": "明确指出 cache miss 时删缓存不能修复 /workdir/.ccache 与 Runner 实际目录不一致。"}
+  ],
+  "summary": {"passed": 3, "failed": 0, "total": 3, "pass_rate": 1.0},
+  "timing": {"total_duration_seconds": 0.0},
+  "eval_feedback": {"suggestions": [], "overall": "Skill 在区分性最强的已知问题场景中把 0/3 提升到 3/3。"}
+}
