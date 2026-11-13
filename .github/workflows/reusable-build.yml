@@ -1,0 +1,66 @@
+name: Reusable firmware build
+
+on:
+  workflow_call:
+    inputs:
+      distribution:
+        description: Source distribution ID
+        required: true
+        type: string
+      device:
+        description: Device ID
+        required: true
+        type: string
+      source_revision:
+        description: Optional source revision override
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reusable-firmware-${{ inputs.distribution }}-${{ inputs.device }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate manifests before build setup
+        run: bash scripts/validate.sh
+
+      - name: Run repository tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Resolve and build target
+        shell: bash
+        run: |
+          arguments=(
+            --distribution "${{ inputs.distribution }}"
+            --device "${{ inputs.device }}"
+          )
+          if [[ -n "${{ inputs.source_revision }}" ]]; then
+            arguments+=(--revision "${{ inputs.source_revision }}")
+          fi
+          bash scripts/build.sh "${arguments[@]}"
+
+      - name: Upload firmware and reproducibility report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ inputs.distribution }}-${{ inputs.device }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 14
+

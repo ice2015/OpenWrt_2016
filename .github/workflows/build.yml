@@ -1,0 +1,40 @@
+name: Build firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      distribution:
+        description: Source distribution
+        required: true
+        type: choice
+        options:
+          - openwrt
+          - immortalwrt
+      device:
+        description: Hardware target
+        required: true
+        type: choice
+        options:
+          - tr3000
+          - x86-64
+          - raspberry-pi
+      source_revision:
+        description: Optional source tag, branch, or commit override
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ inputs.distribution }}-${{ inputs.device }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/reusable-build.yml
+    with:
+      distribution: ${{ inputs.distribution }}
+      device: ${{ inputs.device }}
+      source_revision: ${{ inputs.source_revision }}
+

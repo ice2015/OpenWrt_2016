@@ -1,0 +1,48 @@
+name: Validate build definitions
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "configs/**"
+      - "feeds/**"
+      - "manifests/**"
+      - "scripts/**"
+      - "tests/**"
+      - "tools/**"
+  push:
+    paths:
+      - ".github/workflows/**"
+      - "configs/**"
+      - "feeds/**"
+      - "manifests/**"
+      - "scripts/**"
+      - "tests/**"
+      - "tools/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate manifests
+        run: bash scripts/validate.sh
+
+      - name: Run repository tests
+        run: python -m unittest discover -s tests -v
+
