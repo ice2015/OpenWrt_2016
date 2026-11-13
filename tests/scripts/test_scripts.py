@@ -1,8 +1,10 @@
 import os
+import io
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -18,6 +20,8 @@ SCRIPTS = (
     "configure-lite.sh",
     "configure-full.sh",
     "build-lite.sh",
+    "build-full.sh",
+    "verify-image.sh",
     "build-uboot.sh",
     "preflight.sh",
     "plant-profile.sh",
@@ -211,7 +215,10 @@ class ScriptInterfaceTests(unittest.TestCase):
     def test_lite_shell_scripts_are_posix_syntax(self) -> None:
         scripts = (
             "configure-lite.sh",
+            "configure-full.sh",
             "build-lite.sh",
+            "build-full.sh",
+            "verify-image.sh",
             "build-uboot.sh",
             "preflight.sh",
             "plant-profile.sh",
@@ -229,6 +236,71 @@ class ScriptInterfaceTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_verify_image_accepts_only_gated_ubootmod_sysupgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            dts = source / "target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts"
+            dts.parent.mkdir(parents=True)
+            dts.write_text("reg = <0x5c0000 0x7000000>;\n", encoding="utf-8")
+            (source / ".config").write_text(
+                "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y\n",
+                encoding="utf-8",
+            )
+            image = root / "immortalwrt-cudy_tr3000-v1-ubootmod-squashfs-sysupgrade.bin"
+            with tarfile.open(image, "w") as archive:
+                payload = b"BOARD=cudy_tr3000-v1-ubootmod\n"
+                info = tarfile.TarInfo("sysupgrade-cudy_tr3000-v1-ubootmod/CONTROL")
+                info.size = len(payload)
+                archive.addfile(info, io.BytesIO(payload))
+
+            result = run_script(
+                "verify-image.sh",
+                "--source-dir", source.as_posix(),
+                "--image", image.as_posix(),
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("verified", result.stdout.lower())
+
+    def test_verify_image_rejects_wrong_name_invalid_archive_and_size(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            dts = source / "target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts"
+            dts.parent.mkdir(parents=True)
+            dts.write_text("reg = <0x5c0000 0x7000000>;\n", encoding="utf-8")
+            (source / ".config").write_text(
+                "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y\n",
+                encoding="utf-8",
+            )
+            wrong_name = root / "factory.bin"
+            wrong_name.write_bytes(b"not-a-sysupgrade")
+            invalid_archive = root / "cudy_tr3000-v1-ubootmod-sysupgrade.bin"
+            invalid_archive.write_bytes(b"not-a-tar")
+            oversized = root / "other-cudy_tr3000-v1-ubootmod-sysupgrade.bin"
+            oversized.write_bytes(b"x" * 33)
+
+            wrong_name_result = run_script(
+                "verify-image.sh", "--source-dir", source.as_posix(),
+                "--image", wrong_name.as_posix(),
+            )
+            archive_result = run_script(
+                "verify-image.sh", "--source-dir", source.as_posix(),
+                "--image", invalid_archive.as_posix(), "--max-bytes", "64",
+            )
+            size_result = run_script(
+                "verify-image.sh", "--source-dir", source.as_posix(),
+                "--image", oversized.as_posix(), "--max-bytes", "32",
+            )
+
+        self.assertNotEqual(0, wrong_name_result.returncode)
+        self.assertIn("filename", wrong_name_result.stderr.lower())
+        self.assertNotEqual(0, archive_result.returncode)
+        self.assertIn("archive", archive_result.stderr.lower())
+        self.assertNotEqual(0, size_result.returncode)
+        self.assertIn("size", size_result.stderr.lower())
 
     def test_lite_config_merge_handles_hyphenated_package_symbols(self) -> None:
         base_config = (

@@ -1,0 +1,129 @@
+name: TR3000 Full firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_tailscale:
+        description: Include Tailscale in the firmware (runtime remains disabled)
+        type: boolean
+        default: true
+      include_singbox:
+        description: Include sing-box in the firmware (runtime remains disabled)
+        type: boolean
+        default: true
+      include_cloudflared:
+        description: Include cloudflared; may exceed the safe image-size gate
+        type: boolean
+        default: false
+      release:
+        description: Publish verified firmware as a GitHub prerelease
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tr3000-full
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      UPSTREAM_PROJECT: https://github.com/weekdaycare/immortalwrt-mt7981-cudy-tr3000.git
+      UPSTREAM_PROJECT_SHA: cc777dfa3c1964518ddb2c310e8570830b11e954
+      SOURCE_REPOSITORY: https://github.com/padavanonly/immortalwrt-mt798x-6.6.git
+      SOURCE_SHA: ec9ef10efc65da1e6d1de4e2c043c0e13d08eed8
+      INCLUDE_TAILSCALE: ${{ inputs.include_tailscale }}
+      INCLUDE_SINGBOX: ${{ inputs.include_singbox }}
+      INCLUDE_CLOUDFLARED: ${{ inputs.include_cloudflared }}
+    steps:
+      - name: Check out this build project
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/share/powershell
+          sudo apt-get clean
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/full-artifact/logs"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc build-essential bison ccache clang flex g++ gawk gcc-multilib \
+            gettext git libelf-dev libncurses-dev libssl-dev make \
+            python3 python3-distutils python3-setuptools rsync subversion \
+            swig time unzip wget zlib1g-dev file
+
+      - name: Restore compiler and download caches
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ${{ runner.temp }}/tr3000-full/ccache
+            ${{ runner.temp }}/tr3000-full/dl
+          key: tr3000-full-${{ runner.os }}-${{ env.SOURCE_SHA }}-${{ hashFiles('feeds/devices/tr3000-full.lock', 'configs/full.seed') }}
+
+      - name: Clone pinned upstream project and firmware source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/tr3000-full" "$GITHUB_WORKSPACE/full-artifact/logs"
+          git clone --filter=blob:none --no-checkout "$UPSTREAM_PROJECT" "$RUNNER_TEMP/tr3000-full/project"
+          git -C "$RUNNER_TEMP/tr3000-full/project" checkout --detach "$UPSTREAM_PROJECT_SHA"
+          test "$(git -C "$RUNNER_TEMP/tr3000-full/project" rev-parse HEAD)" = "$UPSTREAM_PROJECT_SHA"
+          git clone --filter=blob:none --no-checkout "$SOURCE_REPOSITORY" "$RUNNER_TEMP/tr3000-full/source"
+          git -C "$RUNNER_TEMP/tr3000-full/source" checkout --detach "$SOURCE_SHA"
+          test "$(git -C "$RUNNER_TEMP/tr3000-full/source" rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Build, verify and package Full firmware
+        shell: bash
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/tr3000-full/ccache
+          DOWNLOAD_DIR: ${{ runner.temp }}/tr3000-full/dl
+        run: |
+          set -Eeuo pipefail
+          jobs="$(nproc)"
+          (( jobs > 4 )) && jobs=4
+          sh scripts/build-full.sh \
+            --source-dir "$RUNNER_TEMP/tr3000-full/source" \
+            --upstream-dir "$RUNNER_TEMP/tr3000-full/project" \
+            --artifact-dir "$GITHUB_WORKSPACE/full-artifact" \
+            --jobs "$jobs" \
+            --include-tailscale "$INCLUDE_TAILSCALE" \
+            --include-singbox "$INCLUDE_SINGBOX" \
+            --include-cloudflared "$INCLUDE_CLOUDFLARED"
+
+      - name: Upload firmware, provenance and logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: TR3000-128M-112M-Full
+          path: full-artifact/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: inputs.release && needs.build.result == 'success'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified Full artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: TR3000-128M-112M-Full
+          path: full-artifact
+      - name: Publish verified prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: tr3000-full-${{ github.run_number }}
+        run: |
+          gh release create "$RELEASE_TAG" full-artifact/firmware/* \
+            --prerelease \
+            --title "TR3000 Full build $GITHUB_RUN_NUMBER" \
+            --notes "TR3000 128M NAND / U-Boot Mod / 112M UBI only. Read FULL-README and verify SHA256SUMS before any upgrade."

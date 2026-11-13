@@ -95,6 +95,44 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("MULTI_LAYOUT=1", (ROOT / "scripts/build-uboot.sh").read_text(encoding="utf-8"))
         self.assertNotIn("256mb", workflow.lower())
 
+    def test_full_workflow_has_typed_options_and_pinned_build_inputs(self) -> None:
+        workflow = self.workflow("build-full.yml")
+
+        self.assertIn("workflow_dispatch:", workflow)
+        defaults = {
+            "include_tailscale": "true",
+            "include_singbox": "true",
+            "include_cloudflared": "false",
+            "release": "false",
+        }
+        for input_name, default in defaults.items():
+            block = re.search(
+                rf"\n      {input_name}:\n(?P<body>(?:        .+\n)+)",
+                workflow,
+            )
+            self.assertIsNotNone(block, input_name)
+            self.assertIn("type: boolean", block.group("body"))
+            self.assertIn(f"default: {default}", block.group("body"))
+        self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
+        self.assertIn("cc777dfa3c1964518ddb2c310e8570830b11e954", workflow)
+        self.assertIn("ec9ef10efc65da1e6d1de4e2c043c0e13d08eed8", workflow)
+        self.assertIn("scripts/build-full.sh", workflow)
+        self.assertIn("actions/cache@", workflow)
+        self.assertIn("actions/upload-artifact@", workflow)
+        self.assertIn("TR3000-128M-112M-Full", workflow)
+
+    def test_full_workflow_passes_dispatch_values_as_environment_data(self) -> None:
+        workflow = self.workflow("build-full.yml")
+        run_blocks = re.findall(r"run: \|\n((?:          .*\n)+)", workflow)
+
+        self.assertNotIn("${{ inputs.", "\n".join(run_blocks))
+        self.assertIn("INCLUDE_TAILSCALE: ${{ inputs.include_tailscale }}", workflow)
+        self.assertIn("INCLUDE_SINGBOX: ${{ inputs.include_singbox }}", workflow)
+        self.assertIn("INCLUDE_CLOUDFLARED: ${{ inputs.include_cloudflared }}", workflow)
+        self.assertIn('--include-tailscale "$INCLUDE_TAILSCALE"', workflow)
+        self.assertIn('--include-singbox "$INCLUDE_SINGBOX"', workflow)
+        self.assertIn('--include-cloudflared "$INCLUDE_CLOUDFLARED"', workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
