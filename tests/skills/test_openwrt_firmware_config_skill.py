@@ -58,6 +58,17 @@ class OpenWrtFirmwareConfigSkillTests(unittest.TestCase):
             "Skill must not contain an executable raw dd flashing recipe",
         )
 
+    def test_skill_is_discoverable_from_repository_guides(self):
+        skill_path = ".agents/skills/openwrt-firmware-config/SKILL.md"
+        for guide in ("README.md", "AGENTS.md"):
+            with self.subTest(guide=guide):
+                text = (ROOT / guide).read_text(encoding="utf-8")
+                self.assertIn(skill_path, text)
+                self.assertRegex(
+                    text,
+                    r"(?is)(OpenWrt|ImmortalWrt).{0,160}(配置|firmware configuration)",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

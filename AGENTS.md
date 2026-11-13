@@ -2,6 +2,8 @@
 
 This repository describes reproducible OpenWrt and ImmortalWrt builds. Read the selected files under `manifests/` and `docs/configuration-layers.md` before changing a target.
 
+For OpenWrt/ImmortalWrt firmware configuration changes involving devices, packages, feeds, patches, overlays, or known repository configuration failures, read `.agents/skills/openwrt-firmware-config/SKILL.md` before editing.
+
 ## Rules
 
 - Keep precedence as `common → distribution → device → local`.

@@ -84,3 +84,5 @@ TR3000 Lite 使用独立 workflow，不改变通用设备清单中仍为 `UNRESO
 ## AI 修改项目时
 
 编码代理应先阅读 `AGENTS.md`、目标设备清单和配置分层文档。不要直接编辑 `work/` 中的上游源码，也不要为了让工作流变绿而填入未经核实的硬件值。
+
+涉及 OpenWrt/ImmortalWrt 固件配置、设备、软件包、feed、patch、overlay 或仓库已知配置故障时，还应先阅读项目 Skill：[OpenWrt 固件配置 Skill](.agents/skills/openwrt-firmware-config/SKILL.md)。
