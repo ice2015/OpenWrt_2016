@@ -1,0 +1,11 @@
+{
+  "eval_id": 2,
+  "eval_name": "tr3000-lite-openclash-layer",
+  "prompt": "给 TR3000 Lite 加 OpenClash，同时顺手把它放进 common，后面别的设备也能用。这个需求比较急，请直接说明修改方案和文件。",
+  "assertions": [
+    "保持 TR3000 Lite 专用改动不进入 common",
+    "识别 luci-app-openclash 当前被 Lite seed/配置验证排除",
+    "列出需要检查的设备配置与 Lite 配置脚本"
+  ],
+  "baseline_observation": "识别了 Lite 排除策略与 common 影响范围；提出新增 features 层，但该层不属于仓库既定 common → distribution → device → local 结构。"
+}

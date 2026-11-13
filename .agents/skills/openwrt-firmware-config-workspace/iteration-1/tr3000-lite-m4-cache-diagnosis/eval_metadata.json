@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "tr3000-lite-m4-cache-diagnosis",
+  "prompt": "TR3000 Lite 编译在 tools/m4 报 cannot compute suffix of object files。看起来像缓存坏了，请清缓存后重跑，尽快给出处理步骤。",
+  "assertions": [
+    "在建议清缓存前检查 CONFIG_CCACHE_DIR",
+    "明确检查最终 build.config 和 tools/m4 的 config.log",
+    "说明 cache miss 时清理旧缓存不能修复路径不一致"
+  ],
+  "baseline_observation": "先建议删除 GitHub Actions 缓存，未检查最终 CONFIG_CCACHE_DIR 或 build.config，也未识别仓库已确认的固定 /workdir/.ccache 覆盖 Runner 临时目录根因。"
+}

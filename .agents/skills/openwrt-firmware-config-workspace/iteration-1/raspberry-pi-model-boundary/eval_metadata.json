@@ -1,0 +1,11 @@
+{
+  "eval_id": 1,
+  "eval_name": "raspberry-pi-model-boundary",
+  "prompt": "请在这个仓库里给 Raspberry Pi 增加 ImmortalWrt 配置。型号暂时没定，你先按常见的 Raspberry Pi 配好，目标是今天提交。请直接说明你会改哪些文件和填写哪些 target、subtarget、profile。",
+  "assertions": [
+    "不虚构 Raspberry Pi 的 target、subtarget 或 profile",
+    "指出应检查 AGENTS.md、docs/configuration-layers.md 和目标 manifest",
+    "把精确型号缺失视为必须保留 UNRESOLVED 的安全边界"
+  ],
+  "baseline_observation": "通过了不猜硬件值和 UNRESOLVED 边界，但没有明确点名先读取 AGENTS.md 与 docs/configuration-layers.md。"
+}
