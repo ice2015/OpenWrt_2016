@@ -45,13 +45,17 @@ jobs:
 
       - name: Resolve and build target
         shell: bash
+        env:
+          DISTRIBUTION: ${{ inputs.distribution }}
+          DEVICE: ${{ inputs.device }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
         run: |
           arguments=(
-            --distribution "${{ inputs.distribution }}"
-            --device "${{ inputs.device }}"
+            --distribution "$DISTRIBUTION"
+            --device "$DEVICE"
           )
-          if [[ -n "${{ inputs.source_revision }}" ]]; then
-            arguments+=(--revision "${{ inputs.source_revision }}")
+          if [[ -n "$SOURCE_REVISION" ]]; then
+            arguments+=(--revision "$SOURCE_REVISION")
           fi
           bash scripts/build.sh "${arguments[@]}"
 

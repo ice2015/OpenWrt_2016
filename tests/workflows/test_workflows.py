@@ -16,6 +16,7 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertIn("pull_request:", workflow)
         self.assertNotIn("pull_request_target", workflow)
+        self.assertNotIn("paths:", workflow)
         self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
         self.assertIn("bash scripts/validate.sh", workflow)
         self.assertIn("python -m unittest discover -s tests -v", workflow)
@@ -43,6 +44,19 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
         self.assertIn("bash scripts/validate.sh", workflow)
         self.assertIn("bash scripts/build.sh", workflow)
+
+    def test_reusable_build_passes_inputs_as_data_not_shell_source(self) -> None:
+        workflow = self.workflow("reusable-build.yml")
+        run_blocks = re.findall(r"run: \|\n((?:          .*\n)+)", workflow)
+
+        self.assertNotEqual([], run_blocks)
+        self.assertNotIn("${{ inputs.", "\n".join(run_blocks))
+        self.assertIn("DISTRIBUTION: ${{ inputs.distribution }}", workflow)
+        self.assertIn("DEVICE: ${{ inputs.device }}", workflow)
+        self.assertIn("SOURCE_REVISION: ${{ inputs.source_revision }}", workflow)
+        self.assertIn('--distribution "$DISTRIBUTION"', workflow)
+        self.assertIn('--device "$DEVICE"', workflow)
+        self.assertIn('--revision "$SOURCE_REVISION"', workflow)
 
     def test_workflows_delegate_native_build_logic_to_scripts(self) -> None:
         combined = "\n".join(

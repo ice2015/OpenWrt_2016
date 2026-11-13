@@ -2,23 +2,7 @@ name: Validate build definitions
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/**"
-      - "configs/**"
-      - "feeds/**"
-      - "manifests/**"
-      - "scripts/**"
-      - "tests/**"
-      - "tools/**"
   push:
-    paths:
-      - ".github/workflows/**"
-      - "configs/**"
-      - "feeds/**"
-      - "manifests/**"
-      - "scripts/**"
-      - "tests/**"
-      - "tools/**"
 
 permissions:
   contents: read
