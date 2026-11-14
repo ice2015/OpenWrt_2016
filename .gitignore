@@ -24,4 +24,5 @@ __pycache__/
 
 # Superpowers execution scratch space
 /.superpowers/
+/.worktrees/
 
