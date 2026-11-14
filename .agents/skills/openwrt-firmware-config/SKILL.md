@@ -141,6 +141,13 @@ common → distribution → device → local
   2. 脚本中配置 `ccache -M 5G` 约束编译缓存上限，避免缓存无节制增长。
 - **验证**：检查工作流 `Free runner disk space` 步骤中 `df -h` 输出的可用空间（应大于 55GB）；检查完整构建流程能够顺利完成打包与产物上传。
 
+### Ruby 触发 Rust 工具链全量编译导致 Actions 6 小时超时
+
+- **症状**：GitHub Actions 构建执行满 6 小时后提示 `The job has exceeded the maximum execution time of 6h0m0s` 并被取消；查看 `build.log` 发现数万行在编译 `rustc-1.94.0-src`。
+- **已确认根因**：上游基线配置默认开启 `CONFIG_PACKAGE_ruby=y`，新版 packages 源中的 `ruby` 依赖 host 端 Rust 自举编译。在 2 核 Runner 上从源码编译整个 `rustc` 需要数小时。
+- **修复**：在设备 seed（如 `configs/lite.seed` 与 `configs/full.seed`）中显式加入 `# CONFIG_PACKAGE_ruby is not set` 与 `# CONFIG_PACKAGE_libruby is not set`，并在配置脚本中加入排除检查。
+- **验证**：检查合并后的 `build.config` 中不含 `CONFIG_PACKAGE_ruby=y`；构建跳过 Rust 工具链编译，总耗时控制在 1 小时内。
+
 ## 完整示例：TR3000 Lite 软件包变更
 
 用户要求：“给 TR3000 Lite 加 OpenClash，并顺手放进 common。”
@@ -172,6 +179,7 @@ common → distribution → device → local
 | 单行 ninja 不存在 | 查对应 target 和串行稳定失败，不先下结论 |
 | 通用构建状态码 3 | 核实 manifest；不要绕过 `UNRESOLVED` 门禁 |
 | No space left on device | 深度清理 Runner 磁盘（Android/hostedtoolcache 等），并限制 ccache 大小 |
+| Rust 编译或 Actions 6h 超时 | 检查上游是否残留 `ruby`，在 seed 中显式排除 `ruby` / `libruby` |
 
 ## 常见错误
 
@@ -180,6 +188,7 @@ common → distribution → device → local
 - 只修改 seed，不同步排除列表、feed、测试和最终配置检查。
 - 看到 cache/m4 字样就删缓存，忽略配置路径与 `config.log`。
 - 在 GitHub Actions 仅清理 dotnet/powershell，未删除 Android SDK 和 hostedtoolcache 导致空间不足。
+- 遗漏排除上游基线中的 `ruby`，导致触发整个 Rust 工具链从源码编译而超时。
 - 在 Windows 原生环境尝试完整固件编译并把环境失败误判为源码失败。
 - 为通过 CI 猜 revision、profile 或 artifact pattern。
 - 把未经真机验证的系统固件描述为通用刷写镜像。

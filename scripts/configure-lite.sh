@@ -140,7 +140,8 @@ for package in \
 	adguardhome cloudflared docker dockerd kmod-usb-net-ipheth \
 	luci-app-aurora-config luci-app-bandix luci-app-dockerman \
 	luci-app-openclash luci-app-passwall luci-app-upnp \
-	luci-app-mwan3 luci-theme-aurora miniupnpd mwan3 sing-box tailscale dropbear
+	luci-app-mwan3 luci-theme-aurora miniupnpd mwan3 sing-box tailscale dropbear \
+	ruby libruby
 do
 	if grep -Fq "CONFIG_PACKAGE_$package=y" "$SOURCE_DIR/.config"; then
 		fail "excluded package remained selected after defconfig: $package"
