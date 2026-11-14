@@ -148,6 +148,13 @@ common → distribution → device → local
 - **修复**：在设备 seed（如 `configs/lite.seed` 与 `configs/full.seed`）中显式加入 `# CONFIG_PACKAGE_ruby is not set` 与 `# CONFIG_PACKAGE_libruby is not set`，并在配置脚本中加入排除检查。
 - **验证**：检查合并后的 `build.config` 中不含 `CONFIG_PACKAGE_ruby=y`；构建跳过 Rust 工具链编译，总耗时控制在 1 小时内。
 
+### `tcpdump-mini` 与上游 `tcpdump` 在 rootfs 组装时文件冲突
+
+- **症状**：固件编译接近尾声，执行 `package/install` 时报错 `check_data_file_clashes: Package tcpdump-mini wants to install file .../usr/bin/tcpdump But that file is already provided by package * tcpdump` 并返回 Error 255。
+- **已确认根因**：上游基线中默认包含完整版 `CONFIG_PACKAGE_tcpdump=y`，而设备 seed 中额外声明了 `CONFIG_PACKAGE_tcpdump-mini=y`。两者向 rootfs 安装同名文件 `/usr/bin/tcpdump` 触发 opkg 冲突阻止。
+- **修复**：在 seed 中显式添加 `# CONFIG_PACKAGE_tcpdump is not set` 排除完整版，并在配置脚本的排除列表中检查 `tcpdump`。
+- **验证**：检查合并生成的 `build.config` 中不含 `CONFIG_PACKAGE_tcpdump=y`，仅保留 `CONFIG_PACKAGE_tcpdump-mini=y`。
+
 ## 完整示例：TR3000 Lite 软件包变更
 
 用户要求：“给 TR3000 Lite 加 OpenClash，并顺手放进 common。”

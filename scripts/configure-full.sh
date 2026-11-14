@@ -223,7 +223,7 @@ done
 for PACKAGE in \
 	adguardhome docker dockerd luci-app-aurora-config luci-app-bandix \
 	luci-app-dockerman luci-app-openclash luci-app-passwall luci-app-upnp \
-	luci-theme-aurora miniupnpd dropbear ruby libruby
+	luci-theme-aurora miniupnpd dropbear ruby libruby tcpdump
 do
 	if grep -Fq "CONFIG_PACKAGE_$PACKAGE=y" "$SOURCE_DIR/.config"; then
 		fail "excluded package remained selected after defconfig: $PACKAGE"

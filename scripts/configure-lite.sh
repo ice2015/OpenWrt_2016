@@ -141,7 +141,7 @@ for package in \
 	luci-app-aurora-config luci-app-bandix luci-app-dockerman \
 	luci-app-openclash luci-app-passwall luci-app-upnp \
 	luci-app-mwan3 luci-theme-aurora miniupnpd mwan3 sing-box tailscale dropbear \
-	ruby libruby
+	ruby libruby tcpdump
 do
 	if grep -Fq "CONFIG_PACKAGE_$package=y" "$SOURCE_DIR/.config"; then
 		fail "excluded package remained selected after defconfig: $package"
