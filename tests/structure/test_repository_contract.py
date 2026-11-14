@@ -9,6 +9,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RepositoryContractTests(unittest.TestCase):
+    def test_tr3000_lite_overlay_is_device_scoped(self) -> None:
+        overlay = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
+        for config in ("network", "dhcp", "firewall", "tr3000-lite"):
+            self.assertTrue((overlay / config).is_file(), f"missing Lite overlay: {config}")
+        self.assertFalse((ROOT / "files/etc/config/tr3000-lite").exists())
+        for manifest in (ROOT / "manifests/devices").glob("*.json"):
+            self.assertNotIn("tr3000-lite", manifest.read_text(encoding="utf-8"))
+
     def test_required_layer_files_exist(self) -> None:
         required = {
             ".editorconfig",

@@ -1,0 +1,30 @@
+config interface 'wan'
+	option device 'eth0'
+	option proto 'dhcp'
+	option metric '10'
+
+config interface 'wwan'
+	option proto 'dhcp'
+	option metric '20'
+	option auto '0'
+
+config interface 'usbwan'
+	option proto 'dhcp'
+	option metric '30'
+	option auto '0'
+
+config interface 'plant'
+	option device 'eth1'
+	option proto 'static'
+	option ipaddr '192.168.10.254'
+	option netmask '255.255.255.0'
+
+config device
+	option name 'br-mgmt'
+	option type 'bridge'
+
+config interface 'mgmt'
+	option device 'br-mgmt'
+	option proto 'static'
+	option ipaddr '192.168.77.1'
+	option netmask '255.255.255.0'

@@ -1,0 +1,134 @@
+config defaults
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	option synflood_protect '1'
+
+config zone
+	option name 'wan'
+	list network 'wan'
+	list network 'wwan'
+	list network 'usbwan'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	option masq '1'
+	option mtu_fix '1'
+
+config zone
+	option name 'plant'
+	list network 'plant'
+	option input 'REJECT'
+	option output 'REJECT'
+	option forward 'REJECT'
+
+config zone
+	option name 'mgmt'
+	list network 'mgmt'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config zone
+	option name 'wg'
+	list network 'wg'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config forwarding
+	option src 'mgmt'
+	option dest 'wan'
+
+config rule
+	option name 'Allow-management-DHCP'
+	option src 'mgmt'
+	option proto 'udp'
+	option dest_port '67'
+	option target 'ACCEPT'
+
+config rule
+	option name 'Allow-management-DNS'
+	option src 'mgmt'
+	option proto 'tcp udp'
+	option dest_port '53'
+	option target 'ACCEPT'
+
+config rule
+	option name 'Allow-management-SSH'
+	option src 'mgmt'
+	option proto 'tcp'
+	option dest_port '22'
+	option target 'ACCEPT'
+
+config rule
+	option name 'Allow-management-HTTPS'
+	option src 'mgmt'
+	option proto 'tcp'
+	option dest_port '443'
+	option target 'ACCEPT'
+
+config rule
+	option name 'Allow-WireGuard-listener-disabled-by-default'
+	option enabled '0'
+	option src 'wan'
+	option proto 'udp'
+	option dest_port '51820'
+	option target 'ACCEPT'
+
+# The controller may enable this only after a nonempty root password is set.
+config rule 'tr3000_lite_plant_luci'
+	option name 'Allow-Lite-plant-HTTPS'
+	option enabled '0'
+	option family 'ipv4'
+	option src 'plant'
+	option proto 'tcp'
+	option dest_port '443'
+	option target 'ACCEPT'
+
+config rule 'tr3000_lite_mgmt_plant_icmp'
+	option name 'Allow-Lite-management-plant-icmp'
+	option enabled '1'
+	option family 'ipv4'
+	option src 'mgmt'
+	option dest 'plant'
+	option src_ip '192.168.77.0/24'
+	option dest_ip '192.168.10.0/24'
+	option proto 'icmp'
+	option icmp_type 'echo-request'
+	option target 'ACCEPT'
+
+# firewall4 NAT src selects the outgoing zone, not the ingress zone.
+config nat 'tr3000_lite_mgmt_plant_snat_icmp'
+	option name 'SNAT-Lite-management-plant-icmp'
+	option enabled '1'
+	option family 'ipv4'
+	option src 'plant'
+	option src_ip '192.168.77.0/24'
+	option dest_ip '192.168.10.0/24'
+	option proto 'icmp'
+	option target 'SNAT'
+	option snat_ip '192.168.10.254'
+
+config rule 'tr3000_lite_mgmt_plant_tcp'
+	option name 'Allow-Lite-management-plant-tcp'
+	option enabled '1'
+	option family 'ipv4'
+	option src 'mgmt'
+	option dest 'plant'
+	option src_ip '192.168.77.0/24'
+	option dest_ip '192.168.10.0/24'
+	option proto 'tcp'
+	option target 'ACCEPT'
+
+# firewall4 NAT src selects the outgoing zone, not the ingress zone.
+config nat 'tr3000_lite_mgmt_plant_snat_tcp'
+	option name 'SNAT-Lite-management-plant-tcp'
+	option enabled '1'
+	option family 'ipv4'
+	option src 'plant'
+	option src_ip '192.168.77.0/24'
+	option dest_ip '192.168.10.0/24'
+	option proto 'tcp'
+	option target 'SNAT'
+	option snat_ip '192.168.10.254'

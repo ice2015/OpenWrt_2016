@@ -2,6 +2,7 @@ import os
 import io
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -72,12 +73,32 @@ def lite_base_config() -> str:
     return "\n".join(lines) + "\n"
 
 
+def uci_sections(contents: str) -> list[dict]:
+    """Read the sections/options emitted in an installed UCI config."""
+    sections = []
+    for line in contents.splitlines():
+        tokens = shlex.split(line, comments=True)
+        if not tokens:
+            continue
+        if tokens[0] == "config":
+            section = {".type": tokens[1], ".name": tokens[2] if len(tokens) > 2 else None}
+            sections.append(section)
+        elif tokens[0] == "option":
+            section[tokens[1]] = tokens[2]
+        elif tokens[0] == "list":
+            section.setdefault(tokens[1], []).append(tokens[2])
+        else:
+            raise ValueError(f"Unsupported UCI line: {line}")
+    return sections
+
+
 def run_lite_configure(
     base_contents: str,
     *,
     seed_contents: str | None = None,
     ccache_dir: str | None = None,
-) -> tuple[subprocess.CompletedProcess[str], str]:
+    repo_root: Path = ROOT,
+) -> tuple[subprocess.CompletedProcess[str], str, dict[str, str]]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         source = root / "source"
@@ -96,7 +117,7 @@ def run_lite_configure(
         environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
         arguments = [
             bash_executable(),
-            (ROOT / "scripts/configure-lite.sh").as_posix(),
+            (repo_root / "scripts/configure-lite.sh").as_posix(),
             "--source-dir", source.as_posix(),
             "--base-config", base_config.as_posix(),
         ]
@@ -121,7 +142,12 @@ def run_lite_configure(
             if generated_path.is_file()
             else ""
         )
-    return result, generated_config
+        installed_assets = {
+            path.relative_to(source).as_posix(): path.read_text(encoding="utf-8")
+            for path in source.rglob("*")
+            if path.is_file() and path.relative_to(source).parts[0] == "files"
+        }
+    return result, generated_config, installed_assets
 
 
 def full_base_config() -> str:
@@ -150,7 +176,7 @@ def run_full_configure(
     include_singbox: str | None = None,
     include_cloudflared: str | None = None,
     dts_contents: str = "reg = <0x5c0000 0x7000000>;\n",
-) -> tuple[subprocess.CompletedProcess[str], str, set[str]]:
+) -> tuple[subprocess.CompletedProcess[str], str, dict[str, str]]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         source = root / "source"
@@ -201,7 +227,7 @@ def run_full_configure(
             else ""
         )
         installed_assets = {
-            path.relative_to(source).as_posix()
+            path.relative_to(source).as_posix(): path.read_text(encoding="utf-8")
             for path in source.rglob("*")
             if path.is_file()
         }
@@ -320,7 +346,7 @@ class ScriptInterfaceTests(unittest.TestCase):
             "# CONFIG_PACKAGE_luci-app-openclash is not set\n"
             "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y\n"
         )
-        result, generated_config = run_lite_configure(
+        result, generated_config, _ = run_lite_configure(
             base_config,
             seed_contents=seed,
         )
@@ -332,7 +358,7 @@ class ScriptInterfaceTests(unittest.TestCase):
 
     def test_lite_config_uses_requested_ccache_directory(self) -> None:
         requested_cache = "/tmp/openwrt-test-ccache"
-        result, generated_config = run_lite_configure(
+        result, generated_config, _ = run_lite_configure(
             lite_base_config(),
             ccache_dir=requested_cache,
         )
@@ -340,6 +366,77 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(f'CONFIG_CCACHE_DIR="{requested_cache}"', generated_config)
         self.assertNotIn('CONFIG_CCACHE_DIR="/workdir/.ccache"', generated_config)
+
+    def test_lite_config_installs_lite_overlay_after_shared_files(self) -> None:
+        result, _, assets = run_lite_configure(lite_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        network = {s[".name"]: s for s in uci_sections(assets["files/etc/config/network"])}
+        self.assertEqual("static", network["plant"]["proto"])
+        self.assertEqual("eth1", network["plant"]["device"])
+        self.assertEqual("192.168.10.254", network["plant"]["ipaddr"])
+        self.assertEqual("255.255.255.0", network["plant"]["netmask"])
+        self.assertEqual("br-mgmt", network["mgmt"]["device"])
+        self.assertEqual("192.168.77.1", network["mgmt"]["ipaddr"])
+        bridges = [s for s in network.values() if s[".type"] == "device"]
+        self.assertEqual(1, len(bridges))
+        self.assertEqual("br-mgmt", bridges[0]["name"])
+        self.assertNotIn("eth1", bridges[0].get("ports", []))
+        dhcp = {s[".name"]: s for s in uci_sections(assets["files/etc/config/dhcp"])}
+        self.assertEqual("1", dhcp["plant"]["ignore"])
+        for service in ("dhcpv4", "dhcpv6", "ra", "ndp"):
+            self.assertEqual("disabled", dhcp["plant"][service])
+        self.assertEqual("100", dhcp["mgmt"]["start"])
+        self.assertEqual("50", dhcp["mgmt"]["limit"])
+        policy = uci_sections(assets["files/etc/config/tr3000-lite"])[0]
+        self.assertEqual("plant", policy[".name"])
+        for option, value in (("allow_luci", "0"), ("allow_mgmt", "1"), ("allow_wireguard", "0")):
+            self.assertEqual(value, policy[option])
+        firewall = uci_sections(assets["files/etc/config/firewall"])
+        sections = {s[".name"]: s for s in firewall if s[".name"]}
+        luci = sections["tr3000_lite_plant_luci"]
+        for option, value in (("src", "plant"), ("proto", "tcp"), ("dest_port", "443"), ("enabled", "0"), ("target", "ACCEPT")):
+            self.assertEqual(value, luci[option])
+        self.assertNotIn("dest", luci)
+        for proto in ("icmp", "tcp"):
+            rule = sections[f"tr3000_lite_mgmt_plant_{proto}"]
+            for option, value in (("src", "mgmt"), ("dest", "plant"), ("dest_ip", "192.168.10.0/24"), ("family", "ipv4"), ("proto", proto), ("target", "ACCEPT"), ("enabled", "1")):
+                self.assertEqual(value, rule[option])
+            nat = sections[f"tr3000_lite_mgmt_plant_snat_{proto}"]
+            for option, value in ((".type", "nat"), ("src", "plant"), ("src_ip", "192.168.77.0/24"), ("dest_ip", "192.168.10.0/24"), ("snat_ip", "192.168.10.254"), ("family", "ipv4"), ("proto", proto), ("target", "SNAT"), ("enabled", "1")):
+                self.assertEqual(value, nat[option])
+            self.assertNotIn("dest", nat)
+        self.assertEqual("echo-request", sections["tr3000_lite_mgmt_plant_icmp"]["icmp_type"])
+        zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
+        for name in ("plant", "mgmt"):
+            zone = zones[name]
+            self.assertEqual("REJECT", zone["input"])
+            self.assertEqual("REJECT", zone["forward"])
+        self.assertEqual("REJECT", zones["plant"]["output"])
+        self.assertFalse(any(s[".type"] == "forwarding" and s["src"] == "plant" for s in firewall))
+        self.assertEqual(
+            [],
+            [s for s in firewall if s[".type"] == "rule" and s.get("src") == "plant"
+             and s.get("target") == "ACCEPT" and s.get("enabled", "1") != "0"],
+        )
+        self.assertIn("files/root/scripts/plant-profile.sh", assets)
+        self.assertEqual((ROOT / "files/etc/config/ubihealthd").read_text(encoding="utf-8"), assets["files/etc/config/ubihealthd"])
+
+        full_result, _, full_assets = run_full_configure(full_base_config())
+        self.assertEqual(0, full_result.returncode, full_result.stderr)
+        for config in ("network", "dhcp", "firewall"):
+            self.assertEqual((ROOT / f"files/etc/config/{config}").read_text(encoding="utf-8"), full_assets[f"files/etc/config/{config}"])
+        self.assertNotIn("files/etc/config/tr3000-lite", full_assets)
+        self.assertFalse(any("tr3000-lite" in path for path in full_assets))
+
+    def test_lite_config_rejects_missing_device_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            for subdir in ("scripts", "configs", "files"):
+                shutil.copytree(ROOT / subdir, repo / subdir)
+            result, _, assets = run_lite_configure(lite_base_config(), repo_root=repo)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Lite overlay not found", result.stderr)
+        self.assertEqual({}, assets)
 
     def test_full_config_defaults_include_tailscale_and_singbox_only(self) -> None:
         base = (

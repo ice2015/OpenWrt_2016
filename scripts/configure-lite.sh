@@ -7,6 +7,7 @@ SOURCE_DIR=
 BASE_CONFIG=
 CCACHE_DIR_OVERRIDE=
 SEED="$REPO_ROOT/configs/lite.seed"
+LITE_OVERLAY="$REPO_ROOT/overlays/devices/tr3000-lite/files"
 
 usage() {
 	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE] [--ccache-dir DIR]\n' "$0"
@@ -54,6 +55,7 @@ done
 [ -d "$SOURCE_DIR/scripts" ] || fail "not an OpenWrt source tree: $SOURCE_DIR"
 [ -f "$BASE_CONFIG" ] || fail "base config not found: $BASE_CONFIG"
 [ -f "$SEED" ] || fail "Lite seed not found: $SEED"
+[ -d "$LITE_OVERLAY" ] || fail "Lite overlay not found: $LITE_OVERLAY"
 case "$CCACHE_DIR_OVERRIDE" in
 	'') ;;
 	/*) ;;
@@ -163,4 +165,6 @@ install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch"
+# Device/variant overrides deliberately win over the shared rootfs and assets.
+cp -R "$LITE_OVERLAY/." "$SOURCE_DIR/files/"
 printf 'Lite configuration validated for the 112 MiB U-Boot Mod profile.\n'
