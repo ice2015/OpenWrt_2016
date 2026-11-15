@@ -53,6 +53,14 @@
 
 ## 上行和 WireGuard
 
+### 可选 Wi-Fi Client：只使用标准 LuCI 配置
+
+“工业 LAN”页面提供标准“网络 → 无线”和“网络 → 接口”的入口，不增加接收 Wi-Fi 密码的自定义 shell/RPC 控制器。无 Client 时为 AP-only，加入热点后为 AP+Client；Client 断线或删除其配置不应删除管理 AP。固件不创建默认 STA，也不自动扫描连接未知或开放热点。
+
+在标准无线页面扫描并人工选择**已明确批准的加密热点**，使用 `wwan` 网络并分配到 `wan` 防火墙 zone。**不要勾选“Replace wireless configuration / 替换无线配置”**，该上游选项会删除同一射频上的现有 AP；不要删除管理 AP 或禁用其 radio。随后在标准接口页面为 `wwan` 启用“开机自动运行”，保存并应用；预置 `wwan` 为 DHCP、metric 20、`auto=0`，标准 Join 只绑定接口，不会清除现有 `auto=0`。撤除 STA 时仅删除 Client section，需要时停用 `wwan`，保留管理 AP 与 radio。
+
+优先选择不同射频承载 AP 和 Client；不根据 `radio0`/`radio1` 名字猜测频段。共用射频时，AP 信道跟随 STA，扫描、漫游或重连可能短暂中断管理连接，不保证 RF 无间断。多个已批准热点可通过标准页面保存，密钥仅保留在设备私有配置；此阶段不实现自动选择未知热点或自动轮换已保存热点的功能。若操作者故意选择开放网络，须先确认风险，本项目默认部署不允许这样做。实际 radio、信道及共享射频状态将由多上行状态页显示；本段不构成已通过真机并发验证的声明。
+
 固件包含轻量 `lite-uplink-watch` procd 服务：每 15 秒区分 netifd 接口状态和两个 IPv4 ping 探测结果；连续 3 次全部失败后将该出口默认路由 metric 暂时增加 1000，连续 2 次恢复后还原。WAN、STA、USB 的基础 metric 为 10/20/30；WAN 恢复会自动抢回优先级。实际无线 STA/USB 设备仍需安装人员核验并启用，默认逻辑接口为 `wwan`/`usbwan` 且不自动启动，不会猜测设备名。ICMP 探测只表示探测地址可达；若现场网络屏蔽 ICMP，应选择允许探测的目标，并验证失联、恢复、DNS 和路由收敛。
 
 默认路由出口发生变化且 WireGuard 接口已启用时，服务会重启 `wg` 网络接口以触发重新握手；Peer 仍建议按现场 NAT 情况设置 `PersistentKeepalive = 25`。必须对真实上行切换做测试，不能把链路 up 等同于 VPS 可达。见[WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)。

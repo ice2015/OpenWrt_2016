@@ -154,6 +154,15 @@ return view.extend({
 			E('p', {}, E('label', {}, [ https, ' ', _('Allow plant HTTPS management (443 only)') ])),
 			E('p', {}, _('Plant HTTPS requires a configured root password and completed management AP initialization.')),
 			E('p', {}, E('label', {}, [ mgmt, ' ', _('Allow management network access to plant (ICMP and TCP)') ])),
+			E('h3', {}, _('Optional Wi-Fi Client uplink')),
+			E('p', {}, _('AP-only, AP+Client and disconnected Client configurations keep the management AP configured. No default Client profile or automatic open-network join is provided.')),
+			E('div', { 'class': 'alert-message warning' }, _('When AP and Client use the same radio, the AP channel follows the Client; scanning or reconnecting may briefly interrupt management. Use an encrypted, explicitly approved hotspot. Never select “Replace wireless configuration”, delete the management AP, or disable its radio.')),
+			E('p', {}, _('Join the approved hotspot on the standard Wireless page, use the wwan network and WAN firewall zone, then enable wwan automatic startup on the standard Interfaces page. Interface wwan is DHCP with metric 20 and starts disabled.')),
+			E('p', {}, [
+				E('a', { 'href': L.url('admin', 'network', 'wireless') }, _('Configure Wi-Fi Client (standard Wireless page)')),
+				' — ',
+				E('a', { 'href': L.url('admin', 'network', 'network') }, _('Configure interfaces (standard Interfaces page)'))
+			]),
 			feedback,
 			backup,
 			E('div', { 'class': 'cbi-page-actions' }, [ validate, ' ', apply ])

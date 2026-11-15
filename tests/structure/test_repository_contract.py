@@ -58,9 +58,10 @@ const E = (tag, attrs, children) => ({ tag, attrs: attrs || {}, children: childr
   addEventListener(name, fn) { this.attrs[name] = fn; } });
 const ui = { addNotification: (title, body) => notices.push(body),
   createHandlerFn: (ctx, fn, ...args) => (...rest) => fn.apply(ctx, [...args, ...rest]) };
-const page = new Function('view', 'fs', 'ui', 'E', '_', 'window', source)(
+const page = new Function('view', 'fs', 'ui', 'E', '_', 'window', 'L', source)(
   { extend: x => x }, fs, ui, E, x => x,
-  { confirm: message => { confirmation = message; return confirmed; } });
+  { confirm: message => { confirmation = message; return confirmed; } },
+  { url: (...parts) => '/cgi-bin/luci/' + parts.join('/') });
 const state = {schema_version:1, plant:{device:'eth1', address:'192.168.10.254', prefix:24,
   netmask:'255.255.255.0', allow_luci:false, allow_mgmt:true, dhcp:'disabled'},
   checks:{result:'ok'}, backup_id:'', rollback:'none'};
