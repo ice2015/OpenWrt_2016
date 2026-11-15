@@ -96,32 +96,30 @@ images/
 * 电脑网线插在 LAN 口，电脑设为自动获取 IP 时，**DHCP 未分配 IP**。
 * 电脑手动配置 `192.168.77.2` 后，**PING `192.168.77.1` 完全无响应**。
 
-### 2. 根本原因深度分析
+### 2. 历史故障与当前 Lite 契约
 
-通过审查本项目配置文件（`files/etc/config/network`、`files/etc/config/dhcp`、`files/etc/config/firewall`），确认该现象为**工业固件的严格安全架构设计所致**，并非硬件故障：
+上述现象记录的是旧 Lite 镜像：当时共享 `files/` 将 plant 设为 `proto 'none'`，管理网桥没有接入口，也没有管理 AP。它解释旧镜像行为，不能用来判断当前 Lite 镜像或证明硬件无故障。`22 MB` 是历史观察值，不是当前镜像大小合同。
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                       Cudy TR3000 硬件                      │
-├──────────────────────────────┬──────────────────────────────┤
-│    物理 WAN 口 (eth0)         │    物理 LAN 口 (eth1)         │
-│    -> 绑定为 wan 接口         │    -> 绑定为 plant 工业接口   │
-│    -> 协议: DHCP Client      │    -> 协议: proto 'none'     │
-│    -> 防火墙: REJECT 输入     │    -> 状态: 无 IP、关闭 DHCP  │
-└──────────────────────────────┴──────────────────────────────┘
-                                
-   [虚拟管理网桥 br-mgmt]
-   -> 静态 IP: 192.168.77.1
-   -> 状态: 未桥接任何物理网口（仅预留给串口控制台或后续配置的管理 Wi-Fi）
-```
+当前 Lite 专用 overlay 覆盖共享配置，Full 不受此变更影响：
 
-* **LAN 口为何无 IP 且禁 DHCP**：
-  在工控现场，物理 LAN 口（`plant`）直接对接 PLC、HMI 等固定 IP 设备。为防止工业总线 IP 冲突或非法 DHCP 广播导致工控系统停机，固件**永久关闭了 `plant` 口的 DHCP 服务器，且默认不设 IP**。
-* **PING 为何无响应**：
-  1. 物理网口 `eth1` 没有桥接到 `br-mgmt`，发往 `192.168.77.1` 的请求在物理链路层无法路由。
-  2. 防火墙配置中默认输入策略为 `REJECT`，且未放行 ICMP（PING）规则，仅放行了 HTTPS（443）与 SSH（22）。
-* **Wi-Fi 为何搜不到**：
-  出于工业安全规范，出厂固件禁止预置开放或弱密 Wi-Fi，无线射频默认处于关闭状态。
+| 项目 | 当前 Lite 默认行为 |
+| --- | --- |
+| WAN / plant 设备 | 候选 `eth0` / `eth1`，必须逐口插拔验证机壳实际映射 |
+| plant | 独立 `eth1`，静态 `192.168.10.254/24` 开机立即生效；DHCPv4、DHCPv6、RA、NDP 服务关闭 |
+| mgmt | 独立 `br-mgmt`，`192.168.77.1/24`，加密管理 AP，DHCP 池 `.100–.149`，不与 plant 桥接 |
+| mgmt → plant | 默认允许当前 plant CIDR 的 ICMP Echo/TCP，SNAT 为 plant 地址；工业设备无需默认网关；UDP/二层发现不开放 |
+| plant → 路由器 | HTTPS 443 默认关闭，设置非空 root 密码且 AP 初始化标记存在后才可显式启用；HTTP/SSH 不开放 |
+| WAN / WireGuard | WAN 管理关闭；WireGuard 工业访问及 listener 默认关闭 |
+
+**LAN 接入工业 HUB 前必须人工确认 `192.168.10.254`（或修改后的地址）未占用且网段适用**。不能仅凭构建成功、ARP 自动探测或旧刷机记录认定地址安全。
+
+### 3. 当前首次管理与恢复路径
+
+在可信工位保持 LAN 与 HUB 断开，通过 UART/本地控制台设置 root 密码，私下读取设备生成的 WPA2 管理 SSID/密钥，再连接 AP 访问 `https://192.168.77.1`。随机凭据不在仓库、构建日志或 Artifact 中。plant HTTPS 初始关闭，不能将“静态 PC 直连 LAN”写作首次 Web 开通方式；需要先经控制台/随机 AP 满足 root+AP 门禁并显式启用。没有控制台且不知道随机 AP 凭据时，先在可信工位完成初始化。
+
+“网络 → 工业 LAN”提供 CIDR 验证、应用与策略开关；后端在通过地址/路由/ARP 检查后备份 network/firewall、检查候选 fw4、重载并验证，失败尽力恢复。JSON 中保留 backup_id 和回滚结果；必要时控制台执行 `/usr/sbin/tr3000-lite-plant restore --backup-id BACKUP_ID`，使用真实后端备份 ID。降级回滚需现场检查，不能保证断电和驱动故障下管理必然恢复。
+
+完整操作见 [Lite 部署说明](LITE-README.md) 和 [测试计划](TEST-PLAN.md)。实际首次无线发现、AP+STA 连续可用、Linux 权限、真实 firewall4/netifd 回滚及新镜像启动仍未验证；本记录的历史 U-Boot 成功不能替代这些验收。
 
 ---
 
@@ -134,9 +132,8 @@ images/
 3. 电脑网卡配置静态 IP `192.168.1.2`（或使用新版 U-Boot 的自动 DHCP）。
 4. 访问 `http://192.168.1.1` 即可重新回到 U-Boot Web 恢复页面。
 
-### 2. 方案选择建议
+### 2. 后续系统选择
 
-| 需求方向 | 建议操作 | 固件特性 |
-| :--- | :--- | :--- |
-| **家用 / 办公普通路由** | 在 U-Boot 中刷入 **标准版 ImmortalWrt 112MB U-BootMod** 固件 | 默认后台 `192.168.1.1`，LAN 口自带 DHCP 自动分配，默认开启 Wi-Fi 与中文 LuCI 界面。 |
-| **工业远程穿透与运维** | 修改仓库 `files/etc/config/network`，将物理 LAN 口并入 `br-mgmt` 并开启 DHCP 后重新编译 | 保持 WireGuard SNAT 工业网络隔离，同时保留网线本地管理便利性。 |
+使用本项目当前 Lite 时，保持管理 AP 与 plant 三层隔离，按上节在可信工位初始化，再确认地址冲突与物理端口映射。不要把 LAN 并入 `br-mgmt` 或在 plant 启用 DHCP 来解决首次登录，这会把管理广播送入工业 HUB。
+
+其他系统必须分别核实精确硬件、128 MiB NAND、112 MiB UBI 布局与安装方法；本文历史 U-Boot Web 记录不构成当前 sysupgrade 镜像通用刷写兼容保证。Lite Artifact 的 `lite-runtime-contract.txt` 仅记录公开预期默认值，应同时核对最终 `build.config`、`selected-packages.txt` 中的 `luci-app-tr3000-lite` 和 sysupgrade SHA256，真机验收仍需单独执行。

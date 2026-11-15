@@ -170,6 +170,34 @@ $IMAGE_LIST
 EOF
 [ "$IMAGE_COUNT" -gt 0 ] || fail "no firmware image was packaged"
 grep '^CONFIG_PACKAGE_.*=y$' "$SOURCE_DIR/.config" | sort > "$ARTIFACT_DIR/selected-packages.txt"
+grep -Fxq 'CONFIG_PACKAGE_luci-app-tr3000-lite=y' "$ARTIFACT_DIR/selected-packages.txt" ||
+	fail "final selected packages do not include luci-app-tr3000-lite"
+# Capture the same final config used for the package evidence above.
+cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/build.config"
+# Expected public defaults only: never read device wireless, shadow or private UCI.
+# This describes the shipped policy; it does not assert a successful device boot.
+cat > "$ARTIFACT_DIR/lite-runtime-contract.txt" <<'EOF'
+schema_version=1
+evidence_kind=expected-defaults-not-live-state
+plant_interface=plant
+plant_device=eth1
+plant_cidr=192.168.10.254/24
+mgmt_interface=mgmt
+mgmt_device=br-mgmt
+mgmt_cidr=192.168.77.1/24
+mgmt_dhcp_pool=192.168.77.100-192.168.77.149
+luci_package=luci-app-tr3000-lite
+allow_luci=0
+allow_mgmt=1
+allow_wireguard=0
+plant_https_port=443
+plant_https_gate=root-password-and-ap-initialized
+plant_dhcpv4_dhcpv6_ra_ndp=off
+mgmt_to_plant_protocols=icmp-echo,tcp
+mgmt_to_plant_snat=plant-address
+mgmt_plant_bridged=0
+wan_management=off
+EOF
 if [ -f "$TARGET_DIR/packages/Packages.manifest" ]; then
 	grep '^Package: ' "$TARGET_DIR/packages/Packages.manifest" |
 		sed 's/^Package: //' | sort -u > "$ARTIFACT_DIR/packages-manifest.txt"
@@ -178,6 +206,7 @@ cat > "$ARTIFACT_DIR/README.txt" <<EOF
 Build type: TR3000-Lite, 128 MiB NAND, U-Boot Mod, 112 MiB UBI layout
 Device profile: cudy_tr3000-v1-ubootmod
 Images in firmware/ are sysupgrade images, not universal factory/U-Boot flashing images.
+lite-runtime-contract.txt records public expected defaults, not live hardware verification.
 Source SHA: ${SOURCE_SHA:-not-supplied}
 Wrapper/config SHA: $(git -C "$UPSTREAM_DIR" rev-parse HEAD)
 EOF
