@@ -12,7 +12,7 @@ from tests.scripts import test_tr3000_lite_plant as plant_tests
 
 SCRIPT = ROOT/'overlays/devices/tr3000-lite/files/etc/uci-defaults/91-tr3000-lite-management-ap'
 FAKE = r'''
-import json, os, pathlib, sys
+import hashlib, json, os, pathlib, sys
 # Mirror Linux UCI bytes even when this command double runs on Windows.
 sys.stdout.reconfigure(encoding='utf-8', newline='\n')
 r=pathlib.Path(os.environ['WIFI_FIXTURE']); a=[x for x in sys.argv[1:] if x!='-q']
@@ -26,9 +26,10 @@ for flag in ('-c','-C','-t'):
 p=directory/'wireless'; d=json.loads(p.read_text()); action=a[0]
 if delta.is_file(): d=json.loads(delta.read_text())
 names=[k for k,v in d.items() if v=='wifi-device']
+anonymous=d.get('.anonymous',[])
 def selector(k):
     for i,name in enumerate(names):
-        if name.startswith('wireless.cfg') and (k==name or k.startswith(name+'.')):
+        if name in anonymous and (k==name or k.startswith(name+'.')):
             return 'wireless.@wifi-device['+str(i)+']'+k[len(name):]
     return k
 def internal(k):
@@ -38,6 +39,7 @@ def internal(k):
     return k
 if action=='show':
     for k,v in d.items():
+        if k=='.anonymous': continue
         k=selector(k) if extended else k
         print(k+'='+v if v in ('wifi-device','wifi-iface') else k+"='"+v+"'")
 elif action=='get':
@@ -47,12 +49,28 @@ elif action=='get':
 elif action=='set':
     if os.environ.get('FAIL_STAGE')=='uci_set': sys.exit(1)
     k,v=a[1].split('=',1); d[internal(k)]=v; delta.write_text(json.dumps(d))
+elif action=='rename':
+    if os.environ.get('FAIL_STAGE')=='uci_rename': sys.exit(1)
+    old,new=a[1].split('=',1); old=internal(old); new='wireless.'+new
+    if old not in d or new in d: sys.exit(1)
+    d={new+k[len(old):] if k==old or k.startswith(old+'.') else k:v for k,v in d.items()}
+    d['.anonymous']=[name for name in anonymous if name!=old]
+    delta.write_text(json.dumps(d))
 elif action=='commit':
     if os.environ.get('FAIL_COMMIT'): sys.exit(1)
     if os.environ.get('NOOP_COMMIT'): sys.exit(0)
     (r/'committed.json').write_text(json.dumps(d))
     if os.environ.get('BAD_COMMIT'):
         d.pop('wireless.tr3000_lite_mgmt_radio0.key',None)
+    # Commit exports anonymous sections without names. Reload derives cfg...
+    # from type/options, so changing disabled changes the internal name.
+    reloaded=[]
+    for old in anonymous:
+        content=[(k[len(old):],v) for k,v in d.items() if k==old or k.startswith(old+'.')]
+        new='wireless.cfg'+hashlib.sha1(json.dumps(content).encode()).hexdigest()[:6]
+        d={new+k[len(old):] if k==old or k.startswith(old+'.') else k:v for k,v in d.items()}
+        reloaded.append(new)
+    if anonymous: d['.anonymous']=reloaded
     p.write_text(json.dumps(d)); delta.unlink(missing_ok=True)
 else: sys.exit(2)
 '''
@@ -176,10 +194,38 @@ file=91-tr3000-lite-management-ap
         self.assertTrue(lock.is_dir())
 
     def test_anonymous_detected_radio_is_supported(self):
-        self.state={'wireless.cfg012345':'wifi-device'}; self.save()
+        self.state={'wireless.cfg012345':'wifi-device','wireless.cfg012345.disabled':'1','.anonymous':['wireless.cfg012345']}; self.save()
         d=self.run_ap(); self.assertEqual(1,len(self.aps(d)))
-        self.assertEqual('cfg012345',d[self.aps(d)[0]+'.device'])
+        radio=d[self.aps(d)[0]+'.device']
+        self.assertEqual('wifi-device',d['wireless.'+radio])
+        self.assertEqual('0',d['wireless.'+radio+'.disabled'])
+        self.assertEqual([],d['.anonymous'])
         self.assertNotIn('@wifi-device[',json.dumps(d))
+        self.assertEqual(d,self.run_ap())
+
+    def test_anonymous_rename_preserves_named_cfg_and_existing_iface_links(self):
+        old='cfg012345'
+        self.state={'wireless.'+old:'wifi-device','wireless.'+old+'.disabled':'1','.anonymous':['wireless.'+old],
+                    'wireless.cfgNamed':'wifi-device','wireless.tr3000_lite_radio_0':'wifi-iface',
+                    'wireless.sta':'wifi-iface','wireless.sta.device':old,'wireless.sta.mode':'sta',
+                    'wireless.open':'wifi-iface','wireless.open.device':old,'wireless.open.mode':'ap','wireless.open.encryption':'none'}
+        self.save(); d=self.run_ap()
+        radio=d['wireless.sta.device']
+        self.assertNotEqual(old,radio)
+        self.assertNotEqual('tr3000_lite_radio_0',radio)
+        self.assertEqual('wifi-device',d['wireless.'+radio])
+        self.assertEqual('wifi-device',d['wireless.cfgNamed'])
+        self.assertEqual('wifi-iface',d['wireless.tr3000_lite_radio_0'])
+        self.assertEqual('sta',d['wireless.sta.mode'])
+        self.assertEqual(radio,d['wireless.open.device'])
+        self.assertEqual('1',d['wireless.open.disabled'])
+        self.assertEqual({radio,'cfgNamed'},{d[ap+'.device'] for ap in self.aps(d)})
+        self.assertEqual(d,self.run_ap())
+
+    def test_anonymous_rename_failure_leaves_live_config_unchanged(self):
+        self.state={'wireless.cfg012345':'wifi-device','wireless.cfg012345.disabled':'1','.anonymous':['wireless.cfg012345']}
+        self.save(); before=self.load()
+        self.assertEqual(before,self.run_ap(False,FAIL_STAGE='uci_rename'))
 
     def test_sourced_boot_commit_failure_or_noop_retains_script_and_live_config(self):
         for failure in ('FAIL_COMMIT','NOOP_COMMIT'):

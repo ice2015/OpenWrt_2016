@@ -48,9 +48,41 @@ sections() {
 }
 radios=$(sections wifi-device) || fail radio_discovery
 [ -n "$radios" ] || fail no_radios
+# Anonymous cfg names are hashes of options and change on commit/reload.
+# Pair normal and -X output in UCI order to distinguish true anonymous
+# sections from explicitly named cfg... sections, then persist safe names.
+uci_ap show wireless > "$TMP/extended" || fail radio_discovery
+references=$(sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p' "$TMP/extended") || fail radio_discovery
+set -- $references
+radio_index=0
 for radio in $radios; do
 	printf '%s\n' "$radio" | grep -Eq '^[A-Za-z0-9_]+$' || fail invalid_radio_name
+	[ "$#" -gt 0 ] || fail radio_mapping
+	reference=$1; shift
+	case "$reference" in
+		"$radio") ;;
+		@wifi-device\[*\])
+			printf '%s\n' "$reference" | grep -Eq '^@wifi-device\[[0-9]+\]$' || fail radio_mapping
+			base=tr3000_lite_radio_$radio_index
+			stable=$base; collision=0
+			while [ -n "$(get "wireless.$stable")" ]; do
+				collision=$((collision+1)); stable=${base}_$collision
+			done
+			uci_ap rename "wireless.$radio=$stable" || fail radio_rename
+			interfaces=$(sections wifi-iface) || fail interface_discovery
+			for interface in $interfaces; do
+				device=$(get "wireless.$interface.device")
+				case "$device" in
+					"$radio"|"$reference") uci_ap set "wireless.$interface.device=$stable" || fail radio_reference;;
+				esac
+			done
+			;;
+		*) fail radio_mapping;;
+	esac
+	radio_index=$((radio_index+1))
 done
+[ "$#" -eq 0 ] || fail radio_mapping
+radios=$(sections wifi-device) || fail radio_discovery
 SSID=; KEY=
 managed=$(sections wifi-iface) || fail interface_discovery
 for section in $managed; do
