@@ -289,6 +289,8 @@ class ScriptInterfaceTests(unittest.TestCase):
             "lite-uplink-watch.sh",
             "tr3000-lite-plant.sh",
             "tr3000-lite-plant-lib.sh",
+            "tr3000-lite-usbwan-lib.sh",
+            "../overlays/devices/tr3000-lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
         )
         for name in scripts:
             with self.subTest(script=name):
