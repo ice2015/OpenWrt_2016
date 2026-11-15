@@ -18,6 +18,11 @@ sys.stdout.reconfigure(encoding='utf-8', newline='\n')
 r=pathlib.Path(os.environ['WIFI_FIXTURE']); a=[x for x in sys.argv[1:] if x!='-q']
 extended='-X' not in a
 if not extended: a.remove('-X')
+export_names='-n' in a
+if export_names: a.remove('-n')
+delimiter=' '
+if '-d' in a:
+    i=a.index('-d'); delimiter=a[i+1]; del a[i:i+2]
 directory=pathlib.Path(a[a.index('-c')+1])
 delta=pathlib.Path(a[a.index('-t')+1])/'wireless'
 for flag in ('-c','-C','-t'):
@@ -41,11 +46,23 @@ if action=='show':
     for k,v in d.items():
         if k=='.anonymous': continue
         k=selector(k) if extended else k
-        print(k+'='+v if v in ('wifi-device','wifi-iface') else k+"='"+v+"'")
+        print(k+'='+v if v in ('wifi-device','wifi-iface') else k+'='+(' '.join("'"+x+"'" for x in v) if isinstance(v,list) else "'"+v+"'"))
+elif action=='export':
+    def quote(value): return "'"+value.replace("'", "'\\''")+"'"
+    print('package wireless')
+    for section,kind in d.items():
+        if kind not in ('wifi-device','wifi-iface'): continue
+        print('\nconfig '+kind+(' '+quote(section.split('.',1)[1]) if export_names or section not in anonymous else ''))
+        for option,value in d.items():
+            if not option.startswith(section+'.'): continue
+            name=option[len(section)+1:]
+            if isinstance(value,list):
+                for entry in value: print('\tlist '+name+' '+quote(entry))
+            else: print('\toption '+name+' '+quote(value))
 elif action=='get':
     a[1]=internal(a[1])
     if a[1] not in d: sys.exit(1)
-    print(d[a[1]])
+    value=d[a[1]]; print(delimiter.join(value) if isinstance(value,list) else value)
 elif action=='set':
     if os.environ.get('FAIL_STAGE')=='uci_set': sys.exit(1)
     k,v=a[1].split('=',1); d[internal(k)]=v; delta.write_text(json.dumps(d))
@@ -56,6 +73,13 @@ elif action=='rename':
     d={new+k[len(old):] if k==old or k.startswith(old+'.') else k:v for k,v in d.items()}
     d['.anonymous']=[name for name in anonymous if name!=old]
     delta.write_text(json.dumps(d))
+elif action=='delete':
+    d.pop(internal(a[1]),None); delta.write_text(json.dumps(d))
+elif action=='add_list':
+    k,v=a[1].split('=',1); k=internal(k)
+    if k not in d: d[k]=[]
+    elif not isinstance(d[k],list): d[k]=[d[k]]
+    d[k].append(v); delta.write_text(json.dumps(d))
 elif action=='commit':
     if os.environ.get('FAIL_COMMIT'): sys.exit(1)
     if os.environ.get('NOOP_COMMIT'): sys.exit(0)
@@ -226,6 +250,39 @@ file=91-tr3000-lite-management-ap
         self.state={'wireless.cfg012345':'wifi-device','wireless.cfg012345.disabled':'1','.anonymous':['wireless.cfg012345']}
         self.save(); before=self.load()
         self.assertEqual(before,self.run_ap(False,FAIL_STAGE='uci_rename'))
+
+    def test_anonymous_rename_preserves_list_device_type_order_and_links(self):
+        old='cfg012345'
+        self.state={'wireless.'+old:'wifi-device','wireless.'+old+'.disabled':'1','.anonymous':['wireless.'+old],
+                    'wireless.radio1':'wifi-device',
+                    'wireless.sta':'wifi-iface','wireless.sta.device':['radio1',old,'radio1'],'wireless.sta.mode':'sta',
+                    'wireless.secure':'wifi-iface','wireless.secure.device':[old,'radio1'],'wireless.secure.mode':'ap','wireless.secure.encryption':'sae',
+                    'wireless.single':'wifi-iface','wireless.single.device':[old],'wireless.single.mode':'sta'}
+        self.save(); d=self.run_ap()
+        stable=next(d[ap+'.device'] for ap in self.aps(d) if d[ap+'.device']!='radio1')
+        self.assertNotEqual(old,stable)
+        self.assertEqual('wifi-device',d['wireless.'+stable])
+        for interface,expected in (('sta',['radio1',stable,'radio1']),('secure',[stable,'radio1']),('single',[stable])):
+            with self.subTest(interface=interface):
+                self.assertEqual(expected,d['wireless.'+interface+'.device'])
+        self.assertEqual('sta',d['wireless.sta.mode'])
+        self.assertEqual('sae',d['wireless.secure.encryption'])
+        self.assertEqual(d,self.run_ap())
+
+    def test_list_open_ap_is_disabled_after_anonymous_reference_rename(self):
+        old='cfg012345'
+        self.state={'wireless.'+old:'wifi-device','wireless.'+old+'.disabled':'1','.anonymous':['wireless.'+old],
+                    'wireless.radio1':'wifi-device',
+                    'wireless.open':'wifi-iface','wireless.open.device':[old,'radio1'],'wireless.open.mode':'ap','wireless.open.encryption':'none',
+                    'wireless.secure':'wifi-iface','wireless.secure.device':[old,'radio1'],'wireless.secure.mode':'ap','wireless.secure.encryption':'sae','wireless.secure.disabled':'0',
+                    'wireless.sta':'wifi-iface','wireless.sta.device':['radio1',old],'wireless.sta.mode':'sta','wireless.sta.disabled':'0'}
+        self.save(); d=self.run_ap()
+        self.assertEqual('1',d.get('wireless.open.disabled'))
+        self.assertEqual('0',d['wireless.secure.disabled'])
+        self.assertEqual('0',d['wireless.sta.disabled'])
+        self.assertEqual(d['wireless.secure.device'],d['wireless.open.device'])
+        self.assertEqual(list(reversed(d['wireless.open.device'])),d['wireless.sta.device'])
+        self.assertEqual(d,self.run_ap())
 
     def test_sourced_boot_commit_failure_or_noop_retains_script_and_live_config(self):
         for failure in ('FAIL_COMMIT','NOOP_COMMIT'):
