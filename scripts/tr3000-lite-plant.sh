@@ -43,7 +43,11 @@ emit() {
 	printf ',"rollback":'; plant_json_string "$ROLLBACK"; printf '}\n'
 }
 
-fail() { CHECKS=$2; read_state; emit; exit "$1"; }
+fail() {
+	failure_code=$1; CHECKS=$2
+	finalize_transaction || { CHECKS=backup_pruning; failure_code=3; }
+	read_state; emit; exit "$failure_code"
+}
 
 safe_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
 
@@ -101,8 +105,7 @@ recover() {
 }
 
 cleanup() {
-	remove_override
-	[ "$DIRTY" = 0 ] || recover
+	finalize_transaction
 	[ -z "$CANDIDATE" ] || rm -rf "$CANDIDATE"
 	[ "$LOCKED" = 0 ] || rmdir "$LOCK"
 }
@@ -159,6 +162,14 @@ prune_backups() {
 		id=${file##*/}; id=${id%.network}
 		rm -f "$BACKUPS/$id.network" "$BACKUPS/$id.firewall" || return 1
 	done
+}
+
+finalize_transaction() {
+	[ "$LOCKED" = 1 ] || return 0
+	remove_override || return 1
+	# The active rollback pair must survive until recovery has completed.
+	[ "$DIRTY" = 0 ] || recover
+	prune_backups
 }
 
 # -t permits commit, unlike -P; -C '' disables conf2dir overrides.
@@ -234,6 +245,17 @@ check_candidate() {
 	remove_override || fail 3 candidate_cleanup
 }
 
+install_candidate() {
+	DIRTY=1
+	for package in network firewall; do
+		cp "$CANDIDATE/$package" "$CONFIG/$package" || fail 3 commit_failed
+	done
+	ubus call network reload >/dev/null 2>&1 || fail 3 network_reload
+	fw4 reload >/dev/null 2>&1 || fail 3 firewall_reload
+	verify_live || fail 3 post_apply_verification
+	DIRTY=0
+}
+
 plant_parse "$@" || fail 2 invalid_arguments
 read_state
 case "$COMMAND" in
@@ -242,15 +264,8 @@ case "$COMMAND" in
 	apply)
 		lock; prepare_candidate; read_state; validate_address; management_gate; backup_pair; render_candidate
 		check_candidate
-		DIRTY=1
-		for package in network firewall; do
-			cp "$CANDIDATE/$package" "$CONFIG/$package" || { recover; fail 3 commit_failed; }
-		done
-		ubus call network reload >/dev/null 2>&1 || { recover; fail 3 network_reload; }
-		fw4 reload >/dev/null 2>&1 || { recover; fail 3 firewall_reload; }
-		verify_live || { recover; fail 3 post_apply_verification; }
-		DIRTY=0
-		prune_backups || fail 3 backup_pruning
+		install_candidate
+		finalize_transaction || fail 3 backup_pruning
 		read_state; emit
 		;;
 	restore)
@@ -262,12 +277,21 @@ case "$COMMAND" in
 			cp "$BACKUPS/$BACKUP_ID.$package" "$CANDIDATE/$package" || fail 3 candidate_copy
 		done
 		# Restoring an older HTTPS-enabled policy must pass today's staging gate.
-		ALLOW_LUCI=false
-		[ "$(candidate_uci get firewall.tr3000_lite_plant_luci.enabled)" != 1 ] || ALLOW_LUCI=true
+		# Missing, invalid and enabled values all require the gate. Only an
+		# explicitly disabled fw4 boolean may bypass it.
+		case "$(candidate_uci get firewall.tr3000_lite_plant_luci.enabled)" in
+			0|false|no|off) ALLOW_LUCI=false ;;
+			*) ALLOW_LUCI=true ;;
+		esac
 		management_gate
-		remove_override || fail 3 candidate_cleanup
-		DIRTY=1; recover; read_state
-		[ "$ROLLBACK" = restored ] || fail 3 recovery_failed
+		check_candidate
+		# Candidate already contains the selected snapshot; create a fresh pair
+		# of today's live configs for recovery if this restore transaction fails.
+		backup_pair
+		install_candidate
+		ROLLBACK=restored
+		finalize_transaction || fail 3 backup_pruning
+		read_state
 		emit
 		;;
 esac

@@ -122,8 +122,35 @@ class PlantControllerTests(unittest.TestCase):
         for name, contents in self.before.items():
             self.assertEqual(contents, (self.root/'etc/config'/name).read_bytes())
 
+    def reset_live(self):
+        for name, contents in self.before.items():
+            (self.root/'etc/config'/name).write_bytes(contents)
+
     def apply(self, **kw):
         return self.run_controller('apply','--address','192.168.20.254/24','--allow-luci','false','--allow-mgmt','true',**kw)
+
+    def write_backup(self, identifier, *, network=None, firewall=None):
+        backups = self.root/'etc/tr3000-lite/backups'
+        backups.mkdir(parents=True,exist_ok=True)
+        for package, contents in (('network',network),('firewall',firewall)):
+            path = backups/(identifier+'.'+package)
+            path.write_bytes(self.before[package] if contents is None else contents)
+            path.chmod(0o600)
+        return backups
+
+    def seed_five_backups(self):
+        for number in range(5):
+            backups = self.write_backup('old'+str(number))
+            for package in ('network','firewall'):
+                os.utime(backups/('old'+str(number)+'.'+package),(100+number,100+number))
+        return backups
+
+    def assert_five_backup_pairs(self):
+        backups = self.root/'etc/tr3000-lite/backups'
+        network = {p.stem for p in backups.glob('*.network')}
+        firewall = {p.stem for p in backups.glob('*.firewall')}
+        self.assertEqual(5,len(network))
+        self.assertEqual(network,firewall)
 
     def test_status_and_valid_address(self):
         for data in (self.run_controller('status','--json'), self.run_controller('validate','--address','192.168.10.254/24')):
@@ -288,6 +315,62 @@ class PlantControllerTests(unittest.TestCase):
             subprocess.run([bash_executable(),'-c','chmod 600 "$1"','sh',path.as_posix()],check=True)
         data = self.run_controller('restore','--backup-id','safe',code=2)
         self.assertEqual('management_not_initialized',data['checks']['result'])
+        self.unchanged()
+
+    def test_restore_gates_all_values_except_explicit_disabled_booleans(self):
+        for value in (None,'true','yes','on','1','invalid',''):
+            with self.subTest(enabled=value):
+                self.reset_live()
+                old = b"option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '0'"
+                new = b"option name 'Allow-Lite-plant-HTTPS'"
+                if value is not None: new += ("\n\toption enabled '"+value+"'").encode()
+                self.write_backup('policy',firewall=self.before['firewall'].replace(old,new))
+                data = self.run_controller('restore','--backup-id','policy',code=2)
+                self.assertEqual('management_not_initialized',data['checks']['result'])
+                self.unchanged()
+
+    def test_restore_accepts_explicit_disabled_boolean_values(self):
+        for value in ('false','no','off','0'):
+            with self.subTest(enabled=value):
+                firewall = self.before['firewall'].replace(b"option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '0'",("option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '"+value+"'").encode())
+                self.write_backup('disabled',firewall=firewall)
+                self.run_controller('restore','--backup-id','disabled')
+                self.assertEqual(firewall,(self.root/'etc/config/firewall').read_bytes())
+
+    def test_restore_checks_candidate_before_replacing_live_pair(self):
+        self.write_backup('obsolete',network=self.before['network'].replace(b'192.168.10.254',b'192.168.30.254'),firewall=self.before['firewall']+b'\n# invalid candidate\n')
+        data = self.run_controller('restore','--backup-id','obsolete',code=3,FAILURE='candidate')
+        self.assertEqual('candidate_firewall',data['checks']['result'])
+        self.unchanged()
+        self.assertEqual(self.before['network'].decode(),(self.root/'checked-network').read_text())
+        self.assertNotIn('ubus call network reload',(self.root/'events').read_text())
+        self.assertFalse((self.root/'var/run/uci/firewall').exists())
+
+    def test_failed_restore_recovers_exact_pre_restore_pair(self):
+        self.write_backup('older',network=self.before['network'].replace(b'192.168.10.254',b'192.168.30.254'),firewall=self.before['firewall']+b'\n# older policy\n')
+        for failure in ('network','firewall','missing_ip','wrong_prefix','degraded'):
+            with self.subTest(failure=failure):
+                self.reset_live()
+                data = self.run_controller('restore','--backup-id','older',code=3,FAILURE=failure)
+                self.assertEqual('degraded' if failure == 'degraded' else 'restored',data['rollback'])
+                self.unchanged()
+                self.assertNotEqual('older',data['backup_id'])
+                for package in ('network','firewall'):
+                    self.assertEqual(self.before[package],(self.root/'etc/tr3000-lite/backups'/(data['backup_id']+'.'+package)).read_bytes())
+
+    def test_failed_apply_enforces_backup_retention(self):
+        for failure in ('candidate','network'):
+            with self.subTest(failure=failure):
+                self.seed_five_backups()
+                self.apply(code=3,FAILURE=failure)
+                self.assert_five_backup_pairs()
+                self.unchanged()
+
+    def test_failed_restore_enforces_backup_retention(self):
+        self.seed_five_backups()
+        data = self.run_controller('restore','--backup-id','old0',code=3,FAILURE='network')
+        self.assertEqual('restored',data['rollback'])
+        self.assert_five_backup_pairs()
         self.unchanged()
 
     def test_only_five_private_backup_pairs_remain(self):
