@@ -1,10 +1,11 @@
 {
   "luci-app-tr3000-lite": {
-    "description": "Manage Industrial LAN through the fixed Lite controller",
+    "description": "Manage Industrial LAN and inspect uplinks through fixed Lite controllers",
     "read": {},
     "write": {
       "file": {
-        "/usr/sbin/tr3000-lite-plant": [ "exec" ]
+        "/usr/sbin/tr3000-lite-plant": [ "exec" ],
+        "/usr/sbin/tr3000-lite-uplink-status": [ "exec" ]
       },
       "ubus": {
         "file": [ "exec" ]

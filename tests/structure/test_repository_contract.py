@@ -15,7 +15,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertTrue((package / "Makefile").is_file(), "missing Lite LuCI package")
         menu = json.loads((package / "root/usr/share/luci/menu.d/luci-app-tr3000-lite.json").read_text(encoding="utf-8"))
         acl = json.loads((package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-lite.json").read_text(encoding="utf-8"))
-        self.assertEqual({"admin/network/tr3000-lite", "admin/network/tr3000-lite/industrial-lan"}, set(menu))
+        self.assertEqual({"admin/network/tr3000-lite", "admin/network/tr3000-lite/industrial-lan", "admin/network/tr3000-lite/uplinks"}, set(menu))
         parent = menu["admin/network/tr3000-lite"]
         self.assertEqual("TR3000 Lite", parent["title"])
         self.assertEqual({"type": "firstchild"}, parent["action"])
@@ -27,7 +27,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertEqual({"type": "view", "path": "tr3000-lite/industrial-lan"}, entry["action"])
         grant = acl["luci-app-tr3000-lite"]
         self.assertEqual({}, grant["read"])
-        self.assertEqual({"file": {"/usr/sbin/tr3000-lite-plant": ["exec"]}, "ubus": {"file": ["exec"]}}, grant["write"])
+        self.assertEqual({"file": {"/usr/sbin/tr3000-lite-plant": ["exec"], "/usr/sbin/tr3000-lite-uplink-status": ["exec"]}, "ubus": {"file": ["exec"]}}, grant["write"])
         makefile = (package / "Makefile").read_text(encoding="utf-8")
         self.assertRegex(makefile, r"DEPENDS:=\+luci-base \+rpcd-mod-file\s*\n")
         view = (package / "htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js").read_text(encoding="utf-8")
@@ -152,6 +152,72 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([node, "-e", harness, str(view)], text=True, capture_output=True, check=False)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_lite_uplink_view_is_read_only(self) -> None:
+        package = ROOT / 'packages/luci-app-tr3000-lite'
+        view = package / 'htdocs/luci-static/resources/view/tr3000-lite/uplinks.js'
+        self.assertTrue(view.is_file(), 'missing read-only uplink view')
+        menu = json.loads((package / 'root/usr/share/luci/menu.d/luci-app-tr3000-lite.json').read_text())
+        entry = menu['admin/network/tr3000-lite/uplinks']
+        self.assertEqual({'type':'view', 'path':'tr3000-lite/uplinks'}, entry['action'])
+        self.assertEqual(['luci-app-tr3000-lite'], entry['depends']['acl'])
+        self.assertNotIn('auth', entry)
+        node = shutil.which('node')
+        if node is None:
+            self.skipTest('Node.js is required for LuCI view behavior checks')
+        harness = r'''
+const assert = require('node:assert/strict');
+const source = require('node:fs').readFileSync(process.argv[1], 'utf8');
+const replies = [], calls = [];
+const fs = {exec: (path,args) => {
+  assert.equal(path, '/usr/sbin/tr3000-lite-uplink-status');
+  assert.deepEqual(args, ['--json']); calls.push(args);
+  return Promise.resolve(replies.shift());
+}};
+const E = (tag,attrs,children) => ({tag,attrs:attrs||{},children:children===undefined?attrs:children,textContent:''});
+const page = new Function('view','fs','ui','E','_','L','window',source)(
+  {extend:x=>x}, fs, {}, E, x=>x, {url:(...parts)=>'/custom/'+parts.join('/')}, {location:{reload(){}}});
+const text = item => typeof item==='string' ? item : !item ? '' :
+  [item.textContent,...[item.children].flat(Infinity).map(text)].join(' ');
+const walk = item => !item || typeof item!=='object' ? [] :
+  [item,...[item.children].flat(Infinity).flatMap(walk)];
+const status={schema_version:1,active:'wan',previous:'wwan',status_error:false,reconcile_error:false,
+  foreign_default:false,last_event_error:false,interfaces:[
+    {name:'wan',device:'eth0',address:'192.0.2.2',gateway:'192.0.2.1',base_metric:10,effective_metric:10,health:'healthy',failures:0,successes:0,available:true,link:true},
+    {name:'wwan',device:'wlanOdd',address:'198.51.100.2',gateway:'198.51.100.1',base_metric:20,effective_metric:1020,health:'unhealthy',failures:0,successes:1,available:true,link:true},
+    {name:'usbwan',device:'modem7',address:'203.0.113.2',gateway:'203.0.113.1',base_metric:30,effective_metric:30,health:'healthy',failures:0,successes:0,available:true,link:true}],
+  usb:{state:'bound',device:'modem7',driver:'rndis_host',vid:'2c7c',pid:'0125',path:'/devices/platform/usb1/1-1'},
+  wireless:{mode:'ap_client',error:false,interfaces:[
+    {section:'management',radio:'radioOdd',ifname:'phy7-ap0',phy:'phy7',mode:'ap',network:'mgmt',enabled:true,up:true,channel:6,frequency:2437,shared_phy:true},
+    {section:'client',radio:'radioOther',ifname:'wlanOdd',phy:'phy7',mode:'sta',network:'wwan',enabled:true,up:false,channel:6,frequency:2437,shared_phy:true}]}};
+const ok = data => ({code:0,stdout:JSON.stringify(data),stderr:''});
+(async()=>{
+  replies.push(ok(status)); const tree=page.render(await page.load());
+  assert.equal(calls.length,1);
+  const rendered=text(tree);
+  for (const value of ['eth0','192.0.2.2','192.0.2.1','10','20','1020','30','healthy','unhealthy',
+    'rndis_host','2c7c','0125','radioOdd','radioOther','phy7','2437']) assert.ok(rendered.includes(value),value);
+  assert.match(rendered,/active/i); assert.match(rendered,/shared.*radio|same.*PHY/i);
+  assert.match(rendered,/channel.*interrupt/i);
+  assert.ok(walk(tree).some(item=>item.tag==='a' && item.attrs.href==='/custom/admin/network/wireless'));
+  assert.ok(walk(tree).some(item=>item.tag==='a' && item.attrs.href==='/custom/admin/network/network'));
+  assert.equal(walk(tree).filter(item=>['input','textarea','select','form'].includes(item.tag)).length,0);
+  const warning=structuredClone(status); Object.assign(warning,{foreign_default:true,reconcile_error:true,status_error:true,last_event_error:true});
+  assert.match(text(page.render(warning)),/foreign.*default/i);
+  assert.match(text(page.render(warning)),/reconcil|verified snapshot/i);
+  const secret='SECRET /etc/shadow <script>key</script>';
+  for (const reply of [{code:2,stdout:secret,stderr:secret},ok({...status,schema_version:99}),
+    ok({...status,usb:{...status.usb,driver:secret}}),
+    ok({...status,interfaces:[{...status.interfaces[0],address:secret}]}),
+    ok({...status,wireless:{...status.wireless,interfaces:[{...status.wireless.interfaces[0],channel:secret}]}})]) {
+    replies.push(reply); await assert.rejects(page.load(),e=>!e.message.includes(secret));
+  }
+  replies.push(ok({...status,private_key:secret}));
+  assert.ok(!text(page.render(await page.load())).includes(secret));
+})().catch(error=>{console.error(error);process.exitCode=1;});
+'''
+        result = subprocess.run([node, '-e', harness, str(view)], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_tr3000_lite_overlay_is_device_scoped(self) -> None:
