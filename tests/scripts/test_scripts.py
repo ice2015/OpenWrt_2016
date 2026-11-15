@@ -30,6 +30,8 @@ SCRIPTS = (
     "plant-profile.sh",
     "plant-access.sh",
     "lite-uplink-watch.sh",
+    "tr3000-lite-plant.sh",
+    "tr3000-lite-plant-lib.sh",
 )
 
 
@@ -260,6 +262,8 @@ class ScriptInterfaceTests(unittest.TestCase):
             "plant-access.sh",
             "lite-common.sh",
             "lite-uplink-watch.sh",
+            "tr3000-lite-plant.sh",
+            "tr3000-lite-plant-lib.sh",
         )
         for name in scripts:
             with self.subTest(script=name):
@@ -437,6 +441,12 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Lite overlay not found", result.stderr)
         self.assertEqual({}, assets)
+
+    def test_lite_installs_fixed_plant_controller(self) -> None:
+        result, _, assets = run_lite_configure(lite_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("files/usr/sbin/tr3000-lite-plant", assets)
+        self.assertIn("files/usr/lib/tr3000-lite/plant-lib.sh", assets)
 
     def test_full_config_defaults_include_tailscale_and_singbox_only(self) -> None:
         base = (

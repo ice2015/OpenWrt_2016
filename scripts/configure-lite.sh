@@ -161,6 +161,11 @@ install -m 0755 "$SCRIPT_DIR/lite-uplink-watch.sh" \
 	"$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
 install -m 0644 "$SCRIPT_DIR/lite-common.sh" \
 	"$SOURCE_DIR/files/usr/sbin/lite-common.sh"
+mkdir -p "$SOURCE_DIR/files/usr/lib/tr3000-lite"
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-plant.sh" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-plant"
+install -m 0644 "$SCRIPT_DIR/tr3000-lite-plant-lib.sh" \
+	"$SOURCE_DIR/files/usr/lib/tr3000-lite/plant-lib.sh"
 install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
