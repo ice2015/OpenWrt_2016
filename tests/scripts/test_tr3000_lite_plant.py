@@ -107,11 +107,11 @@ class PlantControllerTests(unittest.TestCase):
             script = bindir/command
             script.write_text('#!/bin/sh\nexec "$TEST_PYTHON" -S "$PLANT_ROOT/bin/fake.py" '+command+' "$@"\n', newline='\n')
             script.chmod(0o755)
-        self.env = dict(os.environ, PLANT_ROOT=self.root.as_posix(), TEST_PYTHON=Path(sys.executable).as_posix())
+        self.env = dict(os.environ, PLANT_ROOT=self.root.as_posix(), TEST_PYTHON=Path(sys.executable).as_posix(), PLANT_TEST_MODE='1')
         self.env['PATH'] = bindir.as_posix()+os.pathsep+os.environ['PATH']
 
     def run_controller(self, *args, code=0, **environment):
-        result = subprocess.run([bash_executable(), '-c', 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; export PATH; exec sh "$@"', 'sh', (ROOT/'scripts/tr3000-lite-plant.sh').as_posix(), *args], env=dict(self.env, **environment), text=True, capture_output=True)
+        result = subprocess.run([bash_executable(), '-c', 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; PLANT_TEST_PATH=$PATH; export PATH PLANT_TEST_PATH; exec sh "$@"', 'sh', (ROOT/'scripts/tr3000-lite-plant.sh').as_posix(), *args], env=dict(self.env, **environment), text=True, capture_output=True)
         self.assertEqual(code, result.returncode, result.stdout+result.stderr)
         data = json.loads(result.stdout)
         self.assertEqual({'schema_version','plant','checks','backup_id','rollback'}, set(data))
@@ -128,6 +128,56 @@ class PlantControllerTests(unittest.TestCase):
 
     def apply(self, **kw):
         return self.run_controller('apply','--address','192.168.20.254/24','--allow-luci','false','--allow-mgmt','true',**kw)
+
+    def startup_probe(self, identity, **environment):
+        # Run actual startup and location selection under a chosen shell $0.
+        # The harness supplies the source library because Windows cannot mount
+        # this fixture at the real /usr/sbin and /usr/lib installation paths.
+        source = (ROOT/'scripts/tr3000-lite-plant.sh').read_text()
+        bootstrap = source.split('SCRIPT_DIR=',1)[0]
+        locations = source[source.index('ROOT='):source.index('CHECKS=')]
+        program = 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; export PATH\n' + bootstrap + '''
+dirname "$0" >/dev/null
+. "$1"
+''' + locations + '''
+printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
+'''
+        result = subprocess.run([bash_executable(),'-c',program,identity,(ROOT/'scripts/tr3000-lite-plant-lib.sh').as_posix()],env=dict(self.env,**environment),text=True,capture_output=True)
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        return result.stdout.splitlines()
+
+    def hostile_discovery_command(self):
+        path = self.root/'bin/dirname'
+        path.write_text('#!/bin/sh\nprintf invoked > "$PLANT_ROOT/hijacked"\nprintf /attacker\n',newline='\n')
+        path.chmod(0o755)
+
+    def test_installed_identity_resets_path_before_command_discovery(self):
+        self.hostile_discovery_command()
+        data = self.startup_probe('/usr/sbin/tr3000-lite-plant',PLANT_TEST_PATH='/attacker:/usr/bin:/bin')
+        self.assertFalse((self.root/'hijacked').exists())
+        self.assertEqual('/usr/sbin:/usr/bin:/sbin:/bin',data[0])
+
+    def test_installed_identity_ignores_fixture_and_location_environment(self):
+        data = self.startup_probe('/usr/sbin/tr3000-lite-plant',PLANT_TEST_PATH='/attacker',PLANT_TEST_ROOT='/attacker',ROOT='/attacker',CONFIG='/attacker',BACKUPS='/attacker',LOCK='/attacker',SCRIPT_DIR='/attacker')
+        self.assertEqual(['','/etc/config','/etc/tr3000-lite/backups','/var/lock/tr3000-lite-plant'],data[1:])
+
+    def test_source_identity_requires_explicit_test_mode(self):
+        identity = (ROOT/'scripts/tr3000-lite-plant.sh').as_posix()
+        for mode in ('','0'):
+            with self.subTest(mode=mode):
+                data = self.startup_probe(identity,PLANT_TEST_MODE=mode,PLANT_TEST_PATH='/attacker')
+                self.assertEqual('/usr/sbin:/usr/bin:/sbin:/bin',data[0])
+                self.assertEqual('',data[1])
+        data = self.startup_probe(identity,PLANT_TEST_MODE='1',PLANT_TEST_PATH='/fixture:/usr/bin:/bin')
+        self.assertEqual('/fixture:/usr/bin:/bin',data[0])
+        self.assertEqual(self.root.as_posix(),data[1])
+
+    def test_test_mode_predicate_is_bound_to_source_identity(self):
+        for identity, mode, expected in (('/usr/sbin/tr3000-lite-plant','1','disabled'),('/tmp/tr3000-lite-plant','1','disabled'),('/repo/scripts/tr3000-lite-plant.sh','0','disabled'),('/repo/scripts/tr3000-lite-plant.sh','1','enabled')):
+            with self.subTest(identity=identity,mode=mode):
+                result = subprocess.run([bash_executable(),'-c','. "$1"; if plant_test_mode_allowed "$0" "$2"; then printf enabled; else printf disabled; fi',identity,(ROOT/'scripts/tr3000-lite-plant-lib.sh').as_posix(),mode],text=True,capture_output=True)
+                self.assertEqual(0,result.returncode,result.stderr)
+                self.assertEqual(expected,result.stdout)
 
     def write_backup(self, identifier, *, network=None, firewall=None):
         backups = self.root/'etc/tr3000-lite/backups'

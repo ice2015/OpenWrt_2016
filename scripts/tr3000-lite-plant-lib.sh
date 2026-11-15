@@ -1,5 +1,13 @@
 #!/bin/sh
 # Pure helpers; runtime paths and side effects belong to the controller.
+plant_test_mode_allowed() {
+	case "$1" in
+		/usr/sbin/tr3000-lite-plant) return 1 ;;
+		tr3000-lite-plant.sh|*/tr3000-lite-plant.sh) [ "$2" = 1 ] ;;
+		*) return 1 ;;
+	esac
+}
+
 plant_json_string() {
 	printf '%s' "$1" | awk '
 		BEGIN { printf "\""; for (i=1; i<32; i++) control[sprintf("%c", i)]=i }

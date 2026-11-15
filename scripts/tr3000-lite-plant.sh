@@ -1,6 +1,10 @@
 #!/bin/sh
 # Lite-only paired network/firewall transaction. Reload and recovery are best effort.
 set -u
+# rpcd file.exec may supply environment values. Sanitize command discovery
+# before dirname, library discovery or any other external command runs.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ -f "$SCRIPT_DIR/tr3000-lite-plant-lib.sh" ]; then
 	. "$SCRIPT_DIR/tr3000-lite-plant-lib.sh"
@@ -10,8 +14,16 @@ fi
 . "$SCRIPT_DIR/lite-common.sh"
 [ "${1:-}" != --help ] || { plant_usage; exit 0; }
 
-# A relocated root permits isolated integration tests; rpcd passes no environment.
-ROOT=${PLANT_ROOT:-}
+# Fixture variables are allowed only for the explicitly opted-in source script.
+# The fixed RPC identity /usr/sbin/tr3000-lite-plant always uses the live root
+# and fixed PATH, even when the caller supplies all fixture environment values.
+ROOT=
+if plant_test_mode_allowed "$0" "${PLANT_TEST_MODE:-}" &&
+	[ -n "${PLANT_ROOT:-}" ] && [ -n "${PLANT_TEST_PATH:-}" ]; then
+	ROOT=$PLANT_ROOT
+	PATH=$PLANT_TEST_PATH
+	export PATH
+fi
 CONFIG="$ROOT/etc/config"
 BACKUPS="$ROOT/etc/tr3000-lite/backups"
 LOCK="$ROOT/var/lock/tr3000-lite-plant"
