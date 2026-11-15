@@ -108,6 +108,7 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
   await apply.attrs.click();
   assert.deepEqual(calls.shift(), ['apply', '--address', '192.168.30.254/24', '--allow-luci', 'true', '--allow-mgmt', 'false']);
   assert.equal(apply.disabled, true, 'must revalidate before another apply');
+  assert.match(text(tree), /Backup ID: safe-backup/, 'successful apply must expose its safe recovery ID');
   const secret = 'SECRET /etc/private /bin/sh stack trace';
   for (const reply of [{code:2, stdout:JSON.stringify(state), stderr:secret},
     {code:0, stdout:secret, stderr:secret}, ok({schema_version:99}),
@@ -116,11 +117,30 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
     assert.equal(apply.disabled, true); assert.ok(notices.length);
     assert.ok(!text(notices).includes(secret));
   }
-  replies.push(ok(state)); await validate.attrs.click();
-  replies.push({code:3, stdout:JSON.stringify({...state, rollback:'degraded'}), stderr:secret});
-  const before = notices.length; await apply.attrs.click();
-  assert.equal(apply.disabled, true); assert.ok(notices.length > before);
-  assert.ok(!text(notices.at(-1)).match(/success|applied/i));
+  for (const [rollback, message] of [['restored', /previous settings were restored/i],
+    ['degraded', /recovery is incomplete/i], ['none', /no rollback was reported/i]]) {
+    replies.push(ok(state)); await validate.attrs.click();
+    const backup = '20261115123000-42-' + rollback;
+    replies.push({code:3, stdout:JSON.stringify({...state, checks:{result:'network_reload'},
+      rollback, backup_id:backup}), stderr:secret});
+    const before = notices.length; await apply.attrs.click();
+    assert.equal(apply.disabled, true); assert.ok(notices.length > before);
+    assert.match(text(notices.at(-1)), message, 'recovery outcomes must be distinguishable');
+    assert.match(text(tree), message, 'inline feedback must preserve the recovery outcome');
+    assert.ok(text(tree).includes('Backup ID: ' + backup));
+    assert.ok(!text(notices.at(-1)).includes(secret));
+  }
+  replies.push({code:2, stdout:JSON.stringify({...state, checks:{result:'management_overlap'}}), stderr:secret});
+  await validate.attrs.click();
+  assert.match(text(notices.at(-1)), /overlaps.*management/i, 'allowlisted rejection should explain validation failure');
+  for (const data of [{...state, backup_id:secret}, {...state, backup_id:'../backup'},
+    {...state, backup_id:'x'.repeat(81)}, {...state, rollback:secret},
+    {...state, checks:{result:secret}}]) {
+    replies.push(ok(data)); await validate.attrs.click();
+    assert.equal(apply.disabled, true);
+    assert.ok(!text(notices.at(-1)).includes(secret));
+    assert.ok(!text(tree).includes(secret));
+  }
   replies.push({code:3, stdout:secret, stderr:secret});
   await assert.rejects(page.load(), e => !e.message.includes(secret));
   for (const plant of [{...state.plant, address:secret}, {...state.plant, netmask:secret}]) {
