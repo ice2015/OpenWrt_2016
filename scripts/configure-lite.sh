@@ -137,11 +137,14 @@ for package in \
 	ca-bundle curl ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
 	kmod-usb-net-rndis kmod-wireguard luci luci-app-tr3000-lite \
 	luci-i18n-base-zh-cn luci-proto-wireguard luci-ssl-openssl \
-	openssh-server openssh-sftp-server tcpdump-mini ubi-utils wireguard-tools
+	openssh-server openssh-sftp-server tcpdump-mini ubi-utils wireguard-tools wpad-openssl
 do
 	grep -Fq "CONFIG_PACKAGE_$package=y" "$SOURCE_DIR/.config" ||
 		fail "required Lite package was not selected: $package"
 done
+if grep -E '^CONFIG_PACKAGE_wpad-[^=]+=[ym]$' "$SOURCE_DIR/.config" | grep -Fvx 'CONFIG_PACKAGE_wpad-openssl=y' >/dev/null; then
+	fail "conflicting wpad provider selected after defconfig"
+fi
 for package in \
 	adguardhome cloudflared docker dockerd kmod-usb-net-ipheth \
 	luci-app-aurora-config luci-app-bandix luci-app-dockerman \

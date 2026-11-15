@@ -1,0 +1,166 @@
+#!/bin/sh
+# Lite first-boot identity. No password or policy exception is introduced here.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+umask 077
+STATE=/etc/tr3000-lite
+CONFIG=/etc/config
+RUNTIME=/tmp
+LOCK="$RUNTIME/tr3000-lite-management-ap.lock"
+MARKER="$STATE/management-ap.initialized"
+TMP=
+LOCKED=0
+cleanup() {
+	[ -z "$TMP" ] || rm -rf "$TMP"
+	[ "$LOCKED" = 0 ] || rmdir "$LOCK"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+fail() { printf 'Management AP initialization failed: %s\n' "$1" >&2; exit 1; }
+for path in /etc "$STATE" "$CONFIG" "$CONFIG/wireless" "$MARKER"; do
+	[ ! -L "$path" ] || fail unsafe_path
+done
+[ ! -e "$MARKER" ] || [ -f "$MARKER" ] || fail unsafe_marker
+[ -f "$CONFIG/wireless" ] || fail missing_wireless
+# /tmp stays volatile with either pinned base-files /var layout.
+[ -d "$RUNTIME" ] && [ ! -L "$RUNTIME" ] || fail unsafe_runtime
+# Do not consume administrator changes or libuci runtime overrides.
+[ ! -e /var/run/uci/wireless ] && [ ! -L /var/run/uci/wireless ] || fail runtime_override
+[ ! -e /tmp/.uci/wireless ] && [ ! -L /tmp/.uci/wireless ] || fail pending_wireless
+mkdir -p "$STATE"
+chmod 0700 "$STATE"
+mkdir "$LOCK" 2>/dev/null || fail busy
+LOCKED=1
+TMP=$(mktemp -d "$STATE/ap.XXXXXX")
+mkdir "$TMP/delta"
+cp "$CONFIG/wireless" "$TMP/wireless"
+chmod 0600 "$TMP/wireless" "$CONFIG/wireless"
+CONF=$TMP
+uci_ap() { uci -q -c "$CONF" -C '' -t "$TMP/delta" "$@"; }
+get() { uci_ap get "$1" 2>/dev/null || :; }
+sections() {
+	uci_ap show wireless | sed -n "s/^wireless\.\([^.=]*\)=$1\$/\1/p"
+}
+radios=$(sections wifi-device)
+[ -n "$radios" ] || fail no_radios
+for radio in $radios; do
+	printf '%s\n' "$radio" | grep -Eq '^([A-Za-z0-9_]+|@wifi-device\[[0-9]+\])$' || fail invalid_radio_name
+done
+SSID=; KEY=
+managed=$(sections wifi-iface)
+for section in $managed; do
+	[ "$(get "wireless.$section.tr3000_lite_managed")" = 1 ] || continue
+	# Preserve the value's trailing bytes: command substitution alone strips LF.
+	s=$(get "wireless.$section.ssid"; printf .); s=${s%.}; s=${s%?}
+	k=$(get "wireless.$section.key"; printf .); k=${k%.}; k=${k%?}
+	[ -n "$s" ] && [ "${#s}" -le 32 ] || fail invalid_saved_ssid
+	[ "$(printf %s "$s" | tr -d '\000-\037\177')" = "$s" ] || fail invalid_saved_ssid
+	if [ "${#k}" -eq 64 ]; then
+		case "$k" in *[!0-9a-fA-F]*) fail invalid_saved_key;; esac
+	else
+		[ "${#k}" -ge 8 ] && [ "${#k}" -le 63 ] || fail invalid_saved_key
+	fi
+	# UCI permits quoted text, but WPA credentials must be printable ASCII.
+	case "$k" in *[!\ -~]*) fail invalid_saved_identity;; esac
+	if [ -n "$SSID" ]; then
+		[ "$SSID" = "$s" ] && [ "$KEY" = "$k" ] || fail mismatched_identity
+	else SSID=$s; KEY=$k; fi
+done
+random_hex() {
+	value=$(od -An -N "$1" -tx1 /dev/urandom | tr -d ' \n')
+	[ "${#value}" -eq "$((2 * $1))" ] || return 1
+	case "$value" in *[!0-9a-f]*) return 1;; esac
+	printf %s "$value"
+}
+valid_mac() {
+	printf '%s\n' "$1" | grep -Eq '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$' || return 1
+	case "$1" in 00:00:00:00:00:00|[fF][fF]:[fF][fF]:[fF][fF]:[fF][fF]:[fF][fF]:[fF][fF]) return 1;; esac
+}
+if [ -z "$SSID" ]; then
+	suffix=
+	for radio in $radios; do
+		mac=$(get "wireless.$radio.macaddr")
+		if valid_mac "$mac"; then suffix=$(printf %s "$mac" | tr -d : | tail -c 6 | tr a-f A-F); break; fi
+	done
+	if [ -z "$suffix" ]; then
+		for path in /sys/class/net/*/address; do
+			[ -f "$path" ] || continue
+			mac=$(cat "$path")
+			if valid_mac "$mac"; then suffix=$(printf %s "$mac" | tr -d : | tail -c 6 | tr a-f A-F); break; fi
+		done
+	fi
+	if [ -z "$suffix" ]; then
+		[ ! -L "$STATE/ap-suffix" ] || fail unsafe_suffix
+		if [ -f "$STATE/ap-suffix" ]; then suffix=$(cat "$STATE/ap-suffix")
+		else
+			suffix=$(random_hex 3 | tr a-f A-F)
+			printf '%s\n' "$suffix" > "$TMP/suffix"
+			mv "$TMP/suffix" "$STATE/ap-suffix"
+		fi
+		printf '%s\n' "$suffix" | grep -Eq '^[0-9A-F]{6}$' || fail invalid_suffix
+	fi
+	SSID=TR3000-Lite-$suffix
+	KEY=$(random_hex 16) || fail entropy
+fi
+for radio in $radios; do
+	section=
+	for candidate in $managed; do
+		[ "$(get "wireless.$candidate.tr3000_lite_managed")" = 1 ] || continue
+		[ "$(get "wireless.$candidate.device")" = "$radio" ] || continue
+		[ -z "$section" ] || fail duplicate_managed_radio
+		section=$candidate
+	done
+	if [ -z "$section" ]; then
+		section=tr3000_lite_mgmt_$(printf %s "$radio" | tr -c 'A-Za-z0-9_' _)
+		[ -z "$(get "wireless.$section")" ] || fail section_collision
+	fi
+	uci_ap set "wireless.$section=wifi-iface"
+	# Enabling an upstream-disabled radio must not activate its default open AP.
+	# Preserve administrator encrypted APs and every STA interface.
+	for candidate in $managed; do
+		[ "$(get "wireless.$candidate.device")" = "$radio" ] || continue
+		[ "$(get "wireless.$candidate.tr3000_lite_managed")" != 1 ] || continue
+		[ "$(get "wireless.$candidate.mode")" = ap ] || continue
+		case "$(get "wireless.$candidate.encryption")" in
+			''|none|open) uci_ap set "wireless.$candidate.disabled=1";;
+		esac
+	done
+	for assignment in "device=$radio" 'tr3000_lite_managed=1' 'mode=ap' 'network=mgmt' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
+		uci_ap set "wireless.$section.$assignment"
+	done
+	uci_ap set "wireless.$radio.disabled=0"
+done
+verify() {
+	for radio in $radios; do
+		count=0
+		for section in $(sections wifi-iface); do
+			[ "$(get "wireless.$section.device")" = "$radio" ] || continue
+			if [ "$(get "wireless.$section.tr3000_lite_managed")" != 1 ]; then
+				if [ "$(get "wireless.$section.mode")" = ap ]; then
+					case "$(get "wireless.$section.encryption")" in
+						''|none|open) [ "$(get "wireless.$section.disabled")" = 1 ] || return 1;;
+					esac
+				fi
+				continue
+			fi
+			count=$((count+1))
+			for pair in 'mode=ap' 'network=mgmt' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
+				[ "$(get "wireless.$section.${pair%%=*}")" = "${pair#*=}" ] || return 1
+			done
+		done
+		[ "$count" = 1 ] && [ "$(get "wireless.$radio.disabled")" = 0 ] || return 1
+	done
+}
+uci_ap commit wireless
+verify || fail verification
+# Same-filesystem rename keeps the live credential-bearing config private.
+mv "$TMP/wireless" "$CONFIG/wireless"
+CONF=$CONFIG
+verify || fail live_verification
+printf 'initialized\n' > "$TMP/marker"
+mv "$TMP/marker" "$MARKER"
+# OpenWrt also removes successful defaults. Direct reruns have the same behavior.
+rm -f /etc/uci-defaults/91-tr3000-lite-management-ap
+exit 0

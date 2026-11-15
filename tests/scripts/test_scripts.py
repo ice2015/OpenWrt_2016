@@ -65,7 +65,7 @@ def lite_base_config() -> str:
         "kmod-usb-net-cdc-ether", "kmod-usb-net-rndis", "kmod-wireguard",
         "luci", "luci-app-tr3000-lite", "luci-i18n-base-zh-cn", "luci-proto-wireguard",
         "luci-ssl-openssl", "openssh-server", "openssh-sftp-server",
-        "tcpdump-mini", "ubi-utils", "wireguard-tools",
+        "tcpdump-mini", "ubi-utils", "wireguard-tools", "wpad-openssl",
     )
     lines = [
         "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
@@ -240,6 +240,18 @@ def run_full_configure(
 
 
 class ScriptInterfaceTests(unittest.TestCase):
+    def test_lite_requires_only_pinned_wpad_provider(self):
+        result, config, assets = run_lite_configure(lite_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn('CONFIG_PACKAGE_wpad-openssl=y', config)
+        self.assertIn('files/etc/uci-defaults/91-tr3000-lite-management-ap', assets)
+        for provider in ('wpad-basic-mbedtls', 'wpad-mbedtls', 'wpad-basic-openssl', 'wpad-wolfssl'):
+            with self.subTest(provider=provider):
+                result, _, _ = run_lite_configure(lite_base_config()+'CONFIG_PACKAGE_'+provider+'=y\n')
+                self.assertNotEqual(0, result.returncode)
+        result, _, _ = run_lite_configure(lite_base_config().replace('CONFIG_PACKAGE_wpad-openssl=y\n', ''), seed_contents='')
+        self.assertNotEqual(0, result.returncode)
+
     def test_lite_config_installs_and_requires_industrial_lan_package(self) -> None:
         result, config, assets = run_lite_configure(lite_base_config())
         self.assertEqual(0, result.returncode, result.stderr)

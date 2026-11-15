@@ -1,4 +1,5 @@
 # TR3000 Lite package delta, applied over the upstream 128muboot.config.
+CONFIG_PACKAGE_wpad-openssl=y
 CONFIG_PACKAGE_ca-bundle=y
 CONFIG_CCACHE=y
 CONFIG_PACKAGE_curl=y

@@ -25,7 +25,7 @@
 
 - `wan` 使用 DHCP Client，metric 10；不提供 DHCP relay。
 - `plant` 作为不桥接的独立逻辑接口，默认无 IP、无 DHCP Client/Server；DHCPv4、DHCPv6、RA、NDP 均关闭。
-- `mgmt` 使用单独的 `br-mgmt` 和 `192.168.77.1/24` 示例管理地址；没有无线 AP、SSID 或预置密钥。首次部署需本地控制台配置并启用 WPA2/WPA3 管理 AP，不能为了方便设置开放 Wi-Fi。
+- `mgmt` 使用单独的 `br-mgmt` 和 `192.168.77.1/24` 管理地址。首次启动的 Lite defaults 脚本为实际检测到的每个无线设备创建一个始终启用的 WPA2-PSK (`psk2`) 管理 AP，SSID 为 `TR3000-Lite-<MAC 末六位大写十六进制>`；没有有效 MAC 时持久保存随机后缀。所有管理 AP 共用由 16 个随机字节生成的 32 位小写十六进制密钥；固件不含固定凭据，脚本不输出密钥。重复运行保留已有管理 SSID/密钥，不创建重复 AP；无无线设备、凭据不完整或提交/验证失败时保留 defaults 脚本以便重试。成功后才写入 `/etc/tr3000-lite/management-ap.initialized`。
 - 防火墙默认拒绝转发；只有 `mgmt → wan` 可转发。`plant` 不可主动访问 WAN、WireGuard 或管理面；WAN 不可访问管理面或工业网。
 - WireGuard 接口、UDP listener 和工业远程访问默认关闭。没有密钥、PSK、VPS 地址或客户网段被写入固件。
 - Lite 配置使用 `eth0`/`eth1` 作为 WAN/plant 的候选 Linux 设备名。上游 DTS 显示两个 MAC，但无法仅靠 DTS 确认机壳上的物理插孔角色；首次部署必须用 `ip link` 配合逐口插拔/链路灯做实机映射核验。若核验不符，不要连接现场网络或执行 `plant-profile.sh`。
@@ -44,7 +44,7 @@ sh /root/scripts/plant-profile.sh --device eth1 --address 192.168.10.254/24
 
 默认路由出口发生变化且 WireGuard 接口已启用时，服务会重启 `wg` 网络接口以触发重新握手；Peer 仍建议按现场 NAT 情况设置 `PersistentKeepalive = 25`。必须对真实上行切换做测试，不能把链路 up 等同于 VPS 可达。见[WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)。
 
-管理 Wi-Fi 不桥接到 plant；需经串口或隔离管理网络完成无线配置并验证 LuCI HTTPS、SSH。未提供默认 Wi-Fi 密码。
+管理 Wi-Fi 不桥接到 plant。首次部署必须在可信串口/本地控制台设置非空 root 密码，并从权限为 `0600` 的 `/etc/config/wireless` 读取该设备生成的管理 SSID/密钥；不要把密钥贴入日志或构建产物。AP 初始化本身不启用 plant HTTPS 或远程管理；控制器只有在非空 root 密码和 AP 初始化标记同时存在时才允许启用 plant HTTPS。首次启动无线设备发现、双频 AP 与 STA 共存、STA 断线期间管理 AP 持续可用、HTTPS/SSH 登录及 Linux 文件权限仍需真机验证。`wpad-openssl` 固定为必需包，最终配置拒绝其他 `wpad-*` 提供者。
 
 ## 构建与产物
 
