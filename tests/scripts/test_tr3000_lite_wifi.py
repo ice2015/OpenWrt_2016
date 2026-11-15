@@ -16,23 +16,44 @@ import json, os, pathlib, sys
 # Mirror Linux UCI bytes even when this command double runs on Windows.
 sys.stdout.reconfigure(encoding='utf-8', newline='\n')
 r=pathlib.Path(os.environ['WIFI_FIXTURE']); a=[x for x in sys.argv[1:] if x!='-q']
+extended='-X' not in a
+if not extended: a.remove('-X')
 directory=pathlib.Path(a[a.index('-c')+1])
+delta=pathlib.Path(a[a.index('-t')+1])/'wireless'
 for flag in ('-c','-C','-t'):
     if flag in a:
         i=a.index(flag); del a[i:i+2]
 p=directory/'wireless'; d=json.loads(p.read_text()); action=a[0]
+if delta.is_file(): d=json.loads(delta.read_text())
+names=[k for k,v in d.items() if v=='wifi-device']
+def selector(k):
+    for i,name in enumerate(names):
+        if name.startswith('wireless.cfg') and (k==name or k.startswith(name+'.')):
+            return 'wireless.@wifi-device['+str(i)+']'+k[len(name):]
+    return k
+def internal(k):
+    for i,name in enumerate(names):
+        alias='wireless.@wifi-device['+str(i)+']'
+        if k==alias or k.startswith(alias+'.'): return name+k[len(alias):]
+    return k
 if action=='show':
-    for k,v in d.items(): print(k+'='+v if v in ('wifi-device','wifi-iface') else k+"='"+v+"'")
+    for k,v in d.items():
+        k=selector(k) if extended else k
+        print(k+'='+v if v in ('wifi-device','wifi-iface') else k+"='"+v+"'")
 elif action=='get':
+    a[1]=internal(a[1])
     if a[1] not in d: sys.exit(1)
     print(d[a[1]])
 elif action=='set':
-    k,v=a[1].split('=',1); d[k]=v; p.write_text(json.dumps(d))
+    if os.environ.get('FAIL_STAGE')=='uci_set': sys.exit(1)
+    k,v=a[1].split('=',1); d[internal(k)]=v; delta.write_text(json.dumps(d))
 elif action=='commit':
     if os.environ.get('FAIL_COMMIT'): sys.exit(1)
+    if os.environ.get('NOOP_COMMIT'): sys.exit(0)
     (r/'committed.json').write_text(json.dumps(d))
     if os.environ.get('BAD_COMMIT'):
-        d.pop('wireless.tr3000_lite_mgmt_radio0.key',None); p.write_text(json.dumps(d))
+        d.pop('wireless.tr3000_lite_mgmt_radio0.key',None)
+    p.write_text(json.dumps(d)); delta.unlink(missing_ok=True)
 else: sys.exit(2)
 '''
 
@@ -66,7 +87,29 @@ class ManagementAPTests(unittest.TestCase):
         installed=self.root/'etc/uci-defaults/91-tr3000-lite-management-ap'
         installed.write_text(text,newline='\n')
         lock=self.root/'tmp/tr3000-lite-management-ap.lock'; already_locked=lock.exists()
-        r=subprocess.run([bash_executable(),installed.as_posix()],capture_output=True,text=True,env=dict(os.environ,WIFI_FIXTURE=self.root.as_posix(),TEST_PYTHON=Path(sys.executable).as_posix(),**extra))
+        # Match pinned boot: sourced defaults run as the left side of &&.
+        # set -e inside the sourced file is deliberately ineffective here.
+        runner=r'''
+mv() {
+    case "${FAIL_STAGE-}:$2" in
+        live_install:*/etc/config/wireless|marker_move:*/management-ap.initialized|suffix_move:*/ap-suffix) return 1;;
+    esac
+    command mv "$@"
+}
+printf() {
+    if [ "${FAIL_STAGE-}" = marker_write ] && [ "$1" = 'initialized\n' ]; then return 1; fi
+    command printf "$@"
+}
+cp() { [ "${FAIL_STAGE-}" != copy ] || return 1; command cp "$@"; }
+chmod() { [ "${FAIL_STAGE-}" != chmod ] || return 1; command chmod "$@"; }
+mkdir() {
+    if [ "${FAIL_STAGE-}" = delta_mkdir ]; then case "$1" in */delta) return 1;; esac; fi
+    command mkdir "$@"
+}
+file=91-tr3000-lite-management-ap
+( . "./$(basename "$file")" ) && rm -f "$file"
+'''
+        r=subprocess.run([bash_executable(),'-c',runner],cwd=installed.parent,capture_output=True,text=True,env=dict(os.environ,WIFI_FIXTURE=self.root.as_posix(),TEST_PYTHON=Path(sys.executable).as_posix(),**extra))
         self.assertEqual(success,r.returncode==0,r.stdout+r.stderr)
         self.assertEqual(success,self.marker().is_file())
         self.assertEqual(not success,installed.exists())
@@ -133,9 +176,33 @@ class ManagementAPTests(unittest.TestCase):
         self.assertTrue(lock.is_dir())
 
     def test_anonymous_detected_radio_is_supported(self):
-        self.state={'wireless.@wifi-device[0]':'wifi-device'}; self.save()
+        self.state={'wireless.cfg012345':'wifi-device'}; self.save()
         d=self.run_ap(); self.assertEqual(1,len(self.aps(d)))
-        self.assertEqual('@wifi-device[0]',d[self.aps(d)[0]+'.device'])
+        self.assertEqual('cfg012345',d[self.aps(d)[0]+'.device'])
+        self.assertNotIn('@wifi-device[',json.dumps(d))
+
+    def test_sourced_boot_commit_failure_or_noop_retains_script_and_live_config(self):
+        for failure in ('FAIL_COMMIT','NOOP_COMMIT'):
+            with self.subTest(failure=failure):
+                self.state={'wireless.radio0':'wifi-device'}; self.save()
+                self.marker().unlink(missing_ok=True)
+                original=(self.root/'etc/config/wireless').read_bytes()
+                self.run_ap(False,**{failure:'1'})
+                self.assertEqual(original,(self.root/'etc/config/wireless').read_bytes())
+
+    def test_sourced_boot_required_mutation_failures_remain_retryable(self):
+        for stage in ('delta_mkdir','copy','chmod','uci_set','live_install','marker_write','marker_move','suffix_move'):
+            with self.subTest(stage=stage):
+                self.state={'wireless.radio0':'wifi-device'}; self.save()
+                self.marker().unlink(missing_ok=True)
+                if stage=='suffix_move':
+                    (self.root/'sys/class/net/eth0/address').write_text('00:00:00:00:00:00')
+                before=self.load()
+                d=self.run_ap(False,FAIL_STAGE=stage)
+                if stage in ('marker_write','marker_move'):
+                    self.assertEqual('psk2',d['wireless.tr3000_lite_mgmt_radio0.encryption'])
+                    self.assertEqual(32,len(d['wireless.tr3000_lite_mgmt_radio0.key']))
+                else: self.assertEqual(before,d)
 
     def test_existing_raw_wpa_psk_is_preserved(self):
         a='wireless.saved'; self.state.update({a:'wifi-iface',a+'.tr3000_lite_managed':'1',a+'.device':'radio0',a+'.ssid':'saved',a+'.key':'a'*64})
