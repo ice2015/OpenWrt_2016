@@ -1,0 +1,23 @@
+{
+  "admin/network/tr3000-lite": {
+    "title": "TR3000 Lite",
+    "order": 70,
+    "action": {
+      "type": "firstchild"
+    },
+    "depends": {
+      "acl": [ "luci-app-tr3000-lite" ]
+    }
+  },
+  "admin/network/tr3000-lite/industrial-lan": {
+    "title": "Industrial LAN",
+    "order": 70,
+    "action": {
+      "type": "view",
+      "path": "tr3000-lite/industrial-lan"
+    },
+    "depends": {
+      "acl": [ "luci-app-tr3000-lite" ]
+    }
+  }
+}

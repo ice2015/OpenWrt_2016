@@ -8,6 +8,7 @@ BASE_CONFIG=
 CCACHE_DIR_OVERRIDE=
 SEED="$REPO_ROOT/configs/lite.seed"
 LITE_OVERLAY="$REPO_ROOT/overlays/devices/tr3000-lite/files"
+LOCAL_LUCI_PACKAGE="$REPO_ROOT/packages/luci-app-tr3000-lite"
 
 usage() {
 	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE] [--ccache-dir DIR]\n' "$0"
@@ -56,6 +57,7 @@ done
 [ -f "$BASE_CONFIG" ] || fail "base config not found: $BASE_CONFIG"
 [ -f "$SEED" ] || fail "Lite seed not found: $SEED"
 [ -d "$LITE_OVERLAY" ] || fail "Lite overlay not found: $LITE_OVERLAY"
+[ -f "$LOCAL_LUCI_PACKAGE/Makefile" ] || fail "Lite LuCI package not found: $LOCAL_LUCI_PACKAGE"
 case "$CCACHE_DIR_OVERRIDE" in
 	'') ;;
 	/*) ;;
@@ -119,6 +121,8 @@ awk -v ccache_dir="$CCACHE_DIR_OVERRIDE" '
 	}
 ' "$SEED" "$BASE_CONFIG" > "$TEMP_CONFIG"
 
+mkdir -p "$SOURCE_DIR/package/luci-app-tr3000-lite"
+cp -R "$LOCAL_LUCI_PACKAGE/." "$SOURCE_DIR/package/luci-app-tr3000-lite/"
 cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 (
 	cd "$SOURCE_DIR"
@@ -131,7 +135,7 @@ grep -Fq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' "$SOU
 	fail "configuration must select exactly one mediatek filogic device profile"
 for package in \
 	ca-bundle curl ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
-	kmod-usb-net-rndis kmod-wireguard luci \
+	kmod-usb-net-rndis kmod-wireguard luci luci-app-tr3000-lite \
 	luci-i18n-base-zh-cn luci-proto-wireguard luci-ssl-openssl \
 	openssh-server openssh-sftp-server tcpdump-mini ubi-utils wireguard-tools
 do

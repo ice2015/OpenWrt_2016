@@ -63,7 +63,7 @@ def lite_base_config() -> str:
     required_packages = (
         "ca-bundle", "curl", "ip-full", "iputils-arping", "kmod-usb-net",
         "kmod-usb-net-cdc-ether", "kmod-usb-net-rndis", "kmod-wireguard",
-        "luci", "luci-i18n-base-zh-cn", "luci-proto-wireguard",
+        "luci", "luci-app-tr3000-lite", "luci-i18n-base-zh-cn", "luci-proto-wireguard",
         "luci-ssl-openssl", "openssh-server", "openssh-sftp-server",
         "tcpdump-mini", "ubi-utils", "wireguard-tools",
     )
@@ -113,7 +113,10 @@ def run_lite_configure(
         fake_bin = root / "bin"
         fake_bin.mkdir()
         fake_make = fake_bin / "make"
-        fake_make.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_make.write_text("#!/bin/sh\n" + (
+            "test -f package/luci-app-tr3000-lite/Makefile || exit 19\n"
+            if (repo_root / "packages/luci-app-tr3000-lite").is_dir() else ""
+        ) + "exit 0\n", encoding="utf-8")
         fake_make.chmod(0o755)
         environment = dict(os.environ)
         environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
@@ -147,7 +150,7 @@ def run_lite_configure(
         installed_assets = {
             path.relative_to(source).as_posix(): path.read_text(encoding="utf-8")
             for path in source.rglob("*")
-            if path.is_file() and path.relative_to(source).parts[0] == "files"
+            if path.is_file() and path.relative_to(source).parts[0] in ("files", "package")
         }
     return result, generated_config, installed_assets
 
@@ -237,6 +240,16 @@ def run_full_configure(
 
 
 class ScriptInterfaceTests(unittest.TestCase):
+    def test_lite_config_installs_and_requires_industrial_lan_package(self) -> None:
+        result, config, assets = run_lite_configure(lite_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("package/luci-app-tr3000-lite/Makefile", list(assets))
+        self.assertEqual(1, config.splitlines().count("CONFIG_PACKAGE_luci-app-tr3000-lite=y"))
+        self.assertNotIn("package/luci-app-tr3000-full/Makefile", assets)
+        result, _, _ = run_lite_configure(lite_base_config().replace("CONFIG_PACKAGE_luci-app-tr3000-lite=y\n", ""), seed_contents="")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("required Lite package was not selected: luci-app-tr3000-lite", result.stderr)
+
     def test_every_script_supports_help(self) -> None:
         results = {name: run_script(name, "--help") for name in SCRIPTS}
 
