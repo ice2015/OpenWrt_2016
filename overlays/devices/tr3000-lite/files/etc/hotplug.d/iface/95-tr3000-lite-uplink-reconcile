@@ -1,0 +1,7 @@
+#!/bin/sh
+# A concurrent notification may be skipped by the lock; the 15s daemon converges.
+case "${ACTION:-}:${INTERFACE:-}" in
+	ifup:wan|ifupdate:wan|ifdown:wan|ifup:wwan|ifupdate:wwan|ifdown:wwan|ifup:usbwan|ifupdate:usbwan|ifdown:usbwan)
+		/usr/sbin/lite-uplink-watch reconcile >/dev/null 2>&1 || :
+		;;
+esac

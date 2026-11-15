@@ -160,11 +160,13 @@ done
 mkdir -p "$SOURCE_DIR/files"
 cp -R "$REPO_ROOT/files/." "$SOURCE_DIR/files/"
 mkdir -p "$SOURCE_DIR/files/root/scripts"
-for script in plant-profile.sh plant-access.sh preflight.sh lite-common.sh lite-uplink-watch.sh; do
+for script in plant-profile.sh plant-access.sh preflight.sh lite-common.sh; do
 	install -m 0755 "$SCRIPT_DIR/$script" "$SOURCE_DIR/files/root/scripts/$script"
 done
 mkdir -p "$SOURCE_DIR/files/usr/sbin" "$SOURCE_DIR/files/etc/init.d" "$SOURCE_DIR/files/etc/uci-defaults"
-install -m 0755 "$SCRIPT_DIR/lite-uplink-watch.sh" \
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-uplink-watch.sh" \
+	"$SOURCE_DIR/files/root/scripts/lite-uplink-watch.sh"
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-uplink-watch.sh" \
 	"$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
 install -m 0644 "$SCRIPT_DIR/lite-common.sh" \
 	"$SOURCE_DIR/files/usr/sbin/lite-common.sh"
@@ -175,6 +177,10 @@ install -m 0644 "$SCRIPT_DIR/tr3000-lite-plant-lib.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/plant-lib.sh"
 install -m 0644 "$SCRIPT_DIR/tr3000-lite-usbwan-lib.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/usbwan-lib.sh"
+install -m 0644 "$SCRIPT_DIR/tr3000-lite-uplink-lib.sh" \
+	"$SOURCE_DIR/files/usr/lib/tr3000-lite/uplink-lib.sh"
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-uplink-changed.sh" \
+	"$SOURCE_DIR/files/usr/lib/tr3000-lite/uplink-changed"
 install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \

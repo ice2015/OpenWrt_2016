@@ -30,6 +30,8 @@ SCRIPTS = (
     "plant-profile.sh",
     "plant-access.sh",
     "lite-uplink-watch.sh",
+    "tr3000-lite-uplink-watch.sh",
+    "tr3000-lite-uplink-changed.sh",
     "tr3000-lite-plant.sh",
     "tr3000-lite-plant-lib.sh",
 )
@@ -290,6 +292,11 @@ class ScriptInterfaceTests(unittest.TestCase):
             "tr3000-lite-plant.sh",
             "tr3000-lite-plant-lib.sh",
             "tr3000-lite-usbwan-lib.sh",
+            "tr3000-lite-uplink-watch.sh",
+            "tr3000-lite-uplink-lib.sh",
+            "tr3000-lite-uplink-changed.sh",
+            "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
+            "../overlays/devices/tr3000-lite/files/etc/init.d/lite-uplink-watch",
             "../overlays/devices/tr3000-lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
         )
         for name in scripts:
