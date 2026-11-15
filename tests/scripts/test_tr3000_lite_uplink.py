@@ -13,7 +13,7 @@ from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, 
 SCRIPT = ROOT/'scripts/tr3000-lite-uplink-watch.sh'
 LIB = ROOT/'scripts/tr3000-lite-uplink-lib.sh'
 FAKE = r'''
-import json, os, pathlib, re, sys
+import json, os, pathlib, re, signal, sys
 root=pathlib.Path(os.environ['UPLINK_FIXTURE']); command=sys.argv[1]; args=sys.argv[2:]
 p=root/'fixture.json'; d=json.loads(p.read_text())
 with (root/'calls.jsonl').open('a') as f: f.write(json.dumps([command,*args])+'\n')
@@ -76,6 +76,7 @@ elif command=='ip':
         save()
     else: sys.exit(2)
 elif command=='logger': pass
+elif command=='sleep': os.kill(os.getppid(),signal.SIGTERM)
 else: sys.exit(2)
 '''
 
@@ -98,7 +99,7 @@ class UplinkTests(unittest.TestCase):
         for path in ('bin','etc/config','var/run/tr3000-lite','usr/lib/tr3000-lite'):
             (self.root/path).mkdir(parents=True)
         (self.root/'bin/fake.py').write_text(FAKE)
-        for command in ('uci','ubus','jsonfilter','ping','ip','logger'):
+        for command in ('uci','ubus','jsonfilter','ping','ip','logger','sleep'):
             path=self.root/'bin'/command
             path.write_text('#!/bin/sh\nexec "$UPLINK_PYTHON" -S "$UPLINK_FIXTURE/bin/fake.py" '+command+' "$@"\n')
             path.chmod(0o755)
@@ -133,7 +134,7 @@ class UplinkTests(unittest.TestCase):
                                       'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text=text.replace('/usr/lib/tr3000-lite/uplink-lib.sh',str(LIB))
         text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
-        for prefix in ('/var/run','/etc/config','/usr/lib/tr3000-lite/uplink-changed'):
+        for prefix in ('/var/run','/etc/config','/usr/lib/tr3000-lite/uplink-changed','/etc/hotplug.d/net'):
             text=text.replace(prefix,str(self.root)+prefix)
         path=self.root/'watch.sh'; path.write_text(text)
         result=subprocess.run([bash_executable(),str(path),*(args or ('reconcile',))],capture_output=True,text=True,
@@ -300,6 +301,18 @@ class UplinkTests(unittest.TestCase):
         self.run_watch()
         self.assertEqual('wwan',self.status()['active'])
         self.assertFalse(self.status()['reconcile_error'])
+
+    def test_daemon_rescans_usb_before_each_periodic_health_round(self):
+        hook=self.root/'etc/hotplug.d/net/90-tr3000-lite-usbwan'
+        hook.parent.mkdir(parents=True)
+        hook.write_text('#!/bin/sh\nprintf "%s %s\\n" "$ACTION" "$INTERFACE" > "$UPLINK_FIXTURE/rescan"\n')
+        hook.chmod(0o755)
+        self.run_watch('daemon',success=False)  # fake sleep terminates after one full round
+        self.assertTrue((self.root/'rescan').is_file(),'daemon never retried a missed USB event')
+        self.assertEqual('reconcile tr3000-rescan\n',(self.root/'rescan').read_text())
+        sleeps=[call for call in self.calls() if call[0]=='sleep']
+        self.assertEqual([['sleep','15']],sleeps)
+        self.assertEqual('wan',self.status()['active'])
 
     def test_event_hook_emits_only_validated_public_transition(self):
         hook=ROOT/'scripts/tr3000-lite-uplink-changed.sh'

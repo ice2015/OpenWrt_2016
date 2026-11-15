@@ -292,6 +292,17 @@ class UsbwanTests(unittest.TestCase):
                     if process.poll() is None: process.kill()
                     process.communicate()
 
+    def test_periodic_rescan_recovers_event_missed_during_plant_transaction(self):
+        self.add_device()
+        lock=self.root/'var/lock/tr3000-lite-plant'; lock.mkdir()
+        self.assertNotEqual(0,self.hook().returncode)
+        self.assertEqual(self.state,self.load())
+        lock.rmdir()
+        result=self.hook('reconcile','tr3000-rescan')
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertEqual('modem7',self.load().get('network.usbwan.device'))
+        self.assertEqual('bound',self.status()['state'])
+
     def test_lite_configuration_installs_library_and_executable_hook(self):
         result, _, assets=run_lite_configure(lite_base_config())
         self.assertEqual(0, result.returncode, result.stderr)

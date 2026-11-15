@@ -13,6 +13,7 @@ esac
 . /usr/lib/tr3000-lite/uplink-lib.sh
 STATE=/var/run/tr3000-lite/uplink
 EVENT=/usr/lib/tr3000-lite/uplink-changed
+USB_HOOK=/etc/hotplug.d/net/90-tr3000-lite-usbwan
 log() { logger -t tr3000-lite-uplink "$1" 2>/dev/null || :; }
 [ ! -L /var/run/tr3000-lite ] && [ ! -L "$STATE" ] || exit 1
 mkdir -p "$STATE" && chmod 0700 /var/run/tr3000-lite "$STATE" || exit 1
@@ -257,6 +258,12 @@ reconcile() {
 
 if [ "$1" = daemon ]; then
 	while :; do
+		# Hotplug can time out behind a long plant transaction. Re-enumerate
+		# idempotently on the normal daemon cadence, never from iface callbacks.
+		if [ -x "$USB_HOOK" ] && [ ! -L "$USB_HOOK" ]; then
+			ACTION=reconcile INTERFACE=tr3000-rescan "$USB_HOOK" >/dev/null 2>&1 ||
+				log 'USB reconciliation deferred until next interval'
+		fi
 		reconcile || { log 'uplink reconciliation failed; retrying on next interval'; cleanup; LOCKED=0; }
 		sleep "${INTERVAL:-15}"
 	done

@@ -3,7 +3,7 @@
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 . /usr/lib/tr3000-lite/usbwan-lib.sh
-case "${ACTION:-}" in add|remove) ;; *) exit 0 ;; esac
+case "${ACTION:-}" in add|remove|reconcile) ;; *) exit 0 ;; esac
 tr3000_lite_usbwan_name_valid "${INTERFACE:-}" || exit 1
 SYSFS=/sys
 CONFIG=/etc/config
