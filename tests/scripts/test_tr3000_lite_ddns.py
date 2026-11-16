@@ -223,7 +223,7 @@ exec "$@"
             self.assertEqual(1,len((self.root/'updater.calls').read_text().splitlines()))
         finally: (self.root/'update-release').touch()
         self.wait_for(lambda:self.event_state().get('last_error')=='')
-        lock=self.root/'var/run/tr3000-lite/ddns/lock'; lock.mkdir(); (lock/'other-owner').touch()
+        lock=self.root/'var/run/tr3000-lite/ddns/lock'; lock.mkdir(exist_ok=True); (lock/'other-owner').touch()
         self.run_event('tick'); self.assertTrue((lock/'other-owner').exists())
     def test_lost_worker_reservation_recovers_without_signaling_unrelated_pid(self):
         self.prepare_updater(); self.run_event('notify','wan','')
