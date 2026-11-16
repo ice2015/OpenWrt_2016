@@ -42,7 +42,11 @@ def main():
     peers=[tag+'-pc',tag+'-plc']
     created=[]; children=[]
     def run(*args,**kwargs):
-        return subprocess.run(args,check=True,capture_output=True,text=True,**kwargs)
+        res = subprocess.run(args,capture_output=True,text=True,**kwargs)
+        if res.returncode != 0:
+            sys.stderr.write(f"FAILED: {args}\nOUT: {res.stdout}\nERR: {res.stderr}\nINPUT:\n{kwargs.get('input','')}\n")
+            raise subprocess.CalledProcessError(res.returncode,args,res.stdout,res.stderr)
+        return res
     def spawn(namespace,code,*args):
         command=['ip','netns','exec',namespace] if namespace else []
         proc=subprocess.Popen([*command,sys.executable,'-u','-c',code,*map(str,args)],
@@ -75,7 +79,7 @@ ct state { established, related } accept
 }
 chain output { type filter hook output priority filter; policy accept; }
 chain postrouting { type nat hook postrouting priority srcnat; policy accept;
-oifname "plant" ip saddr 10.77.0.10 ip daddr 192.168.10.0/24 snat ip to 192.168.10.254
+oifname "plant" ip saddr 10.77.0.10 ip daddr 192.168.10.0/24 snat to 192.168.10.254
 }
 }
 '''
