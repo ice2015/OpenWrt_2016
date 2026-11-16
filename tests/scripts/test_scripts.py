@@ -36,6 +36,7 @@ SCRIPTS = (
     "tr3000-lite-remote.sh",
     "tr3000-lite-remote-boot-close.sh",
     "tr3000-lite-ddns-status.sh",
+    "tr3000-lite-ddns-event.sh",
     "tr3000-lite-plant.sh",
     "tr3000-lite-plant-lib.sh",
 )
@@ -77,6 +78,8 @@ def lite_base_config() -> str:
     lines = [
         "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
         'CONFIG_CCACHE_DIR="/workdir/.ccache"',
+        "CONFIG_BUSYBOX_CUSTOM=y",
+        "CONFIG_BUSYBOX_CONFIG_TIMEOUT=y",
     ]
     lines.extend(f"CONFIG_PACKAGE_{package}=y" for package in required_packages)
     return "\n".join(lines) + "\n"
@@ -174,6 +177,8 @@ def full_base_config() -> str:
     lines = [
         "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
         'CONFIG_CCACHE_DIR="/workdir/.ccache"',
+        "CONFIG_BUSYBOX_CUSTOM=y",
+        "CONFIG_BUSYBOX_CONFIG_TIMEOUT=y",
     ]
     lines.extend(f"CONFIG_PACKAGE_{package}=y" for package in required_packages)
     return "\n".join(lines) + "\n"
@@ -247,6 +252,12 @@ def run_full_configure(
 
 
 class ScriptInterfaceTests(unittest.TestCase):
+    def test_lite_selects_hard_ddns_worker_timeout_applet(self):
+        result, config, _ = run_lite_configure(lite_base_config())
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertIn('CONFIG_BUSYBOX_CUSTOM=y',config)
+        self.assertIn('CONFIG_BUSYBOX_CONFIG_TIMEOUT=y',config)
+
     def test_lite_requires_only_pinned_wpad_provider(self):
         result, config, assets = run_lite_configure(lite_base_config())
         self.assertEqual(0, result.returncode, result.stderr)

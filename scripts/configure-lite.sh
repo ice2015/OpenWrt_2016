@@ -142,6 +142,10 @@ do
 	grep -Fq "CONFIG_PACKAGE_$package=y" "$SOURCE_DIR/.config" ||
 		fail "required Lite package was not selected: $package"
 done
+grep -Fq 'CONFIG_BUSYBOX_CUSTOM=y' "$SOURCE_DIR/.config" ||
+	fail "required Lite busybox configuration missing: CONFIG_BUSYBOX_CUSTOM"
+grep -Fq 'CONFIG_BUSYBOX_CONFIG_TIMEOUT=y' "$SOURCE_DIR/.config" ||
+	fail "required Lite busybox configuration missing: CONFIG_BUSYBOX_CONFIG_TIMEOUT"
 if grep -E '^CONFIG_PACKAGE_wpad-[^=]+=[ym]$' "$SOURCE_DIR/.config" | grep -Fvx 'CONFIG_PACKAGE_wpad-openssl=y' >/dev/null; then
 	fail "conflicting wpad provider selected after defconfig"
 fi
@@ -193,6 +197,8 @@ install -m 0755 "$SCRIPT_DIR/tr3000-lite-ddns-status.sh" \
 	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-ddns-status"
 install -m 0644 "$SCRIPT_DIR/tr3000-lite-ddns-lib.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/ddns-lib.sh"
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-ddns-event.sh" \
+	"$SOURCE_DIR/files/usr/lib/tr3000-lite/ddns-event"
 install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \

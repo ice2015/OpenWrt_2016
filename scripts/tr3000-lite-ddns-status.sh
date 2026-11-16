@@ -65,7 +65,21 @@ case "$active" in wan|wwan|usbwan)
 esac
 scope=$(ddns_wan_scope "$address"); candidate=false
 [ "$scope" != global ] || candidate=true
+retry_count=0; next_retry=0
+state=/var/run/tr3000-lite/ddns/state.json
+if [ ! -L /var/run/tr3000-lite/ddns ] && owned_file "$state" && [ "$(stat -c %a "$state")" = 600 ]; then
+	state_config=$(json_get '@.config_sha' < "$state" || :)
+	state_active=$(json_get '@.active' < "$state" || :)
+	state_address=$(json_get '@.address' < "$state" || :)
+	if owned_file "$CONFIG/ddns" && [ "$state_config" = "$(sha256sum "$CONFIG/ddns" | cut -d ' ' -f1)" ] &&
+		[ "$state_active" = "$active" ] && [ "$state_address" = "$address" ]; then
+		error=$(json_get '@.last_error' < "$state" || :)
+		case "$error" in ''|not_configured|disabled|remote_not_ready|pending_config|no_public_egress|pending_update|update_failed|update_timeout|retry_exhausted) last_error=$error ;; esac
+		count=$(json_get '@.retry_count' < "$state" || :); due=$(json_get '@.next_retry_uptime' < "$state" || :)
+		if ddns_uint "$count" && [ "$count" -le 6 ] && ddns_uint "$due"; then retry_count=$count; next_retry=$due; fi
+	fi
+fi
 # Candidacy describes the active IPv4 network only, NOT configuration readiness,
 # DNS propagation, inbound UDP, WireGuard authentication or external acceptance.
-printf '{"schema_version":1,"configured":%s,"enabled":%s,"hostname":"%s","record_type":"A","last_update":%s,"last_error":"%s","wan_scope":"%s","direct_candidate":%s}\n' \
-	"$configured" "$enabled" "$hostname" "$last_update" "$last_error" "$scope" "$candidate"
+printf '{"schema_version":1,"configured":%s,"enabled":%s,"hostname":"%s","record_type":"A","last_update":%s,"last_error":"%s","wan_scope":"%s","direct_candidate":%s,"retry_count":%s,"next_retry_uptime":%s}\n' \
+	"$configured" "$enabled" "$hostname" "$last_update" "$last_error" "$scope" "$candidate" "$retry_count" "$next_retry"

@@ -1,0 +1,12 @@
+--- a/usr/lib/ddns/dynamic_dns_functions.sh
++++ b/usr/lib/ddns/dynamic_dns_functions.sh
+@@ -195,6 +195,9 @@
+ 
+ 	load_all_service_sections __SECTIONS
+ 	for __SECTIONID in $__SECTIONS; do
++		# This Lite section is gated/debounced by the dedicated scheduler.
++		# Explicit per-section stock updater invocations remain unchanged.
++		[ "$__SECTIONID" != "tr3000_direct" ] || continue
+ 		config_get __IFACE "$__SECTIONID" interface "wan"
+ 		[ -z "$__EVENTIF" -o "$__IFACE" = "$__EVENTIF" ] || continue
+ 		if [ $VERBOSE -eq 0 ]; then	# start in background
