@@ -141,6 +141,7 @@ def key(seed): return base64.b64encode(bytes((seed+i)%256 for i in range(32))).d
 
 class RemoteControllerTests(unittest.TestCase):
     def setUp(self):
+        old_umask=os.umask(0o022); self.addCleanup(os.umask,old_umask)
         self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root=Path(self.tmp.name)
         for p in ('etc/config','etc/tr3000-lite/keys','var/run/uci','var/lock','tmp/.uci','bin'):

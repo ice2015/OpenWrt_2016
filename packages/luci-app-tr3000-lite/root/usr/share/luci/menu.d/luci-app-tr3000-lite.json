@@ -30,5 +30,16 @@
     "depends": {
       "acl": [ "luci-app-tr3000-lite" ]
     }
+  },
+  "admin/network/tr3000-lite/remote-access": {
+    "title": "Remote access",
+    "order": 90,
+    "action": {
+      "type": "view",
+      "path": "tr3000-lite/remote-access"
+    },
+    "depends": {
+      "acl": [ "luci-app-tr3000-lite" ]
+    }
   }
 }

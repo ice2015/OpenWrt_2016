@@ -5,7 +5,9 @@
     "write": {
       "file": {
         "/usr/sbin/tr3000-lite-plant": [ "exec" ],
-        "/usr/sbin/tr3000-lite-uplink-status": [ "exec" ]
+        "/usr/sbin/tr3000-lite-uplink-status": [ "exec" ],
+        "/usr/sbin/tr3000-lite-remote": [ "exec" ],
+        "/usr/sbin/tr3000-lite-ddns-status": [ "exec" ]
       },
       "ubus": {
         "file": [ "exec" ]

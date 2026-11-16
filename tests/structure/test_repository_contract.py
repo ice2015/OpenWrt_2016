@@ -15,7 +15,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertTrue((package / "Makefile").is_file(), "missing Lite LuCI package")
         menu = json.loads((package / "root/usr/share/luci/menu.d/luci-app-tr3000-lite.json").read_text(encoding="utf-8"))
         acl = json.loads((package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-lite.json").read_text(encoding="utf-8"))
-        self.assertEqual({"admin/network/tr3000-lite", "admin/network/tr3000-lite/industrial-lan", "admin/network/tr3000-lite/uplinks"}, set(menu))
+        self.assertEqual({"admin/network/tr3000-lite", "admin/network/tr3000-lite/industrial-lan", "admin/network/tr3000-lite/uplinks", "admin/network/tr3000-lite/remote-access"}, set(menu))
         parent = menu["admin/network/tr3000-lite"]
         self.assertEqual("TR3000 Lite", parent["title"])
         self.assertEqual({"type": "firstchild"}, parent["action"])
@@ -25,9 +25,21 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotIn("auth", entry)
         self.assertEqual(["luci-app-tr3000-lite"], entry["depends"]["acl"])
         self.assertEqual({"type": "view", "path": "tr3000-lite/industrial-lan"}, entry["action"])
+        remote_entry = menu["admin/network/tr3000-lite/remote-access"]
+        self.assertNotIn("auth", remote_entry)
+        self.assertEqual(["luci-app-tr3000-lite"], remote_entry["depends"]["acl"])
+        self.assertEqual({"type": "view", "path": "tr3000-lite/remote-access"}, remote_entry["action"])
         grant = acl["luci-app-tr3000-lite"]
         self.assertEqual({}, grant["read"])
-        self.assertEqual({"file": {"/usr/sbin/tr3000-lite-plant": ["exec"], "/usr/sbin/tr3000-lite-uplink-status": ["exec"]}, "ubus": {"file": ["exec"]}}, grant["write"])
+        self.assertEqual({
+            "file": {
+                "/usr/sbin/tr3000-lite-plant": ["exec"],
+                "/usr/sbin/tr3000-lite-uplink-status": ["exec"],
+                "/usr/sbin/tr3000-lite-remote": ["exec"],
+                "/usr/sbin/tr3000-lite-ddns-status": ["exec"]
+            },
+            "ubus": {"file": ["exec"]}
+        }, grant["write"])
         makefile = (package / "Makefile").read_text(encoding="utf-8")
         self.assertRegex(makefile, r"DEPENDS:=\+luci-base \+rpcd-mod-file\s*\n")
         view = (package / "htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js").read_text(encoding="utf-8")
@@ -216,6 +228,87 @@ const ok = data => ({code:0,stdout:JSON.stringify(data),stderr:''});
   replies.push(ok({...status,private_key:secret}));
   assert.ok(!text(page.render(await page.load())).includes(secret));
 })().catch(error=>{console.error(error);process.exitCode=1;});
+'''
+        result = subprocess.run([node, '-e', harness, str(view)], capture_output=True, text=True)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_lite_remote_access_view_contract(self) -> None:
+        package = ROOT / "packages/luci-app-tr3000-lite"
+        view = package / "htdocs/luci-static/resources/view/tr3000-lite/remote-access.js"
+        self.assertTrue(view.is_file(), "missing remote-access view")
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js is needed to execute the LuCI view contract")
+        harness = r'''
+const assert = require('node:assert/strict');
+const source = require('node:fs').readFileSync(process.argv[1], 'utf8');
+const replies = [], calls = [];
+const fs = {exec: (path, args) => {
+  calls.push([path, args]);
+  if (!replies.length) throw new Error('unexpected call');
+  return Promise.resolve(replies.shift());
+}};
+const view = {extend: spec => spec};
+const ui = {showModal: () => {}, hideModal: () => {}, addNotification: () => {}};
+const E = (tag, attrs, children) => {
+  if (Array.isArray(attrs)) { children = attrs; attrs = {}; }
+  return {tag, attrs: attrs || {}, children: children || []};
+};
+const _ = s => s;
+const fn = new Function('view', 'fs', 'ui', 'E', '_', source + '\nreturn this;');
+const page = fn(view, fs, ui, E, _);
+
+const text = node => {
+  if (typeof node === 'string') return node;
+  if (!node) return '';
+  if (Array.isArray(node)) return node.map(text).join(' ');
+  return (text(node.children) + ' ' + Object.values(node.attrs || {}).join(' ')).trim();
+};
+
+const remoteData = {
+  schema_version: 1,
+  identity: "cell-01",
+  enrolled: true,
+  gates: { root_password: true, ap_initialized: true, identity: true, keys: true },
+  roles: {
+    wg_direct: { configured: true, enabled: true, address: "10.10.1.1/32" },
+    wg_vps: { configured: true, enabled: true, address: "10.20.1.2/32" }
+  },
+  policy: { allow_luci: false, allow_plant: false },
+  effective: { allow_luci: true, allow_plant: true },
+  sources: { direct: ["10.10.1.10/32"], vps: ["10.20.1.10/32"] },
+  plant: { address: "192.168.10.254", cidr: "192.168.10.0/24" },
+  checks: { result: "ok" },
+  degraded: false
+};
+const ddnsData = {
+  schema_version: 1,
+  configured: true,
+  enabled: true,
+  hostname: "cell01.example.org",
+  record_type: "A",
+  last_update: 1700000000,
+  last_error: "",
+  wan_scope: "global",
+  direct_candidate: true,
+  retry_count: 0,
+  next_retry_uptime: 0
+};
+
+const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
+
+(async () => {
+  replies.push(ok(remoteData));
+  replies.push(ok(ddnsData));
+  const data = await page.load();
+  assert.equal(calls.length, 2);
+  const rendered = text(page.render(data));
+  assert.ok(rendered.includes('10.10.1.1/32, 192.168.10.0/24'));
+  assert.ok(rendered.includes('10.20.1.2/32, 192.168.10.0/24'));
+  assert.ok(!rendered.includes('0.0.0.0/0'));
+  assert.ok(rendered.includes('Do NOT activate both profiles simultaneously'));
+  console.log('Remote access LuCI view contract passed');
+})().catch(err => { console.error(err); process.exitCode = 1; });
 '''
         result = subprocess.run([node, '-e', harness, str(view)], capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
