@@ -62,7 +62,7 @@ def main():
         incoming='' if state=='unprotected' else (root/('native-'+state+'-input.nft')).read_text()
         forwarding='' if state=='unprotected' else (root/('native-'+state+'-forward.nft')).read_text()
         late_input='' if state=='unprotected' else 'iifname "wg_direct" tcp dport 443 accept'
-        late_forward='' if state=='unprotected' else 'iifname "wg_direct" ip daddr 192.168.10.0/24 tcp accept'
+        late_forward='' if state=='unprotected' else 'iifname "wg_direct" ip daddr 192.168.10.0/24 meta l4proto tcp accept'
         # Broad late accepts intentionally exercise the guard in front of
         # established/related handling. Reloading the table does NOT flush CT.
         rules='''table inet remote_guard_test {
