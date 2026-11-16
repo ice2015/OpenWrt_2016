@@ -75,7 +75,10 @@ Lite 专用 `lite-uplink-watch` procd 服务与 Full 的旧共享实现隔离。
 
 只读“Multi-uplink status”页显示接口、netifd link、地址/网关、基础/有效 metric、健康状态、活动出口、USB 信息及 AP/STA 的实际 radio/PHY/信道。手动“Refresh status”获取新快照；空白/未知值、状态文件缺失、重协调失败或通知失败都有明确提示。该页不接受 Wi-Fi 密码、不授予任意文件权限，也不改变网络。控制台只读入口为 `/usr/sbin/tr3000-lite-uplink-status --json`；`/usr/sbin/lite-uplink-watch reconcile` 可触发一轮健康重协调。
 
-稳定出口切换后，本里程碑只发送受限的 `tr3000-lite.uplink-changed` 通知；**双 WireGuard 重启、Cloudflare DDNS 和远程授权仍属于第三阶段，不把旧 `wg` 示例当成已部署的双入口**。后续 Peer 的 `PersistentKeepalive = 25` 也不能替代实测路径恢复。见[WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)。
+稳定出口切换后，发送受限的 `tr3000-lite.uplink-changed` 通知，并由上行监听器触发双 WireGuard 重新同步与 Cloudflare DDNS 协调。双通道部署、分阶段入网预配与客户端安全指南见：
+- [TR3000-Lite 预配与入网规范](TR3000-LITE-PROVISIONING.md)
+- [TR3000-Lite 双通道远程访问运维指南](TR3000-LITE-REMOTE-ACCESS.md)
+- [WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)
 
 管理 Wi-Fi 不桥接到 plant。首次部署必须在可信串口/本地控制台设置非空 root 密码，并从权限为 `0600` 的 `/etc/config/wireless` 读取该设备生成的管理 SSID/密钥；不要把密钥贴入日志或构建产物。AP 初始化本身不启用 plant HTTPS 或远程管理；控制器只有在非空 root 密码和 AP 初始化标记同时存在时才允许启用 plant HTTPS。首次启动无线设备发现、双频 AP 与 STA 共存、STA 断线期间管理 AP 持续可用、mgmt HTTPS/SSH 登录、plant HTTPS 门禁及 Linux 文件权限仍需真机验证。`wpad-openssl` 固定为必需包，最终配置拒绝其他 `wpad-*` 提供者。
 

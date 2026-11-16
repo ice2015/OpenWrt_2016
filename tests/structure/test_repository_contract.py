@@ -388,6 +388,8 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             "docs/TAILSCALE.md",
             "docs/SINGBOX-SPLIT-ROUTING.md",
             "docs/CLOUDFLARED-ACCESS.md",
+            "docs/TR3000-LITE-PROVISIONING.md",
+            "docs/TR3000-LITE-REMOTE-ACCESS.md",
             "docs/TEST-PLAN.md",
         ]
 

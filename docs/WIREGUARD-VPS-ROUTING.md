@@ -2,7 +2,9 @@
 
 以下地址全是文档占位示例，必须替换为规划后的非重叠地址。不要将私钥、PSK、真实 VPS 地址、客户凭据或同名重叠现场网段写入固件或仓库。
 
-**变体边界：**下文 `wg`/`plant-access.sh` 单隧道命令属于旧版/Full 的手工模型，不是新 Lite 双入口的部署步骤。Lite 第二阶段只完成本地管理、多上行与受限切换通知，WireGuard listener/工业远程访问仍默认关闭；`wg_direct`/`wg_vps`、Cloudflare DDNS、精确 Peer 同步与逐台入网属于第三阶段，不能以本页示例绕过新 Lite 的安全门禁或宣称已部署。
+**变体边界：**下文 `wg`/`plant-access.sh` 单隧道命令属于旧版/Full 的手工单隧道模型。在当前 TR3000-Lite 架构中，系统已实现规范化的 Direct 直连与 VPS 保底双通道 WireGuard 管理、两阶段离线预配与 LuCI 控制界面，详见专项文档：
+- [TR3000-Lite 预配与入网规范](TR3000-LITE-PROVISIONING.md)
+- [TR3000-Lite 双通道远程访问运维指南](TR3000-LITE-REMOTE-ACCESS.md)
 
 示例拓扑：
 

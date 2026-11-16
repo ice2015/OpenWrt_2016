@@ -31,6 +31,13 @@
 - 实际临时 sysfs 链接：只接管 USB 父设备的 `rndis_host`/`cdc_ether`，拒绝 PCI/虚拟/NCM/QMI/MBIM/缺驱动、非法 VID/PID 和路径逃逸；双候选失败关闭，移除后收敛，既有手工/受保护接口不被抢占。
 - 原子锁、跨 plant/USB 的 network 文件串行、插入期间拔出、过期 remove 在重插后到达、重复事件、长 plant 事务导致事件等待超时后的守护进程重扫；失败时恢复原 network，不删除其他进程锁。
 - AP/STA 共存配置不轮换 AP 凭据；只读状态接口的参数/字段白名单、无无线密钥/令牌输出；UBus/iwinfo 的 radio/实际 PHY/信道被选择性读取，未知值不从名字猜测。Node 执行真实页面 load/render，检查窄 ACL、标准 LuCI 导航、状态/回滚警告和非预期返回脱敏。
+- Lite 双 WireGuard 与 DDNS 离线自动化覆盖：
+  - 空 root 密码门禁：root 密码未设或密码为空时，控制器拒绝任何 Direct 监听与远程同步；
+  - 未入网状态阻断：缺少 `/etc/tr3000-lite/enrolled` 时，WAN UDP 51820 保持关闭，拒绝建立外部规则；
+  - 清单重复与非法输入测试：重复设备 ID、重叠 IP 段、非法 Base64 密钥格式被 `tools/tr3000_lite_provision.py` 立即拒绝；
+  - 源地址精确白名单：任何非 `/32` 源地址（如 `0.0.0.0/0`、`/24`、组播/环回）在控制器解析阶段立即撤销全部候选规则，绝不放行宽网段；
+  - Cloudflare DDNS 脱敏与异常状态处理：Token 与完整 URL 严禁进入返回 JSON 或日志；私网/CGNAT WAN 正确报告 `private_or_cgnat` 并阻止无效公网更新；API 速率超限或网络超时返回 `error` 且不崩溃；
+  - 凭据脱敏核验：测试套件遍历所有控制器、RPC 输出、状态文件与构建工件，断言无任何真实私钥或明文 Token 泄漏。
 
 ## 必须在已备份的实验设备验证
 
@@ -38,7 +45,15 @@
 2. 用 `ip link` 并逐个插拔网线/观察链路灯验证实际 WAN、plant 端口映射；核对 DTS，不得仅以 Linux 接口编号推断物理插孔。
 3. 工业接口抓包确认 DHCPv4 Offer/Ack 为零，DHCPv6、RA、NDP 服务未发送；管理 AP 与 plant 不桥接。
 4. Lite 隔离上电，确认 `eth1` 默认 `192.168.10.254/24`，与 `br-mgmt` 的 `192.168.77.1/24` 分离。通过可信控制台设置 root 密码、私下取得本机随机 AP 凭据；确认双 radio 加密 AP、管理网 DHCP `.100–.149`、mgmt HTTPS/SSH 和重复启动不轮换凭据。空 root 或缺 AP 标记时 plant HTTPS 必须关闭，满足两项门禁并显式启用后仅 443 可达，80/22 不开放。**接入 HUB 前人工确认 plant 地址未占用且网段适用**；不适用先隔离修改。
-5. WAN DHCP 上网；从标准 LuCI 加入明确批准的加密 STA（保留管理 AP，禁用替换无线配置选项、显式启用 wwan），再加入已核验 RNDIS/CDC-Ether USB 路由棒。验证10/20/30、3失败/2成功、恢复抢占、DHCP/网关与 DNS。第二阶段只有稳定切换通知；双 WireGuard 重新握手和 DDNS 更新留给第三阶段，不提前标记完成。
+5. WAN DHCP 上网；从标准 LuCI 加入明确批准的加密 STA（保留管理 AP，禁用替换无线配置选项、显式启用 wwan），再加入已核验 RNDIS/CDC-Ether USB 路由棒。验证10/20/30、3失败/2成功、恢复抢占、DHCP/网关与 DNS。
+6. Lite 双 WireGuard 与两阶段入网真机全流程验证：
+   - 从纯净固件镜像启动，本地控制台生成 `prepare` 指纹；在离线工作站渲染生成特定设备 bundle；
+   - 执行 `tr3000-lite-enroll apply`，验证私钥权限 `0600`、UCI 规则合并与 nftables 规则链链首 prepend 注入；
+   - VPS 路由与握手：在以太网、STA 及 4G RNDIS 路由棒三种上行场景下分别验证 VPS 出站握手自愈，确认 `PersistentKeepalive = 25` 保持打洞，远程通过 VPS 访问 LuCI 后台与 SSH；
+   - Cloudflare DDNS：在具备真实公网 IPv4 的宽带线路上验证 DDNS A 记录更新，确认 gray-cloud（DNS-only）生效，Direct 端口可达；
+   - Direct 故障及手动切换：模拟公网断开或 DDNS 故障，在工程师终端关闭 Direct 隧道并切换至 VPS 隧道，确认通信恢复，验证双通道互斥原则；
+   - 现场工业网段变更：在 LuCI 修改 plant 网段为 `192.168.20.0/24`，核验控制器自动更新 SNAT 目标网段，并在客户端同步修改 AllowedIPs 后恢复对新子网 PLC 的访问；
+   - 吊销与断电恢复：在 VPS 端注销 Peer 及 Cloudflare 吊销 Token，确认网关自动阻断未授权访问；执行硬断电重启，确认所有权限配置完整持久化保存。
 6. Lite 管理 AP PC 对无默认网关的模拟 PLC 固定 IP：默认 ICMP Echo/TCP 可达，抓包核对 SNAT 为当前 plant IP 及 conntrack 回程；关闭 mgmt 开关后拒绝，UDP/其他网段/广播发现始终拒绝。WireGuard 工业访问默认关闭，其获准 Peer/目标端口与 SNAT 的验证属于后续远程里程碑，不计为本次已实现。
 7. 验证 plant、WAN 与 WireGuard 之间的主动新建连接均按默认策略拒绝；WAN 不能访问 LuCI/SSH。
 8. 模拟酒店/手机上行与 plant 重叠，确认脚本阻止配置，且不安装冲突路由；模拟 ARP 地址冲突，确认 network/firewall 两文件均不变。通过“工业 LAN”验证/应用有效 CIDR，确认 mgmt 规则与 SNAT 同步变更，页面会话断开警告及真实返回状态正确。

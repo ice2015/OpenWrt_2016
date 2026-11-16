@@ -160,7 +160,7 @@ IMAGE_MANIFESTS=$(find "$TARGET_DIR" -maxdepth 1 -type f \
 	-name '*cudy_tr3000-v1-ubootmod.manifest' | sort)
 [ "$(printf '%s\n' "$IMAGE_MANIFESTS" | awk 'NF { n++ } END { print n+0 }')" -eq 1 ] ||
 	fail "expected exactly one image package manifest for cudy_tr3000-v1-ubootmod"
-for package in luci-app-tr3000-lite wpad-openssl kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether; do
+for package in luci-app-tr3000-lite wpad-openssl kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether ddns-scripts ddns-scripts-cloudflare luci-app-ddns wireguard-tools kmod-wireguard; do
 	awk -v package="$package" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS" ||
 		fail "image manifest is missing required package: $package"
 done
@@ -232,7 +232,18 @@ usb_hotplug=/etc/hotplug.d/net/90-tr3000-lite-usbwan
 usb_multiple_candidates=fail-closed
 usb_periodic_rescan=on-daemon-round
 wireless_client_config=standard-luci-only
+allow_wireguard_direct=0
+allow_wireguard_vps=0
+remote_controller=/usr/sbin/tr3000-lite-remote
+ddns_status=/usr/sbin/tr3000-lite-ddns-status
+enroll_script=/usr/sbin/tr3000-lite-enroll
+remote_schema_version=1
+ddns_schema_version=1
+enroll_schema_version=1
 EOF
+if find "$ARTIFACT_DIR" -type f \( -name '*.bundle' -o -name '*.key' -o -name '*token*' -o -name '*inventory*' \) | grep -q .; then
+	fail "forbidden secret or staging file entered the Artifact directory"
+fi
 if [ -f "$TARGET_DIR/packages/Packages.manifest" ]; then
 	grep '^Package: ' "$TARGET_DIR/packages/Packages.manifest" |
 		sed 's/^Package: //' | sort -u > "$ARTIFACT_DIR/target-package-index.txt"
