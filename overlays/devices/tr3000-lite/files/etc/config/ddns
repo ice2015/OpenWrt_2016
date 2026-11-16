@@ -1,0 +1,6 @@
+# No hostname, zone or token in the generic image. Staging supplies private data.
+config service 'tr3000_direct'
+	option enabled '0'
+	option use_ipv6 '0'
+	option use_https '1'
+	option service_name 'cloudflare.com-v4'

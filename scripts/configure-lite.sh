@@ -134,8 +134,8 @@ grep -Fq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' "$SOU
 [ "$(grep -c '^CONFIG_TARGET_mediatek_filogic_DEVICE_.*=y$' "$SOURCE_DIR/.config")" -eq 1 ] ||
 	fail "configuration must select exactly one mediatek filogic device profile"
 for package in \
-	ca-bundle curl ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
-	kmod-usb-net-rndis kmod-wireguard luci luci-app-tr3000-lite \
+	ca-bundle curl ddns-scripts ddns-scripts-cloudflare ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
+	kmod-usb-net-rndis kmod-wireguard luci luci-app-ddns luci-app-tr3000-lite \
 	luci-i18n-base-zh-cn luci-proto-wireguard luci-ssl-openssl \
 	openssh-server openssh-sftp-server tcpdump-mini ubi-utils wireguard-tools wpad-openssl
 do

@@ -69,6 +69,7 @@ def lite_base_config() -> str:
         "luci", "luci-app-tr3000-lite", "luci-i18n-base-zh-cn", "luci-proto-wireguard",
         "luci-ssl-openssl", "openssh-server", "openssh-sftp-server",
         "tcpdump-mini", "ubi-utils", "wireguard-tools", "wpad-openssl",
+        "ddns-scripts", "ddns-scripts-cloudflare", "luci-app-ddns",
     )
     lines = [
         "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
@@ -406,6 +407,36 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(f'CONFIG_CCACHE_DIR="{requested_cache}"', generated_config)
         self.assertNotIn('CONFIG_CCACHE_DIR="/workdir/.ccache"', generated_config)
+
+    def test_lite_config_selects_cloudflare_ddns_packages(self) -> None:
+        packages=("ddns-scripts", "ddns-scripts-cloudflare", "luci-app-ddns")
+        base=lite_base_config()
+        for package in packages:
+            base=base.replace(f"CONFIG_PACKAGE_{package}=y\n", "")
+        result, config, assets=run_lite_configure(base)
+        self.assertEqual(0,result.returncode,result.stderr)
+        for package in packages:
+            self.assertIn(f"CONFIG_PACKAGE_{package}=y",config.splitlines())
+        self.assertIn("files/etc/config/ddns",assets)
+        sections=uci_sections(assets["files/etc/config/ddns"])
+        self.assertEqual(1,len(sections))
+        service=sections[0]
+        self.assertEqual("service",service[".type"])
+        self.assertEqual("tr3000_direct",service[".name"])
+        self.assertEqual("0",service["enabled"])
+        self.assertEqual("0",service["use_ipv6"])
+        self.assertEqual("1",service["use_https"])
+        self.assertEqual("cloudflare.com-v4",service["service_name"])
+        self.assertEqual({".type",".name","enabled","use_ipv6","use_https","service_name"},set(service),
+                         "generic DDNS must contain no hostname/token/zone or credential placeholders")
+
+    def test_lite_config_requires_each_pinned_ddns_package_after_defconfig(self) -> None:
+        for package in ("ddns-scripts", "ddns-scripts-cloudflare", "luci-app-ddns"):
+            with self.subTest(package=package):
+                result,_,_=run_lite_configure(
+                    lite_base_config().replace(f"CONFIG_PACKAGE_{package}=y\n", ""), seed_contents="")
+                self.assertNotEqual(0,result.returncode)
+                self.assertIn(f"required Lite package was not selected: {package}",result.stderr)
 
     def test_lite_config_installs_lite_overlay_after_shared_files(self) -> None:
         result, _, assets = run_lite_configure(lite_base_config())
