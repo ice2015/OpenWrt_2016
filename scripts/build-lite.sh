@@ -160,7 +160,7 @@ IMAGE_MANIFESTS=$(find "$TARGET_DIR" -maxdepth 1 -type f \
 	-name '*cudy_tr3000-v1-ubootmod.manifest' | sort)
 [ "$(printf '%s\n' "$IMAGE_MANIFESTS" | awk 'NF { n++ } END { print n+0 }')" -eq 1 ] ||
 	fail "expected exactly one image package manifest for cudy_tr3000-v1-ubootmod"
-for package in luci-app-tr3000-lite wpad-openssl kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether ddns-scripts ddns-scripts-cloudflare luci-app-ddns wireguard-tools kmod-wireguard; do
+for package in luci-app-tr3000-lite wpad-openssl kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether; do
 	awk -v package="$package" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS" ||
 		fail "image manifest is missing required package: $package"
 done

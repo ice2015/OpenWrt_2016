@@ -2,13 +2,15 @@ from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
-from tools.manifest import ManifestError, load_catalog, list_targets, main, validate_catalog
-
-
 ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.manifest import ManifestError, load_catalog, list_targets, main, validate_catalog
 
 
 class ManifestTests(unittest.TestCase):
