@@ -2,12 +2,14 @@
 
 以下地址全是文档占位示例，必须替换为规划后的非重叠地址。不要将私钥、PSK、真实 VPS 地址、客户凭据或同名重叠现场网段写入固件或仓库。
 
+**变体边界：**下文 `wg`/`plant-access.sh` 单隧道命令属于旧版/Full 的手工模型，不是新 Lite 双入口的部署步骤。Lite 第二阶段只完成本地管理、多上行与受限切换通知，WireGuard listener/工业远程访问仍默认关闭；`wg_direct`/`wg_vps`、Cloudflare DDNS、精确 Peer 同步与逐台入网属于第三阶段，不能以本页示例绕过新 Lite 的安全门禁或宣称已部署。
+
 示例拓扑：
 
 - 现场 PLC/HMI：`192.168.10.0/24`，无默认网关。
 - TR3000 plant 地址：安装人员核验冲突后设置为 `192.168.10.254/24`。
 - WireGuard：VPS `10.77.0.1`，TR3000 `10.77.0.2/32`，工程师 `10.77.0.10/32`。
-- 外层上行：WAN 首选；Wi-Fi STA 和 USB 手机共享仅在现场验证设备/驱动后加入。
+- 外层上行：WAN 首选；明确批准的加密 Wi-Fi STA 次之；Lite 默认 USB 路径仅支持 RNDIS/CDC-Ether DHCP 路由棒，不承诺任意手机共享、NCM/QMI/MBIM 或串口拨号。
 
 ## 路由与授权模型
 
@@ -48,7 +50,19 @@ TR3000 -> VPS peer AllowedIPs: 10.77.0.1/32, <approved-engineer-tunnel-/32>
 
 WAN UDP 51820 listener 在默认防火墙中禁用；只有选定 VPN 部署模式、确认外层端口后才可本地启用该单一传输端口。管理端口不能从 WAN 暴露。若 TR3000 作为客户端发起隧道，优先使用出站握手而非开放 listener。
 
-## 上行优先级和重连
+## 新 Lite 的多上行边界
+
+Lite 专用实现不改变 Full 共享 watcher。`wan/wwan/usbwan` 固定基础 metric10/20/30，默认每轮休眠15秒、连续3个全失败轮次降级1000、连续2个成功轮次恢复。探测和锁等待另占时间；轮数不是固定秒数。每接口可配置允许的 IPv4 探测目标；carrier、netifd up、DHCP 地址、默认网关、探测成功和 VPS 握手必须分别判断。
+
+STA 通过标准 LuCI 加入明确批准的加密热点，保留管理 AP，不能使用“替换无线配置”；已有 `wwan` 默认 auto0，需在标准接口页显式启用。共 PHY 时 AP 信道跟随 STA，扫描/重连可能短暂中断管理连接，不能承诺 RF 无间断。USB 按 sysfs 驱动及 USB 父设备识别，不猜固定网卡名；双候选失败关闭，事件遗漏后由守护轮次重新枚举。
+
+重协调器在变更前后重读 netifd 当前租约，只处理精确指纹匹配的默认路由并记下自身临时路由；DHCP 续租后再次收敛，不盲删全部默认路由或覆盖外部配置。更优外部默认路由仍保留，页面发出警告而不假称托管 WAN 正在承载出口。只读“Multi-uplink status”显示健康、基础/有效 metric、地址/网关、USB 驱动/VID/PID 和实际 radio/PHY/信道，不接收或展示密钥。
+
+稳定出口变化目前只发送 `tr3000-lite.uplink-changed` 通知；后续第三阶段才为已完整配置/启用的双 WireGuard 角色和标准 DDNS 添加处理。不能用通知成功代替真实 DNS 更新、VPS 可达或握手证据。最终测试须逐一断开/恢复三个上行、模拟 DHCP renew、VPS 不可达和 DNS 故障，再验证最新握手与授权；`PersistentKeepalive` 只是 NAT 保活辅助。
+
+## 旧版 / Full 上行重连参考（不用于新 Lite）
+
+以下描述保留旧共享脚本的操作背景，Full 本次未改动，仍需独立真机验收。
 
 `lite-uplink-watch` 每 15 秒对 WAN、STA、USB 接口的 IPv4 路由分别做两个 ICMP 探测；连续 3 次失败后将该出口 metric 临时增加 1000，连续 2 次成功后恢复原 metric。默认基础 metric 为 10/20/30。默认逻辑接口名是 `wan`、`wwan` 和 `usbwan`；STA/USB 物理设备需核验后在本地配置并启用。仅 carrier/link up 或 DHCP 成功不能证明互联网可达；ICMP 被阻断时应换用现场允许的探测地址。
 

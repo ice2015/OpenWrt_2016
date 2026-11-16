@@ -59,21 +59,33 @@
 
 在标准无线页面扫描并人工选择**已明确批准的加密热点**，使用 `wwan` 网络并分配到 `wan` 防火墙 zone。**不要勾选“Replace wireless configuration / 替换无线配置”**，该上游选项会删除同一射频上的现有 AP；不要删除管理 AP 或禁用其 radio。随后在标准接口页面为 `wwan` 启用“开机自动运行”，保存并应用；预置 `wwan` 为 DHCP、metric 20、`auto=0`，标准 Join 只绑定接口，不会清除现有 `auto=0`。撤除 STA 时仅删除 Client section，需要时停用 `wwan`，保留管理 AP 与 radio。
 
-优先选择不同射频承载 AP 和 Client；不根据 `radio0`/`radio1` 名字猜测频段。共用射频时，AP 信道跟随 STA，扫描、漫游或重连可能短暂中断管理连接，不保证 RF 无间断。多个已批准热点可通过标准页面保存，密钥仅保留在设备私有配置；此阶段不实现自动选择未知热点或自动轮换已保存热点的功能。若操作者故意选择开放网络，须先确认风险，本项目默认部署不允许这样做。实际 radio、信道及共享射频状态将由多上行状态页显示；本段不构成已通过真机并发验证的声明。
+优先选择不同射频承载 AP 和 Client；不根据 `radio0`/`radio1` 名字猜测频段。共用射频时，AP 信道跟随 STA，扫描、漫游或重连可能短暂中断管理连接，不保证 RF 无间断。多个已批准热点可通过标准页面保存，密钥仅保留在设备私有配置；此阶段不实现自动选择未知热点或自动轮换已保存热点的功能。若操作者故意选择开放网络，须先确认风险，本项目默认部署不允许这样做。“网络 → TR3000 Lite → Multi-uplink status”显示实际 radio、PHY、运行信道和共享射频警告；未知信道不根据配置值或 radio 名字猜测。本段不构成已通过真机并发验证的声明。
 
-固件包含轻量 `lite-uplink-watch` procd 服务：每 15 秒区分 netifd 接口状态和两个 IPv4 ping 探测结果；连续 3 次全部失败后将该出口默认路由 metric 暂时增加 1000，连续 2 次恢复后还原。WAN、STA、USB 的基础 metric 为 10/20/30；WAN 恢复会自动抢回优先级。实际无线 STA/USB 设备仍需安装人员核验并启用，默认逻辑接口为 `wwan`/`usbwan` 且不自动启动，不会猜测设备名。ICMP 探测只表示探测地址可达；若现场网络屏蔽 ICMP，应选择允许探测的目标，并验证失联、恢复、DNS 和路由收敛。
+### USB 4G：只自动接管已支持的 USB Ethernet
 
-默认路由出口发生变化且 WireGuard 接口已启用时，服务会重启 `wg` 网络接口以触发重新握手；Peer 仍建议按现场 NAT 情况设置 `PersistentKeepalive = 25`。必须对真实上行切换做测试，不能把链路 up 等同于 VPS 可达。见[WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)。
+默认只支持由设备自身完成 SIM/APN/蜂窝拨号、表现为 `rndis_host` 或 `cdc_ether` 普通 USB 网卡并提供 DHCP 的路由棒。热插拔根据真实 sysfs USB 父设备和驱动识别，不猜 `usb0`；PCI/虚拟网卡、NCM、QMI、MBIM、传统串口拨号不在默认范围。自动绑定后启用 `usbwan`；拔出后仅清理本模块拥有的绑定，不抢占 WAN、plant、mgmt、wwan 或手工接管的接口。
+
+同时出现两台受支持候选设备时，自动路径失败关闭，不会任选第一台；移除多余设备后重试。确需保留多台时必须先由管理员显式规划和手工接管接口，不能依靠自动选择。热插拔事件使用锁；遇到正在应用的工业 LAN 事务时会等待或暂缓，守护进程每轮再做幂等 USB 重扫，避免一次事件遗漏后永远不能恢复。USB 诊断显示驱动、VID/PID、绑定或歧义/阻止状态，不输出 SIM、密码或密钥。
+
+### 健康检查、优先级和只读状态
+
+Lite 专用 `lite-uplink-watch` procd 服务与 Full 的旧共享实现隔离。`wan → wwan → usbwan` 的固定基础 metric 为 `10/20/30`；每轮对各接口配置的 IPv4 目标执行 ICMP 探测，任一目标成功即算该轮成功。默认连续 **3 个失败轮次**把该出口默认路由 metric 增加 1000，连续 **2 个成功轮次**恢复；优先级较高的健康出口恢复后重新优先。配置 `/etc/config/lite-uplink-watch` 的 `globals` 可调整失败/恢复轮数（1–100）及轮间休眠（15–300 秒），每接口最多 8 个有效 IPv4 探测目标。轮次还包含探测/重载耗时，不能把 3 轮误认为固定 45 秒。
+
+接口状态、DHCP 地址/网关和 Internet 探测分别显示。无默认路由/有效网关时标为不可用；ICMP 被阻断的可用网络应选现场允许的备用目标，不会自动猜测公共服务。守护进程在 DHCP 续租和应用前后重读 netifd 数据，原子保存状态并按精确设备/网关/源地址/metric 记录清理自己的临时路由，不盲删全部默认路由。已有更优或等优外部默认路由不被改动，页面会警告并不宣称本模块选定了实际出口；不支持的策略/多路径路由配置须管理员检查，不能依靠本模块重写。
+
+只读“Multi-uplink status”页显示接口、netifd link、地址/网关、基础/有效 metric、健康状态、活动出口、USB 信息及 AP/STA 的实际 radio/PHY/信道。手动“Refresh status”获取新快照；空白/未知值、状态文件缺失、重协调失败或通知失败都有明确提示。该页不接受 Wi-Fi 密码、不授予任意文件权限，也不改变网络。控制台只读入口为 `/usr/sbin/tr3000-lite-uplink-status --json`；`/usr/sbin/lite-uplink-watch reconcile` 可触发一轮健康重协调。
+
+稳定出口切换后，本里程碑只发送受限的 `tr3000-lite.uplink-changed` 通知；**双 WireGuard 重启、Cloudflare DDNS 和远程授权仍属于第三阶段，不把旧 `wg` 示例当成已部署的双入口**。后续 Peer 的 `PersistentKeepalive = 25` 也不能替代实测路径恢复。见[WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)。
 
 管理 Wi-Fi 不桥接到 plant。首次部署必须在可信串口/本地控制台设置非空 root 密码，并从权限为 `0600` 的 `/etc/config/wireless` 读取该设备生成的管理 SSID/密钥；不要把密钥贴入日志或构建产物。AP 初始化本身不启用 plant HTTPS 或远程管理；控制器只有在非空 root 密码和 AP 初始化标记同时存在时才允许启用 plant HTTPS。首次启动无线设备发现、双频 AP 与 STA 共存、STA 断线期间管理 AP 持续可用、mgmt HTTPS/SSH 登录、plant HTTPS 门禁及 Linux 文件权限仍需真机验证。`wpad-openssl` 固定为必需包，最终配置拒绝其他 `wpad-*` 提供者。
 
 ## 构建与产物
 
-GitHub Actions → **TR3000 Lite firmware** → Run workflow。工作流使用 Ubuntu 22.04、固定源码和 feed revisions；通过 `make defconfig`，最多 4 路并发编译，下载失败重试，编译并行失败时退回单线程。Artifacts 含 sysupgrade 镜像、SHA256、包清单、配置、源码提交、feed 锁定信息、上游许可证和构建日志，以及仅含公开默认值的 `lite-runtime-contract.txt`。构建脚本检查最终 `selected-packages.txt` 必须精确包含 `CONFIG_PACKAGE_luci-app-tr3000-lite=y`；契约记录接口/CIDR、HTTPS 门禁和 DHCP/访问/SNAT 策略，不包含无线密钥或密码，也不证明设备已启动。
+GitHub Actions → **TR3000 Lite firmware** → Run workflow。工作流使用 Ubuntu 22.04、固定源码和 feed revisions；通过 `make defconfig`，最多 4 路并发编译，下载失败重试，编译并行失败时退回单线程。Artifacts 含 sysupgrade 镜像、SHA256、包清单、配置、源码提交、feed 锁定信息、上游许可证和构建日志，以及仅含公开默认值的 `lite-runtime-contract.txt`。构建脚本检查最终 `selected-packages.txt` 必须精确包含 `CONFIG_PACKAGE_luci-app-tr3000-lite=y`，还检查镜像实际包清单含 Lite LuCI、`wpad-openssl` 和三项 USB 网卡包，不含 Ruby/libruby 或额外 USB 网卡类型。`image-packages.manifest` 是该 profile 的完整已安装包/版本清单，`packages-manifest.txt` 是其包名视图；可选 `target-package-index.txt` 只是目标专属软件仓库索引，不能替代镜像清单。`profile.dts` 保存最终验证的 112 MiB 源码布局。契约记录公开接口/CIDR、HTTPS/DHCP/SNAT 策略、上行顺序/阈值、USB 驱动和安装路径，不包含无线密钥或密码，也不证明设备已启动。
 
-仅接受路径 `bin/targets/mediatek/filogic/` 下文件名包含 `cudy_tr3000-v1-ubootmod` 的非空 `sysupgrade.bin`。它是系统升级镜像，不代表 Factory、BL2、FIP 或所有 U-Boot 刷写方式都兼容；不要用于未经确认的启动分区或跨布局保留旧配置升级。
+仅接受路径 `bin/targets/mediatek/filogic/` 下文件名包含 `cudy_tr3000-v1-ubootmod`、不超过 100 MiB、可读 tar 且含正确 `CONTROL` 入口的非空 `sysupgrade.bin`。它是系统升级镜像，不代表 Factory、BL2、FIP 或所有 U-Boot 刷写方式都兼容；不要用于未经确认的启动分区或跨布局保留旧配置升级。
 
-当前 Windows 工作区只能运行仓库验证；固件编译由 Linux GitHub Runner 执行。除源码和配置校验外，本次没有执行真实固件构建、设备启动或联网测试。所有验收项见[测试计划](TEST-PLAN.md)，硬件相关项仍需真机执行。
+固件编译由 Linux GitHub Runner 执行；本地可在 Linux/WSL2 编译，原生 Windows 只用于编辑和仓库验证。第一阶段提交 `012dfec` 的 [Actions 43731565747](https://github.com/ice2015/OpenWrt_2016/actions/runs/43731565747) 已成功，下载后的实际 Squashfs 已核对第一阶段脚本/配置、Lite LuCI 和 `wpad-openssl`，Ruby/libruby 未安装。该历史镜像**不含本次第二/第三阶段全部功能**，不能作为最终交付或当前提交的构建证明。每次新里程碑必须检查对应提交的新构建和产物；设备启动、物理端口、联网、射频并发、真实路由切换及可写 overlay 余量仍待真机验证。所有验收项见[测试计划](TEST-PLAN.md)。
 
 ## 工业现场限制
 

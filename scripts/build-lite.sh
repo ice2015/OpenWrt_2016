@@ -154,10 +154,32 @@ grep -Fq 'reg = <0x5c0000 0x7000000>;' \
 	"$SOURCE_DIR/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts" ||
 	fail "final DTS is not the expected 112 MiB UBI layout"
 
+# The target repository index contains only target-specific packages, not the
+# complete installed image. Use the profile manifest emitted by opkg list-installed.
+IMAGE_MANIFESTS=$(find "$TARGET_DIR" -maxdepth 1 -type f \
+	-name '*cudy_tr3000-v1-ubootmod.manifest' | sort)
+[ "$(printf '%s\n' "$IMAGE_MANIFESTS" | awk 'NF { n++ } END { print n+0 }')" -eq 1 ] ||
+	fail "expected exactly one image package manifest for cudy_tr3000-v1-ubootmod"
+for package in luci-app-tr3000-lite wpad-openssl kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether; do
+	awk -v package="$package" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS" ||
+		fail "image manifest is missing required package: $package"
+done
+if grep -Eq '^(ruby|libruby)([[:space:]]|$)' "$IMAGE_MANIFESTS"; then
+	fail "image manifest contains excluded package ruby/libruby"
+fi
+IMAGE_USB_PACKAGES=$(awk '$1 ~ /^kmod-usb-net/ { print $1 }' "$IMAGE_MANIFESTS" | sort -u)
+EXPECTED_USB_PACKAGES=$(printf '%s\n' kmod-usb-net kmod-usb-net-cdc-ether kmod-usb-net-rndis)
+[ "$IMAGE_USB_PACKAGES" = "$EXPECTED_USB_PACKAGES" ] ||
+	fail "image manifest contains an unexpected USB network package"
+cp "$IMAGE_MANIFESTS" "$ARTIFACT_DIR/image-packages.manifest"
+awk 'NF { print $1 }' "$IMAGE_MANIFESTS" | sort -u > "$ARTIFACT_DIR/packages-manifest.txt"
+cp "$SOURCE_DIR/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts" "$ARTIFACT_DIR/profile.dts"
+
 : > "$ARTIFACT_DIR/firmware/SHA256SUMS"
 IMAGE_COUNT=0
 while IFS= read -r IMAGE; do
 	[ -n "$IMAGE" ] || continue
+	sh "$SCRIPT_DIR/verify-image.sh" --source-dir "$SOURCE_DIR" --image "$IMAGE"
 	file "$IMAGE"
 	install -m 0644 "$IMAGE" "$ARTIFACT_DIR/firmware/"
 	(
@@ -197,16 +219,32 @@ mgmt_to_plant_protocols=icmp-echo,tcp
 mgmt_to_plant_snat=plant-address
 mgmt_plant_bridged=0
 wan_management=off
+uplink_order=wan,wwan,usbwan
+uplink_metrics=10,20,30
+uplink_interval_seconds=15
+uplink_fail_rounds=3
+uplink_recover_rounds=2
+uplink_daemon=/usr/sbin/lite-uplink-watch
+uplink_status=/usr/sbin/tr3000-lite-uplink-status
+uplink_event_hook=/usr/lib/tr3000-lite/uplink-changed
+usb_drivers=rndis_host,cdc_ether
+usb_hotplug=/etc/hotplug.d/net/90-tr3000-lite-usbwan
+usb_multiple_candidates=fail-closed
+usb_periodic_rescan=on-daemon-round
+wireless_client_config=standard-luci-only
 EOF
 if [ -f "$TARGET_DIR/packages/Packages.manifest" ]; then
 	grep '^Package: ' "$TARGET_DIR/packages/Packages.manifest" |
-		sed 's/^Package: //' | sort -u > "$ARTIFACT_DIR/packages-manifest.txt"
+		sed 's/^Package: //' | sort -u > "$ARTIFACT_DIR/target-package-index.txt"
 fi
 cat > "$ARTIFACT_DIR/README.txt" <<EOF
 Build type: TR3000-Lite, 128 MiB NAND, U-Boot Mod, 112 MiB UBI layout
 Device profile: cudy_tr3000-v1-ubootmod
 Images in firmware/ are sysupgrade images, not universal factory/U-Boot flashing images.
 lite-runtime-contract.txt records public expected defaults, not live hardware verification.
+image-packages.manifest is the complete profile image package/version list; packages-manifest.txt is its name-only view.
+target-package-index.txt, if present, is only the target-specific package repository index.
+profile.dts is the final verified 112 MiB profile source; actual writable overlay capacity still requires hardware checks.
 Source SHA: ${SOURCE_SHA:-not-supplied}
 Wrapper/config SHA: $(git -C "$UPSTREAM_DIR" rev-parse HEAD)
 EOF

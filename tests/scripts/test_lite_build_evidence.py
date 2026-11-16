@@ -1,6 +1,8 @@
 """Exercise the real packaging script with offline feed/build stand-ins."""
 import os
 import ipaddress
+import io
+import tarfile
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,7 +13,8 @@ from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, 
 
 
 class LiteBuildEvidenceTests(unittest.TestCase):
-    def run_build(self, *, drop_package=False):
+    def run_build(self, *, drop_package=False, drop_image_package=False,
+                  missing_manifest=False, extra_image_package=None, invalid_image=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, source, upstream, artifacts, fake_bin = [root / name for name in
@@ -20,6 +23,7 @@ class LiteBuildEvidenceTests(unittest.TestCase):
                          upstream / "config", fake_bin):
                 path.mkdir(parents=True)
             shutil.copyfile(ROOT / "scripts/build-lite.sh", repo / "scripts/build-lite.sh")
+            shutil.copyfile(ROOT / "scripts/verify-image.sh", repo / "scripts/verify-image.sh")
             lock = ROOT / "feeds/devices/tr3000-lite.lock"
             (repo / "feeds/devices/tr3000-lite.lock").write_bytes(lock.read_text().encode("utf-8"))
             (source / ".config").write_text(lite_base_config(), encoding="utf-8")
@@ -30,7 +34,26 @@ class LiteBuildEvidenceTests(unittest.TestCase):
             dts.write_text("reg = <0x5c0000 0x7000000>;\n", encoding="utf-8")
             image = source / "bin/targets/mediatek/filogic/test-cudy_tr3000-v1-ubootmod-sysupgrade.bin"
             image.parent.mkdir(parents=True)
-            image.write_bytes(b"offline packaging fixture\n")
+            if invalid_image:
+                image.write_bytes(b"not a sysupgrade archive\n")
+            else:
+                with tarfile.open(image, "w") as archive:
+                    payload=b"BOARD=cudy_tr3000-v1-ubootmod\n"
+                    entry=tarfile.TarInfo("sysupgrade-cudy_tr3000-v1-ubootmod/CONTROL")
+                    entry.size=len(payload)
+                    archive.addfile(entry, io.BytesIO(payload))
+            image_packages=["luci-app-tr3000-lite", "wpad-openssl", "kmod-usb-net",
+                            "kmod-usb-net-rndis", "kmod-usb-net-cdc-ether"]
+            if drop_image_package:
+                image_packages.remove("luci-app-tr3000-lite")
+            if extra_image_package:
+                image_packages.append(extra_image_package)
+            if not missing_manifest:
+                (image.parent / "test-cudy_tr3000-v1-ubootmod.manifest").write_text(
+                    "".join(f"{name} - 1.0\n" for name in image_packages), encoding="utf-8")
+            target_index=image.parent / "packages/Packages.manifest"
+            target_index.parent.mkdir()
+            target_index.write_text("Package: kmod-usb-net\nVersion: 1.0\n", encoding="utf-8")
             # Runtime private configuration must never be copied into evidence.
             wireless = source / "files/etc/config/wireless"
             wireless.parent.mkdir(parents=True)
@@ -109,6 +132,39 @@ else echo offline-commit; fi
         self.assertEqual("root-password-and-ap-initialized", contract["plant_https_gate"])
         self.assertNotIn("SENSITIVE-FIXTURE", "\n".join(evidence.values()))
         self.assertIn("firmware/SHA256SUMS", evidence)
+
+    def test_image_manifest_and_verified_profile_are_archived_not_just_target_index(self):
+        result, evidence=self.run_build()
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertIn("luci-app-tr3000-lite", evidence.get("packages-manifest.txt", "").splitlines())
+        self.assertIn("wpad-openssl", evidence["packages-manifest.txt"].splitlines())
+        self.assertIn("luci-app-tr3000-lite - 1.0", evidence["image-packages.manifest"].splitlines())
+        self.assertEqual("kmod-usb-net\n",evidence["target-package-index.txt"])
+        self.assertEqual("reg = <0x5c0000 0x7000000>;\n",evidence["profile.dts"])
+        contract=dict(line.split("=",1) for line in evidence["lite-runtime-contract.txt"].splitlines())
+        self.assertEqual("wan,wwan,usbwan",contract["uplink_order"])
+        self.assertEqual("10,20,30",contract["uplink_metrics"])
+        self.assertEqual("rndis_host,cdc_ether",contract["usb_drivers"])
+        settings={s[".name"]:s for s in uci_sections((ROOT / "overlays/devices/tr3000-lite/files/etc/config/lite-uplink-watch").read_text())}
+        for option,key in (("interval","uplink_interval_seconds"),("failures","uplink_fail_rounds"),("successes","uplink_recover_rounds")):
+            self.assertEqual(settings["globals"][option],contract[key])
+        self.assertEqual("/usr/sbin/tr3000-lite-uplink-status",contract["uplink_status"])
+        self.assertEqual("/etc/hotplug.d/net/90-tr3000-lite-usbwan",contract["usb_hotplug"])
+        self.assertEqual("on-daemon-round",contract["usb_periodic_rescan"])
+        self.assertNotIn("SENSITIVE-FIXTURE","\n".join(evidence.values()))
+
+    def test_image_evidence_requires_actual_packages_and_valid_sysupgrade(self):
+        for arguments,message in (
+            ({"missing_manifest":True},"exactly one image package manifest"),
+            ({"drop_image_package":True},"image manifest is missing required package"),
+            ({"extra_image_package":"ruby"},"image manifest contains excluded package"),
+            ({"extra_image_package":"kmod-usb-net-cdc-ncm"},"unexpected USB network package"),
+            ({"invalid_image":True},"readable sysupgrade tar archive")):
+            with self.subTest(arguments=arguments):
+                result,evidence=self.run_build(**arguments)
+                self.assertNotEqual(0,result.returncode)
+                self.assertIn(message,result.stderr)
+                self.assertNotIn("lite-runtime-contract.txt",evidence)
 
     def test_final_package_evidence_rejects_missing_lite_luci_package(self):
         result, evidence = self.run_build(drop_package=True)
