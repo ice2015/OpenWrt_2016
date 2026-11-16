@@ -75,6 +75,9 @@ elif command=='ip':
             d['routes']=[r for r in d['routes'] if r not in found]
         save()
     else: sys.exit(2)
+elif command in ('ifdown','ifup'):
+    if len(args)!=1 or args[0] not in ('wg_direct','wg_vps'): sys.exit(2)
+    d.setdefault('wg_actions',[]).append([command,*args]); save()
 elif command=='logger': pass
 elif command=='sleep':
     d['sleep_count']=d.get('sleep_count',0)+1
@@ -104,7 +107,7 @@ class UplinkTests(unittest.TestCase):
         for path in ('bin','etc/config','var/run/tr3000-lite','usr/lib/tr3000-lite'):
             (self.root/path).mkdir(parents=True)
         (self.root/'bin/fake.py').write_text(FAKE)
-        for command in ('uci','ubus','jsonfilter','ping','ip','logger','sleep'):
+        for command in ('uci','ubus','jsonfilter','ping','ip','logger','sleep','ifdown','ifup'):
             path=self.root/'bin'/command
             path.write_text('#!/bin/sh\nexec "$UPLINK_PYTHON" -S "$UPLINK_FIXTURE/bin/fake.py" '+command+' "$@"\n')
             path.chmod(0o755)
@@ -139,7 +142,7 @@ class UplinkTests(unittest.TestCase):
                                       'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text=text.replace('/usr/lib/tr3000-lite/uplink-lib.sh',str(LIB))
         text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
-        for prefix in ('/var/run','/etc/config','/usr/lib/tr3000-lite/uplink-changed','/etc/hotplug.d/net'):
+        for prefix in ('/var/run','/etc/config','/usr/lib/tr3000-lite/uplink-changed','/etc/hotplug.d/net','/usr/sbin/tr3000-lite-remote'):
             text=text.replace(prefix,str(self.root)+prefix)
         path=self.root/'watch.sh'; path.write_text(text)
         result=subprocess.run([bash_executable(),str(path),*(args or ('reconcile',))],capture_output=True,text=True,
@@ -361,11 +364,45 @@ class UplinkTests(unittest.TestCase):
                 self.assertFalse(self.status()['reconcile_error'])
                 self.assertEqual('wan',self.status()['active'])
 
+    def test_periodic_daemon_runs_remote_guard_after_health_snapshot(self):
+        hook=self.root/'usr/sbin/tr3000-lite-remote'; hook.parent.mkdir(parents=True)
+        hook.write_text('#!/bin/sh\n[ "$1" = sync ] && [ -s "$UPLINK_FIXTURE/var/run/tr3000-lite/uplink/status.json" ] || exit 2\nprintf checked > "$UPLINK_FIXTURE/remote-guard"\n')
+        hook.chmod(0o755)
+        self.run_watch('daemon',success=False)
+        self.assertTrue((self.root/'remote-guard').is_file(),'periodic guard did not converge missed remote changes')
+
+    def test_uplink_event_restarts_only_configured_enabled_wg_roles(self):
+        remote=self.root/'usr/sbin/tr3000-lite-remote'; remote.parent.mkdir(parents=True)
+        remote.write_text('''#!/bin/sh
+case "$*" in
+sync) [ ! -e "$UPLINK_FIXTURE/remote-fails" ] ;;
+'status --json') printf '%s\\n' '{"schema_version":1,"roles":{"wg_direct":{"configured":true,"enabled":true},"wg_vps":{"configured":true,"enabled":false}},"private_key":"PRIVATE-ERROR"}' ;;
+*) exit 2 ;;
+esac
+''')
+        remote.chmod(0o755)
+        self.data['config'].update({'network.wg_direct.proto':'wireguard','network.wg_direct.auto':'1',
+                                    'network.wg_vps.proto':'wireguard','network.wg_vps.auto':'0'}); self.save()
+        text=(ROOT/'scripts/tr3000-lite-uplink-changed.sh').read_text().replace(
+            'PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
+        text=text.replace('/usr/sbin/tr3000-lite-remote',str(remote))
+        script=self.root/'event.sh'; script.write_text(text)
+        env=dict(os.environ,UPLINK_FIXTURE=str(self.root),UPLINK_PYTHON=sys.executable)
+        result=subprocess.run([bash_executable(),str(script),'wwan','wan'],env=env,capture_output=True,text=True)
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertNotIn('PRIVATE-ERROR',result.stdout+result.stderr)
+        self.assertEqual([['ifdown','wg_direct'],['ifup','wg_direct']],self.load().get('wg_actions',[]))
+        (self.root/'remote-fails').touch()
+        result=subprocess.run([bash_executable(),str(script),'usbwan','wwan'],env=env,capture_output=True,text=True)
+        self.assertNotEqual(0,result.returncode)
+        self.assertEqual(2,len(self.load().get('wg_actions',[])),'failed sync must not restart any WG role')
+
     def test_event_hook_emits_only_validated_public_transition(self):
         hook=ROOT/'scripts/tr3000-lite-uplink-changed.sh'
         self.assertTrue(hook.is_file(), 'missing public uplink event hook')
         text=hook.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin',
                                      'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
+        text=text.replace('/usr/sbin/tr3000-lite-remote',str(self.root/'usr/sbin/tr3000-lite-remote'))
         script=self.root/'public-hook.sh'; script.write_text(text)
         env=dict(os.environ,UPLINK_FIXTURE=str(self.root),UPLINK_PYTHON=sys.executable)
         result=subprocess.run([bash_executable(),str(script),'wwan','wan'],env=env,capture_output=True,text=True)

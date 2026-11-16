@@ -183,6 +183,10 @@ install -m 0755 "$SCRIPT_DIR/tr3000-lite-uplink-changed.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/uplink-changed"
 install -m 0755 "$SCRIPT_DIR/tr3000-lite-uplink-status.sh" \
 	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-uplink-status"
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-remote.sh" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-remote"
+install -m 0644 "$SCRIPT_DIR/tr3000-lite-remote-lib.sh" \
+	"$SOURCE_DIR/files/usr/lib/tr3000-lite/remote-lib.sh"
 install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \

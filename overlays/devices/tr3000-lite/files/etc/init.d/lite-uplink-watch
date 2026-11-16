@@ -10,7 +10,7 @@ start_service() {
 }
 
 service_triggers() {
-	procd_add_reload_trigger network lite-uplink-watch
+	procd_add_reload_trigger network lite-uplink-watch tr3000-lite-remote firewall
 }
 
 reload_service() {

@@ -14,6 +14,7 @@ esac
 STATE=/var/run/tr3000-lite/uplink
 EVENT=/usr/lib/tr3000-lite/uplink-changed
 USB_HOOK=/etc/hotplug.d/net/90-tr3000-lite-usbwan
+REMOTE_GUARD=/usr/sbin/tr3000-lite-remote
 log() { logger -t tr3000-lite-uplink "$1" 2>/dev/null || :; }
 [ ! -L /var/run/tr3000-lite ] && [ ! -L "$STATE" ] || exit 1
 mkdir -p "$STATE" && chmod 0700 /var/run/tr3000-lite "$STATE" || exit 1
@@ -287,6 +288,9 @@ if [ "$1" = daemon ]; then
 				log 'USB reconciliation deferred until next interval'
 		fi
 		reconcile || { log 'uplink reconciliation failed; retrying on next interval'; cleanup; LOCKED=0; }
+		if [ -x "$REMOTE_GUARD" ] && [ ! -L "$REMOTE_GUARD" ]; then
+			"$REMOTE_GUARD" sync >/dev/null 2>&1 || log 'remote authorization needs inspection'
+		fi
 		sleep "${INTERVAL:-15}"
 	done
 else reconcile; fi

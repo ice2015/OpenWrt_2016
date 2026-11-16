@@ -1,0 +1,6 @@
+# Generic firmware has no peers, keys, identity, endpoint or remote privilege.
+config policy 'access'
+	option allow_luci '0'
+	option allow_plant '0'
+	option direct_enabled '0'
+	option vps_enabled '0'

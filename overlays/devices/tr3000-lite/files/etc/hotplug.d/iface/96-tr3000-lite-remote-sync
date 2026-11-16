@@ -1,0 +1,8 @@
+#!/bin/sh
+# Owned role/plant changes converge under the shared transaction lock. The
+# periodic daemon retries missed/busy events; sync never restarts interfaces.
+case "${ACTION:-}:${INTERFACE:-}" in
+	ifup:wg_direct|ifdown:wg_direct|ifupdate:wg_direct|ifup:wg_vps|ifdown:wg_vps|ifupdate:wg_vps|ifup:plant|ifdown:plant|ifupdate:plant)
+		/usr/sbin/tr3000-lite-remote sync >/dev/null 2>&1 || :
+		;;
+esac

@@ -33,6 +33,7 @@ SCRIPTS = (
     "tr3000-lite-uplink-watch.sh",
     "tr3000-lite-uplink-changed.sh",
     "tr3000-lite-uplink-status.sh",
+    "tr3000-lite-remote.sh",
     "tr3000-lite-plant.sh",
     "tr3000-lite-plant-lib.sh",
 )
@@ -299,6 +300,8 @@ class ScriptInterfaceTests(unittest.TestCase):
             "tr3000-lite-uplink-changed.sh",
             "tr3000-lite-uplink-status.sh",
             "tr3000-lite-remote-lib.sh",
+            "tr3000-lite-remote.sh",
+            "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync",
             "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
             "../overlays/devices/tr3000-lite/files/etc/init.d/lite-uplink-watch",
             "../overlays/devices/tr3000-lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
