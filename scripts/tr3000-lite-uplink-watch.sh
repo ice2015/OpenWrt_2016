@@ -26,13 +26,15 @@ if [ "$1" = status ]; then
 	exit 0
 fi
 
+# Failure paths retain a known safe retry cadence, never rejected input.
+INTERVAL=15
 config_value() { uci -q get "$1" 2>/dev/null; }
 validate_config() {
-	FAILURES=$(config_value lite-uplink-watch.globals.failures || printf 3)
-	SUCCESSES=$(config_value lite-uplink-watch.globals.successes || printf 2)
-	INTERVAL=$(config_value lite-uplink-watch.globals.interval || printf 15)
-	uplink_uint "$FAILURES" 1 100 && uplink_uint "$SUCCESSES" 1 100 &&
-		uplink_uint "$INTERVAL" 15 300 || return 1
+	cfg_failures=$(config_value lite-uplink-watch.globals.failures || printf 3)
+	cfg_successes=$(config_value lite-uplink-watch.globals.successes || printf 2)
+	cfg_interval=$(config_value lite-uplink-watch.globals.interval || printf 15)
+	uplink_uint "$cfg_failures" 1 100 && uplink_uint "$cfg_successes" 1 100 &&
+		uplink_uint "$cfg_interval" 15 300 || return 1
 	for cfg_name in wan wwan usbwan; do
 		case "$cfg_name" in wan) cfg_metric=10 ;; wwan) cfg_metric=20 ;; usbwan) cfg_metric=30 ;; esac
 		[ "$(config_value "network.$cfg_name.metric")" = "$cfg_metric" ] || return 1
@@ -48,6 +50,9 @@ validate_config() {
 		set +f
 		[ "$cfg_count" -le 8 ] || return 1
 	done
+	FAILURES=$cfg_failures
+	SUCCESSES=$cfg_successes
+	INTERVAL=$cfg_interval
 }
 
 LOCKED=0
@@ -216,9 +221,26 @@ write_status() {
 }
 
 reconcile() {
-	validate_config || { log 'invalid uplink configuration'; return 1; }
 	mkdir "$STATE/lock" 2>/dev/null || return 1
 	LOCKED=1
+	if ! validate_config; then
+		# Publish the failure under the same lock, retaining verified rows and
+		# counters. An old successful snapshot must not hide rejected config.
+		PREVIOUS=$(cat "$STATE/active" 2>/dev/null || :)
+		case "$PREVIOUS" in ''|wan|wwan|usbwan) ;; *) PREVIOUS= ;; esac
+		ACTIVE=$PREVIOUS
+		EVENT_ERROR=$(cat "$STATE/event-error" 2>/dev/null || :)
+		case "$EVENT_ERROR" in true|false) ;; *) EVENT_ERROR=false ;; esac
+		old_status=$(cat "$STATE/status.json" 2>/dev/null || :)
+		FOREIGN_DEFAULT=$(uplink_field "$old_status" '@.foreign_default' || :)
+		case "$FOREIGN_DEFAULT" in true|false) ;; *) FOREIGN_DEFAULT=false ;; esac
+		RECONCILE_ERROR=true
+		write_status || return 1
+		rmdir "$STATE/lock" || return 1
+		LOCKED=0
+		log 'invalid uplink configuration'
+		return 1
+	fi
 	RECONCILE_ERROR=false
 	for pair in wan:10 wwan:20 usbwan:30; do
 		reconcile_interface "${pair%:*}" "${pair#*:}" || RECONCILE_ERROR=true

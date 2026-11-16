@@ -76,7 +76,12 @@ elif command=='ip':
         save()
     else: sys.exit(2)
 elif command=='logger': pass
-elif command=='sleep': os.kill(os.getppid(),signal.SIGTERM)
+elif command=='sleep':
+    d['sleep_count']=d.get('sleep_count',0)+1
+    if d.get('daemon_flip') and d['sleep_count']==1:
+        d['config'].update(d['daemon_flip']); save()
+    else:
+        save(); os.kill(os.getppid(),signal.SIGTERM)
 else: sys.exit(2)
 '''
 
@@ -188,7 +193,7 @@ class UplinkTests(unittest.TestCase):
         self.data=self.load(); self.data['leases']['usbwan']['route'][0]['nexthop']='0.0.0.0'; self.save()
         self.run_watch(); self.assertEqual('',self.status()['active'])
 
-    def test_invalid_configuration_fails_before_any_routes_or_state_change(self):
+    def test_invalid_configuration_reports_error_without_routes_or_health_changes(self):
         for name,value in (('lite-uplink-watch.wan.probe_ip','1.1.1.1 bad.host'),
                            ('lite-uplink-watch.wan.probe_ip','1.1.1.1;reboot'),
                            ('network.wan.metric','20'),
@@ -199,7 +204,10 @@ class UplinkTests(unittest.TestCase):
                 self.data['config'][name]=value; self.save()
                 before=self.load()['routes']; self.run_watch(success=False)
                 self.assertEqual(before,self.load()['routes'])
-                self.assertFalse((self.root/'var/run/tr3000-lite/uplink/status.json').exists())
+                diagnostic=json.loads((self.root/'var/run/tr3000-lite/uplink/status.json').read_text())
+                self.assertTrue(diagnostic['reconcile_error'])
+                self.assertEqual('',diagnostic['active'])
+                self.assertEqual([],list((self.root/'var/run/tr3000-lite/uplink').glob('*.health')))
                 self.data=old; self.save()
 
     def test_alternate_probe_and_configured_hysteresis(self):
@@ -313,6 +321,45 @@ class UplinkTests(unittest.TestCase):
         sleeps=[call for call in self.calls() if call[0]=='sleep']
         self.assertEqual([['sleep','15']],sleeps)
         self.assertEqual('wan',self.status()['active'])
+
+    def test_daemon_invalid_interval_keeps_safe_default_retry_cadence(self):
+        for value in ('0','1','nonnumeric'):
+            with self.subTest(interval=value):
+                self.data['config']['lite-uplink-watch.globals.interval']=value; self.save()
+                (self.root/'calls.jsonl').unlink(missing_ok=True)
+                self.run_watch('daemon',success=False)
+                self.assertEqual([['sleep','15']],[call for call in self.calls() if call[0]=='sleep'])
+                self.assertTrue(self.status()['reconcile_error'])
+
+    def test_daemon_keeps_last_validated_interval_after_rejected_reload(self):
+        self.data['config']['lite-uplink-watch.globals.interval']='30'
+        self.data['daemon_flip']={'lite-uplink-watch.globals.interval':'1'}; self.save()
+        self.run_watch('daemon',success=False)
+        self.assertEqual([['sleep','30'],['sleep','30']],[call for call in self.calls() if call[0]=='sleep'])
+        self.assertTrue(self.status()['reconcile_error'])
+        self.assertEqual('wan',self.status()['active'])
+
+    def test_rejected_configuration_is_visible_then_clears_without_health_advance(self):
+        self.run_watch()
+        original=copy.deepcopy(self.load()['config'])
+        state=self.root/'var/run/tr3000-lite/uplink'
+        health={p.name:p.read_text() for p in state.glob('*.health')}
+        routes=copy.deepcopy(self.load()['routes']); events=list(self.events())
+        for key,value in (('lite-uplink-watch.wan.probe_ip','not-an-ip'),('network.wan.metric','20')):
+            with self.subTest(key=key):
+                self.data=self.load(); self.data['config']=dict(original,**{key:value}); self.save()
+                self.run_watch(success=False)
+                snapshot=self.status()
+                self.assertTrue(snapshot['reconcile_error'],'refresh must show rejected configuration')
+                self.assertEqual('wan',snapshot['active'])
+                self.assertEqual(health,{p.name:p.read_text() for p in state.glob('*.health')})
+                self.assertEqual(routes,self.load()['routes'])
+                self.assertEqual(events,self.events())
+                self.assertFalse((state/'lock').exists())
+                self.data=self.load(); self.data['config']=dict(original); self.save()
+                self.run_watch()
+                self.assertFalse(self.status()['reconcile_error'])
+                self.assertEqual('wan',self.status()['active'])
 
     def test_event_hook_emits_only_validated_public_transition(self):
         hook=ROOT/'scripts/tr3000-lite-uplink-changed.sh'
