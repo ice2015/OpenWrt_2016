@@ -98,6 +98,11 @@ elif cmd=='fw4':
         if candidate.is_file():
             (root/'checked-firewall').write_bytes(candidate.read_bytes())
             (root/'policy-at-check').write_bytes((root/'etc/config/tr3000-lite-remote').read_bytes())
+            for row in parse(candidate):
+                if row['.name'].startswith('tr3000_lite_remote_guard_'):
+                    assert row['.type']=='include' and row['type']=='nftables'
+                    assert row['position']=='chain-prepend' and row['chain'] in ('input','forward')
+                    (root/('checked-guard-'+row['chain']+'.nft')).write_bytes(pathlib.Path(row['path']).read_bytes())
         if failure=='candidate': sys.exit(1)
     elif args==['reload']:
         if failure=='interrupt': os.kill(os.getppid(),signal.SIGTERM); sys.exit(1)
@@ -211,6 +216,83 @@ class RemoteControllerTests(unittest.TestCase):
         self.assertTrue(result.stdout.strip(),'controller must return a sanitized transaction result')
         data=json.loads(result.stdout); self.assertEqual(1,data['schema_version'])
         return data
+
+    @unittest.skipUnless(os.environ.get('TR3000_LITE_NATIVE_NFT')=='1','native nft packet gate runs explicitly in Linux Actions')
+    def test_native_nft_established_flow_revocation(self):
+        def snapshot(name):
+            for chain in ('input','forward'):
+                shutil.copyfile(self.root/f'etc/tr3000-lite/remote-{chain}.nft',self.root/f'native-{name}-{chain}.nft')
+        self.run_controller('sync'); snapshot('on')
+        self.run_controller('set-policy','--allow-luci','false','--allow-plant','true'); snapshot('plant')
+        self.set_option('network','plant','ipaddr','192.168.20.200')
+        self.set_option('network','plant','netmask','255.255.255.192')
+        self.run_controller('set-policy','--allow-luci','true','--allow-plant','true'); snapshot('changed')
+        self.run_controller('set-policy','--allow-luci','false','--allow-plant','false'); snapshot('off')
+        result=subprocess.run(['/usr/bin/sudo','-n','/usr/bin/timeout','90','/usr/bin/unshare','--net',
+                               '/usr/bin/python3',str(ROOT/'tests/scripts/native_remote_nft.py'),str(self.root)],
+                              capture_output=True,text=True,timeout=110)
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        self.assertIn('PASS',result.stdout)
+
+    def test_generated_early_guards_revoke_existing_flows_and_track_current_plant(self):
+        self.run_controller('sync')
+        includes=[r for r in self.owned() if r['.type']=='include']
+        self.assertEqual(2,len(includes),'ordinary late rules cannot revoke established traffic')
+        private=self.root/'etc/tr3000-lite'
+        input_rules=(private/'remote-input.nft').read_text()
+        forward_rules=(private/'remote-forward.nft').read_text()
+        self.assertIn('iifname "wg_direct" tcp dport 443 ip saddr != { 10.77.0.10/32 } drop',input_rules)
+        self.assertIn('iifname "wg_vps" tcp dport 443 ip daddr != 10.88.0.2/32 drop',input_rules)
+        self.assertIn('iifname "wg_direct" ip daddr != 192.168.10.0/24 drop',forward_rules)
+        self.assertIn('oifname "wg_direct" ip saddr != 192.168.10.0/24 drop',forward_rules)
+        self.assertIn('oifname "wg_direct" ct direction != reply drop',forward_rules)
+        for chain in ('input','forward'):
+            path=private/('remote-'+chain+'.nft')
+            self.assertEqual(path.read_bytes(),(self.root/('checked-guard-'+chain+'.nft')).read_bytes())
+            self.assertEqual(0o600,path.stat().st_mode&0o777)
+            self.assertEqual('chain-prepend',next(r for r in includes if r['chain']==chain)['position'])
+        self.run_controller('set-policy','--allow-luci','false','--allow-plant','false')
+        self.assertEqual('iifname "wg_direct" tcp dport 443 drop\niifname "wg_vps" tcp dport 443 drop\n',(private/'remote-input.nft').read_text())
+        self.assertEqual('iifname "wg_direct" drop\noifname "wg_direct" drop\niifname "wg_vps" drop\noifname "wg_vps" drop\n',(private/'remote-forward.nft').read_text())
+        self.set_option('network','plant','ipaddr','192.168.20.200')
+        self.set_option('network','plant','netmask','255.255.255.192')
+        self.run_controller('set-policy','--allow-luci','false','--allow-plant','true')
+        forward_rules=(private/'remote-forward.nft').read_text()
+        self.assertIn('ip daddr != 192.168.20.192/26 drop',forward_rules)
+        self.assertNotIn('192.168.10.',forward_rules)
+
+    def test_offload_is_unsupported_without_mutating_foreign_defaults(self):
+        for option in ('flow_offloading','flow_offloading_hw'):
+            with self.subTest(option=option):
+                self.set_option('firewall',None,option,'1')
+                original=next(r for r in self.sections('firewall') if r['.type']=='defaults')
+                data=self.run_controller('sync',code=3)
+                self.assertTrue(data['degraded'])
+                self.assertEqual('unsupported_offload',data['checks']['result'])
+                self.assertFalse(data['roles']['wg_vps']['enabled'])
+                self.assertTrue((self.root/'down-wg_direct').is_file())
+                self.assertEqual(original,next(r for r in self.sections('firewall') if r['.type']=='defaults'))
+                self.set_option('firewall',None,option,'0')
+
+    def test_boot_barrier_closes_persisted_grants_without_touching_credentials(self):
+        script=ROOT/'scripts/tr3000-lite-remote-boot-close.sh'
+        self.assertTrue(script.is_file(),'boot barrier is missing')
+        self.run_controller('sync')
+        before=(self.root/'etc/tr3000-lite/keys/direct.key').read_bytes()
+        text=script.read_text().replace('OWNER_UID=0','OWNER_UID='+str(os.getuid()))
+        text=text.replace('/etc/tr3000-lite',str(self.root/'etc/tr3000-lite'))
+        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
+        text=text.replace('/usr/lib/tr3000-lite/remote-lib.sh',str(ROOT/'scripts/tr3000-lite-remote-lib.sh'))
+        target=self.root/'boot-close.sh'; target.write_text(text)
+        result=subprocess.run([bash_executable(),str(target)],capture_output=True,text=True)
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertEqual('iifname "wg_direct" tcp dport 443 drop\niifname "wg_vps" tcp dport 443 drop\n',(self.root/'etc/tr3000-lite/remote-input.nft').read_text())
+        self.assertEqual(before,(self.root/'etc/tr3000-lite/keys/direct.key').read_bytes())
+        self.assertIsNone(self.run_controller('status','--json')['effective']['allow_luci'])
+        self.run_controller('sync')
+        result,_,assets=run_lite_configure(lite_base_config())
+        self.assertEqual(0,result.returncode,result.stderr)
+        self.assertTrue('files/etc/rc.d/S18tr3000-lite-remote' in assets,'barrier must run before firewall startup even on first boot')
 
     def test_valid_source_rules_are_exact_and_preserve_foreign_configuration(self):
         data=self.run_controller('sync')

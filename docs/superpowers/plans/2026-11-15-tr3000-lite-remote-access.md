@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-14-tr3000-lite-industrial-lan-management-design.md`
 
+## Approved security clarification (2026-11-16)
+
+User approved separating local enrollment from external acceptance. `/etc/tr3000-lite/enrolled` attests trusted local root/AP/identity/independent-key validation plus an authenticated staged VPS handshake. Only then may registered exact `/32` WireGuard peers receive HTTPS 443 access; plant access remains default-off. External HTTPS success creates a separate verified state, never inferred from local enrollment, DNS success or a UI checkbox. No production activation or flashing is authorized by this software-state clarification.
+
 ## Global Constraints
 
 - Requires both local-management and multi-uplink plans to be complete.
@@ -196,7 +200,7 @@ git commit -m "feat(lite): expose safe Cloudflare DDNS status"
 
 **Interfaces:**
 - Consumes: private inventory JSON outside tracked files; fields `device_id`, `ddns_hostname`, `direct_address`, `direct_listen_port`, `vps_address`, `vps_endpoint`, `vps_public_key`, `remote_peers[]`; root password is set interactively and is not an inventory field.
-- Produces: on-device `/etc/tr3000-lite/keys/{direct,vps}.key` mode `0600`; public `prepare --json` report; private final bundle with manifest/SHA256; VPS peer snippet; Windows Direct/VPS templates without client private keys; enrollment marker only after `verify` succeeds.
+- Produces: on-device `/etc/tr3000-lite/keys/{direct,vps}.key` mode `0600`; public `prepare --json` report; private final bundle with manifest/SHA256; VPS peer snippet; Windows Direct/VPS templates without client private keys; local enrollment marker after trusted local gates and authenticated VPS handshake; separate external-verification evidence only after real external HTTPS acceptance.
 
 - [ ] **Step 1: Write failing prepare tests**
 
@@ -212,7 +216,7 @@ Assert `render --device-id ID --output DIR` creates mode-`0600` device bundle an
 
 - [ ] **Step 4: Write failing verify/gate tests**
 
-Assert enrollment completes only when root password is nonempty, AP initialized, both device keys present, VPS handshake recent and remote HTTPS status passes. Cloudflare may remain disabled until its token/hostname are supplied, but the bundle must record this and Direct remains closed.
+Assert local enrollment completes only when root password is nonempty, AP initialized, device identity and both distinct device keys validate, and authenticated VPS handshake is recent. Remote HTTPS is still forbidden before that marker. Assert external verification is a separate state requiring actual remote HTTPS success; local enrollment alone must never mark external acceptance passed. Cloudflare may remain disabled until its token/hostname are supplied, but the bundle must record this and Direct remains closed.
 
 - [ ] **Step 5: Run tests and verify failure**
 

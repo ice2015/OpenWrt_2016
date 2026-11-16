@@ -1,0 +1,7 @@
+#!/bin/sh /etc/rc.common
+# Close persisted remote guards before firewall (19) and network (20).
+START=18
+STOP=90
+start() {
+	/usr/lib/tr3000-lite/remote-boot-close
+}

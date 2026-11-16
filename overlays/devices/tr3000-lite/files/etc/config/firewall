@@ -3,6 +3,9 @@ config defaults
 	option output 'ACCEPT'
 	option forward 'REJECT'
 	option synflood_protect '1'
+	# Remote revocation must traverse the early software guards, not a fastpath.
+	option flow_offloading '0'
+	option flow_offloading_hw '0'
 
 config zone
 	option name 'wan'

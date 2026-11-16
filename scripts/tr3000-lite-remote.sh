@@ -17,7 +17,8 @@ LOCK=/var/lock/tr3000-lite-plant
 OVERRIDES=/var/run/uci
 DELTAS=/tmp/.uci
 FW4_LOCK=/var/run/fw4.lock
-LOCKED=0; FW_LOCKED=0; OVERRIDE=0; CANDIDATE=; DIRTY=0
+LOCKED=0; FW_LOCKED=0; OVERRIDE=0; CANDIDATE=
+OFFLOAD_OK=true
 RESULT=not_synchronized; DEGRADED=false
 IDENTITY=; ROOT_OK=false; AP_OK=false; ID_OK=false; KEYS_OK=false; ENROLLED=false
 DIRECT_CFG=false; VPS_CFG=false; DIRECT_ENABLED=false; VPS_ENABLED=false
@@ -111,6 +112,14 @@ collect_sources() {
 	for ip in $DIRECT_SOURCES; do printf '%s\n' "$vps_allowed" | grep -Fxq "$ip" && return 1; done
 	return 0
 }
+offload_disabled() (
+	defaults=$(uci -q -X -c "$CONFIG" -C '' show firewall 2>/dev/null | awk -F= '$1 ~ /^firewall\.[A-Za-z0-9_-]+$/ && $2=="defaults" {print $1}')
+	for section in $defaults; do
+		for option in flow_offloading flow_offloading_hw; do
+			case "$(get "$section.$option" || :)" in ''|0|false|no|off) ;; *) return 1 ;; esac
+		done
+	done
+)
 refresh_transport() {
 	DIRECT_ENABLED=false; VPS_ENABLED=false
 	if [ "$AUTH_READY" = true ] && [ -n "$DIRECT_SOURCES" ] &&
@@ -119,7 +128,7 @@ refresh_transport() {
 		[ "$(get network.wg_direct.auto || :)" = 1 ]; then DIRECT_ENABLED=true; fi
 	if [ "$ROOT_OK:$AP_OK:$ID_OK:$VPS_CFG" = true:true:true:true ] &&
 		[ "$(get tr3000-lite-remote.access.vps_enabled || :)" = 1 ] && [ "$(get network.wg_vps.auto || :)" = 1 ]; then VPS_ENABLED=true; fi
-	if pending; then DIRECT_ENABLED=false; VPS_ENABLED=false; fi
+	if pending || [ "$OFFLOAD_OK" != true ]; then DIRECT_ENABLED=false; VPS_ENABLED=false; fi
 }
 read_state() {
 	REQUEST_LUCI=false; REQUEST_PLANT=false
@@ -159,12 +168,14 @@ read_state() {
 		[ "$(get network.wg_direct.private_key)" != "$(get network.wg_vps.private_key)" ]; then KEYS_OK=true; fi
 	SOURCES_OK=true
 	if ! collect_sources; then SOURCES_OK=false; DIRECT_SOURCES=; VPS_SOURCES=; fi
+	OFFLOAD_OK=true; offload_disabled || OFFLOAD_OK=false
 	AUTH_READY=false
-	if [ "$ROOT_OK:$AP_OK:$ID_OK:$KEYS_OK:$ENROLLED:$PLANT_OK:$SOURCES_OK" = true:true:true:true:true:true:true ]; then AUTH_READY=true; fi
+	if [ "$ROOT_OK:$AP_OK:$ID_OK:$KEYS_OK:$ENROLLED:$PLANT_OK:$SOURCES_OK:$OFFLOAD_OK" = true:true:true:true:true:true:true:true ]; then AUTH_READY=true; fi
 	refresh_transport
 	RESULT=ok
 	[ "$AUTH_READY" = true ] || RESULT=gates_not_ready
 	[ "$SOURCES_OK" = true ] || RESULT=invalid_sources
+	[ "$OFFLOAD_OK" = true ] || RESULT=unsupported_offload
 	if pending; then RESULT=pending_state; DIRECT_ENABLED=false; VPS_ENABLED=false; fi
 }
 input_fingerprint() {
@@ -176,7 +187,16 @@ input_fingerprint() {
 		if [ -d "$p" ] && [ ! -L "$p" ]; then stat -c '%n:%u:%a' "$p"; else printf 'unsafe:%s\n' "$p"; fi
 	done
 }
-fingerprint() { input_fingerprint | sha256sum | awk '{print $1}'; }
+configuration_fingerprint() { input_fingerprint | sha256sum | awk '{print $1}'; }
+fingerprint() {
+	{
+		input_fingerprint
+		for chain in input forward; do
+			p="$PRIVATE/remote-$chain.nft"
+			if owned_file "$p"; then sha256sum "$p"; stat -c '%u:%a' "$p"; else printf 'missing:%s\n' "$p"; fi
+		done
+	} | sha256sum | awk '{print $1}'
+}
 runtime_safe() {
 	[ -d "$RUNTIME" ] && [ ! -L "$RUNTIME" ] && [ ! -L /var/run/tr3000-lite ] &&
 		[ "$(stat -c '%u:%a' "$RUNTIME" 2>/dev/null)" = "$OWNER_UID:700" ]
@@ -215,6 +235,9 @@ fail_apply() {
 	# Keep only the deny candidate when old authorizations may be stale. Never
 	# persist old-plant permissions merely to make recovery look successful.
 	if [ -n "$CANDIDATE" ] && [ -f "$CANDIDATE/deny-firewall" ]; then
+		for chain in input forward; do
+			remote_install_guard "$CANDIDATE/deny-$chain.nft" "$PRIVATE/remote-$chain.nft" || :
+		done
 		cp -p "$CANDIDATE/deny-firewall" "$CONFIG/firewall" || :
 	fi
 	if runtime_safe && [ ! -L "$RUNTIME/applied" ]; then rm -f "$RUNTIME/applied" || :; fi
@@ -229,6 +252,15 @@ rule() {
 	set_candidate "firewall.$section=$type"
 	while [ "$#" -gt 0 ]; do set_candidate "firewall.$section.$1=$2"; shift 2; done
 }
+render_guards() (
+	for role in wg_direct wg_vps; do
+		case "$role" in wg_direct) enabled=$DIRECT_ENABLED; sources=$DIRECT_SOURCES; address=$DIRECT_ADDRESS ;; *) enabled=$VPS_ENABLED; sources=$VPS_SOURCES; address=$VPS_ADDRESS ;; esac
+		luci=$APPLY_LUCI; plant=$APPLY_PLANT
+		if [ "$enabled" != true ] || [ -z "$sources" ]; then luci=false; plant=false; fi
+		remote_guard_input "$role" "$luci" "$sources" "$address" >> "$CANDIDATE/input.nft" || return 1
+		remote_guard_forward "$role" "$plant" "$sources" "$PLANT_CIDR" >> "$CANDIDATE/forward.nft" || return 1
+	done
+)
 render_permissions() {
 	for role in wg_direct wg_vps; do
 		case "$role" in wg_direct) configured=$DIRECT_CFG; enabled=$DIRECT_ENABLED; sources=$DIRECT_SOURCES; address=$DIRECT_ADDRESS ;; *) configured=$VPS_CFG; enabled=$VPS_ENABLED; sources=$VPS_SOURCES; address=$VPS_ADDRESS ;; esac
@@ -279,6 +311,8 @@ fi
 for p in "$CONFIG" "$PRIVATE" "$PRIVATE/keys" /var/lock /var/run/tr3000-lite "$RUNTIME" "$OVERRIDES" "$DELTAS" "$FW4_LOCK"; do
 	[ ! -L "$p" ] || fail_apply unsafe_path
 done
+(umask 077; mkdir -p "$PRIVATE") || fail_apply private_directory
+[ "$(stat -c '%u:%a' "$PRIVATE")" = "$OWNER_UID:700" ] || fail_apply private_permissions
 mkdir -p "$RUNTIME" /var/lock "$OVERRIDES" || fail_apply runtime_directory
 chmod 0700 /var/run/tr3000-lite "$RUNTIME" || fail_apply runtime_permissions
 mkdir "$LOCK" 2>/dev/null || { RESULT=busy; emit; exit 3; }
@@ -287,14 +321,21 @@ pending && fail_apply pending_state
 for package in network firewall tr3000-lite-remote; do safe_config "$CONFIG/$package" || fail_apply unsafe_config; done
 # Recompute after serialization, not before another plant/USB transaction finishes.
 read_state
-input_fp=$(fingerprint)
+input_fp=$(configuration_fingerprint)
 CANDIDATE=$(mktemp -d "$RUNTIME/candidate.XXXXXX") || fail_apply candidate_directory
 mkdir "$CANDIDATE/delta" || fail_apply candidate_directory
 for package in firewall tr3000-lite-remote; do cp -p "$CONFIG/$package" "$CANDIDATE/$package" || fail_apply candidate_copy; done
 owned_sections=$(candidate_uci -X show firewall 2>/dev/null | awk -F= '$1 ~ /^firewall\.tr3000_lite_remote_[A-Za-z0-9_]+$/ {sub(/^firewall\./,"",$1); print $1}')
 for section in $owned_sections; do candidate_uci delete "firewall.$section" >/dev/null 2>&1 || fail_apply candidate_uci; done
+for chain in input forward; do
+	rule "${REMOTE_SECTION_PREFIX}guard_$chain" include type nftables position chain-prepend chain "$chain" path "$PRIVATE/remote-$chain.nft"
+	for role in wg_direct wg_vps; do
+		"remote_guard_$chain" "$role" false '' '' || fail_apply candidate_guard
+	done > "$CANDIDATE/deny-$chain.nft" || fail_apply candidate_guard
+done
 candidate_uci commit firewall >/dev/null 2>&1 || fail_apply candidate_commit
 cp -p "$CANDIDATE/firewall" "$CANDIDATE/deny-firewall" || fail_apply candidate_copy
+[ "$OFFLOAD_OK" = true ] || fail_apply unsupported_offload
 APPLY_LUCI=false; APPLY_PLANT=false; return_code=0
 if [ "$REMOTE_COMMAND" = set-policy ] && [ "$AUTH_READY" != true ] &&
 	{ [ "$ALLOW_LUCI" = true ] || [ "$ALLOW_PLANT" = true ]; }; then
@@ -317,13 +358,14 @@ if [ "$AUTH_READY" = true ] && {
 	APPLY_LUCI=$REQUEST_LUCI; APPLY_PLANT=$REQUEST_PLANT
 fi
 [ "$SOURCES_OK" = true ] || return_code=2
+render_guards || fail_apply candidate_guard
 render_permissions
 for package in firewall tr3000-lite-remote; do candidate_uci commit "$package" >/dev/null 2>&1 || fail_apply candidate_commit; done
-[ "$input_fp" = "$(fingerprint)" ] || fail_apply input_changed
+[ "$input_fp" = "$(configuration_fingerprint)" ] || fail_apply input_changed
 cache_valid=0
 if owned_file "$RUNTIME/applied"; then
 	read -r saved_fp saved_luci saved_plant saved_result < "$RUNTIME/applied" || :
-	[ "${saved_fp:-}" != "$input_fp" ] || cache_valid=1
+	[ "${saved_fp:-}" != "$(fingerprint)" ] || cache_valid=1
 fi
 if [ "$cache_valid" = 0 ] || ! cmp -s "$CONFIG/firewall" "$CANDIDATE/firewall" ||
 	! cmp -s "$CONFIG/tr3000-lite-remote" "$CANDIDATE/tr3000-lite-remote"; then
@@ -331,9 +373,12 @@ if [ "$cache_valid" = 0 ] || ! cmp -s "$CONFIG/firewall" "$CANDIDATE/firewall" |
 	[ ! -e "$OVERRIDES/firewall" ] && [ ! -L "$OVERRIDES/firewall" ] || fail_apply pending_state
 	(umask 077; set -C; cat "$CANDIDATE/firewall" > "$OVERRIDES/firewall") || fail_apply candidate_override
 	OVERRIDE=1
+	for chain in input forward; do
+		remote_install_guard "$CANDIDATE/$chain.nft" "$PRIVATE/remote-$chain.nft" || fail_apply guard_install
+	done
 	fw4 check >/dev/null 2>&1 || fail_apply candidate_firewall
 	remove_override || fail_apply candidate_cleanup
-	[ "$input_fp" = "$(fingerprint)" ] || fail_apply input_changed
+	[ "$input_fp" = "$(configuration_fingerprint)" ] || fail_apply input_changed
 	for package in firewall tr3000-lite-remote; do cp -p "$CANDIDATE/$package" "$CONFIG/$package" || fail_apply config_install; done
 	fw4 reload >/dev/null 2>&1 || fail_apply firewall_reload
 	fw4 check >/dev/null 2>&1 || fail_apply firewall_verification
