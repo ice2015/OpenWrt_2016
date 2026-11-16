@@ -37,6 +37,7 @@ SCRIPTS = (
     "tr3000-lite-remote-boot-close.sh",
     "tr3000-lite-ddns-status.sh",
     "tr3000-lite-ddns-event.sh",
+    "tr3000-lite-enroll.sh",
     "tr3000-lite-plant.sh",
     "tr3000-lite-plant-lib.sh",
 )

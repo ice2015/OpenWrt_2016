@@ -199,6 +199,8 @@ install -m 0644 "$SCRIPT_DIR/tr3000-lite-ddns-lib.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/ddns-lib.sh"
 install -m 0755 "$SCRIPT_DIR/tr3000-lite-ddns-event.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/ddns-event"
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-enroll.sh" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-enroll"
 install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
