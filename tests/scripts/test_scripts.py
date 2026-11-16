@@ -35,6 +35,7 @@ SCRIPTS = (
     "tr3000-lite-uplink-status.sh",
     "tr3000-lite-remote.sh",
     "tr3000-lite-remote-boot-close.sh",
+    "tr3000-lite-ddns-status.sh",
     "tr3000-lite-plant.sh",
     "tr3000-lite-plant-lib.sh",
 )
@@ -303,6 +304,8 @@ class ScriptInterfaceTests(unittest.TestCase):
             "tr3000-lite-remote-lib.sh",
             "tr3000-lite-remote.sh",
             "tr3000-lite-remote-boot-close.sh",
+            "tr3000-lite-ddns-status.sh",
+            "tr3000-lite-ddns-lib.sh",
             "../overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-remote",
             "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync",
             "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
