@@ -74,10 +74,10 @@
 
 | # | 决策 | 取舍与理由 |
 |---|---|---|
-| D1 | 新增 `lan` 段：`br-lan`（成员 eth1 + WiFi AP），`192.168.1.1/24`，DHCP `192.168.1.100-249`，zone `lan` `input ACCEPT`/`forward ACCEPT`，`lan→wan` 转发 | 192.168.1.1 与设备 U-Boot Web、既有文档一致；`lan` 是 OpenWrt 惯用名，且 mt_wifi 驱动硬依赖 `network.interface.lan`（E7），用 `lan` 同时满足"普通路由器"与驱动约束 |
-| D2 | 取消 `mgmt` 段（192.168.77.1/24），其角色合并进 `lan`；原 `mgmt→plant` 放行/SNAT 规则改为 `lan→plant`（源 192.168.1.0/24） | 只有一个管理面最不容易出错；`mgmt` 与 `lan` 并存会让操作员分不清该连哪个。代价：远程访问文档与源码中的 192.168.77 需迁移（24 处引用） |
-| D3 | `plant` 改为**按需接管**：默认 `proto none` 且**不绑定 eth1**；切换到"工业模式"时 eth1 从 `br-lan` 摘出并由 plant 接管（`192.168.10.254/24` 静态、DHCP 关、ICMP 关、LuCI 需 root 密码+显式开关）；可随时切回 | 一个物理口无法同时当"普通 LAN"和"工业段"。默认态可达、工业态隔离，两头都不牺牲。切换必须可逆，否则现场会被锁死 |
-| D4 | 管理 AP 绑定 `lan`，WPA2（mt_wifi `encryption=psk2`），SSID `TR3000-Lite-<MAC 后 6 位大写十六进制>`，每机 16 随机字节 key（32 位小写 hex），只存 0600 的 `/etc/config/wireless` | 与既有实现一致；绑定 `lan` 后 PC 从 WiFi 拿到 192.168.1.x，与有线同段，符合"普通路由器"预期 |
+| D1 | 新增 `lan` 段：`br-lan`（成员 eth1 + WiFi AP），`192.168.10.1/24`，DHCP `192.168.10.100-249`，zone `lan` `input ACCEPT`/`forward ACCEPT`，`lan→wan` 转发 | 192.168.10.0/24 避开 192.168.0/24、192.168.1/24 这类最常见的家用/办公网段（现场撞段概率最低）；`lan` 是 OpenWrt 惯用名，且 mt_wifi 驱动硬依赖 `network.interface.lan`（E7），用 `lan` 同时满足"普通路由器"与驱动约束 |
+| D2 | 取消 `mgmt` 段（192.168.77.1/24），其角色合并进 `lan`；原 `mgmt→plant` 放行/SNAT 规则改为 `lan→plant`（源 192.168.10.0/24） | 只有一个管理面最不容易出错；`mgmt` 与 `lan` 并存会让操作员分不清该连哪个。代价：远程访问文档与源码中的 192.168.77 需迁移（24 处引用） |
+| D3 | `plant` 改为**按需接管**：默认 `proto none` 且**不绑定 eth1**；切换到"工业模式"时 eth1 从 `br-lan` 摘出并由 plant 接管（默认 `192.168.20.254/24`、静态、DHCP 关、ICMP 关、LuCI 需 root 密码+显式开关）；可随时切回 | 一个物理口无法同时当"普通 LAN"和"工业段"。默认态可达、工业态隔离，两头都不牺牲。切换必须可逆，否则现场会被锁死 |
+| D4 | 管理 AP 绑定 `lan`，WPA2（mt_wifi `encryption=psk2`），SSID `TR3000-Lite-<MAC 后 6 位大写十六进制>`，每机 16 随机字节 key（32 位小写 hex），只存 0600 的 `/etc/config/wireless` | 与既有实现一致；绑定 `lan` 后 PC 从 WiFi 拿到 192.168.10.x，与有线同段，符合"普通路由器"预期 |
 | D5 | **关闭 mt_wifi 自带的开放默认 AP**（`default_radioX`，`encryption=none`） | 一旦 `lan` 有了 DHCP，这些默认开放热点会变成任何人都能连的开放网络——这是当前设计完全没考虑到的安全缺口 |
 | D6 | AP 就绪标记 `/etc/tr3000-lite/management-ap.initialized` 保留，但**改为由 init.d 服务在验证通过后写入**，且**不再**作为 plant HTTPS 的唯一门禁；plant HTTPS 门禁改为"root 密码非空 + 操作员显式启用" | E12 的死锁来自"标记既是门禁又只有一条脆弱的写入路径"。恢复通道改为"有线 LAN（默认态）"后，plant Web 门禁不再需要依赖 AP 状态 |
 | D7 | `enable-plant` 切换要求 AP 已就绪；否则必须显式 `--force-local-console`（只能从本地串口/控制台执行），LuCI 不提供该选项 | 防止"切到工业模式后管理路径断掉"导致失联；与仓库既有 fail-closed 风格一致 |
@@ -87,6 +87,14 @@
 ## 6. 详细设计
 
 ### 6.1 段与地址规划
+
+| 段 | 设备 | 地址 | DHCP | 何时生效 |
+|---|---|---|---|---|
+| `lan`（接入/管理） | `br-lan` = eth1 + WiFi AP | `192.168.10.1/24` | `192.168.10.100-249` | 始终（出厂默认） |
+| `plant`（工业段） | eth1（切出后） | 默认 `192.168.20.254/24`，可改 | 永久关闭 | 仅"工业模式" |
+| `wan` | eth0 | DHCP | — | 始终 |
+
+> `plant` 默认地址由原设计的 `192.168.10.254` 改为 `192.168.20.254`：接入段已占用 `192.168.10.0/24`，同一子网不能同时挂在 br-lan 与 plant 两个接口上（会造成直连路由二义与 ARP 混乱）。`192.168.20.0/24` 同样避开常见网段，且 `plant` 地址在 LuCI「工业 LAN」页可随时改。
 
 **默认态（出厂，接入模式）**
 
@@ -101,7 +109,7 @@ config device 'br_lan'
 config interface 'lan'
 	option device 'br-lan'
 	option proto 'static'
-	option ipaddr '192.168.1.1'
+	option ipaddr '192.168.10.1'
 	option netmask '255.255.255.0'
 
 config interface 'plant'
@@ -121,7 +129,7 @@ config device 'br_lan'
 config interface 'plant'
 	option device 'eth1'
 	option proto 'static'
-	option ipaddr '192.168.10.254'
+	option ipaddr '192.168.20.254'
 	option netmask '255.255.255.0'
 ```
 
@@ -133,7 +141,7 @@ config interface 'plant'
 config dhcp 'lan'
 	option interface 'lan'
 	option start '100'
-	option limit '150'          # 192.168.1.100-249
+	option limit '150'          # 192.168.10.100-249
 	option leasetime '12h'
 	option dhcpv4 'server'
 	option dhcpv6 'disabled'
@@ -149,7 +157,7 @@ config dhcp 'lan'
 - 新增 `forwarding lan→wan`（PC 可正常上网）。
 - 删除 `mgmt` zone 及其专属规则（DHCP/DNS/SSH/HTTPS 对 mgmt 的放行由 `lan` 的 `input ACCEPT` 覆盖）。
 - `plant` zone 维持 `input REJECT`/`forward REJECT`；`tr3000_lite_plant_luci` 规则默认 `enabled=0`，由操作员显式启用。
-- `mgmt→plant` 的 ICMP/TCP 放行与 SNAT 规则改名并改源网段：`tr3000_lite_lan_plant_icmp` / `_tcp` / `_snat_icmp` / `_snat_tcp`，`src_ip 192.168.1.0/24`、`dest_ip` 跟随 plant CIDR、`snat_ip` = plant 地址。**注**：这组规则的目的是让"没有默认网关的 PLC/HMI 能回程"，源网段变化不影响该语义。
+- `mgmt→plant` 的 ICMP/TCP 放行与 SNAT 规则改名并改源网段：`tr3000_lite_lan_plant_icmp` / `_tcp` / `_snat_icmp` / `_snat_tcp`，`src_ip 192.168.10.0/24`、`dest_ip` 跟随 plant CIDR、`snat_ip` = plant 地址。**注**：这组规则的目的是让"没有默认网关的 PLC/HMI 能回程"，源网段变化不影响该语义。
 - `wan` zone 与 `wan` 管理面关闭策略不变。
 
 ### 6.4 WiFi：mt_wifi 兼容（第二个根因）
@@ -184,7 +192,7 @@ config dhcp 'lan'
 | 命令 | 语义 |
 |---|---|
 | `status --json` | 增加 `mode`（`lan`\|`plant`）、`lan_cidr`、`lan_dhcp_pool`、`plant_active`、`plant_device`、`ap_ready` 字段 |
-| `validate --address IPV4/PREFIX` | 保持现有语义；管理网段重叠检查由 192.168.77.0/24 改为 192.168.1.0/24 |
+| `validate --address IPV4/PREFIX` | 保持现有语义；管理网段重叠检查由 192.168.77.0/24 改为 192.168.10.0/24 |
 | `apply --address … --allow-luci … --allow-lan …` | 保持：仅在 plant 模式下修改 plant 地址与放行策略。`--allow-mgmt` 保留为**兼容别名**（等价 `--allow-lan`），并在文档标注废弃 |
 | `enable-plant --address IPV4/PREFIX [--force-local-console]` | **新**：eth1 从 `br-lan` 摘出 → plant 接管 eth1 并取该地址；写回防火墙 lan→plant 规则；AP 未就绪时要求 `--force-local-console` |
 | `disable-plant` | **新**：plant 释放 eth1（`proto none`），eth1 回到 `br-lan` 成员，plant 地址清空 |
@@ -195,7 +203,7 @@ config dhcp 'lan'
 - 备份对扩展为 **network + firewall**（与现状一致）；`enable-plant`/`disable-plant` 同样先备份再改。
 - 候选渲染新增：桥接成员的增删、`network.plant.device`/`proto`/`ipaddr`/`netmask`。
   **UCI 语义要点**：清空列表不能用 `option ports ''`（那是空字符串而非空列表），必须先 `delete network.br_lan.ports` 再按需 `add_list`；重新加入 eth1 时同理先 delete 再 add_list，避免出现重复成员。
-- `verify_live` 增加模式断言：`lan` 接口存在且地址为 192.168.1.1/24；plant 模式下 eth1 属于 plant 而不属于 br-lan；非 plant 模式下 eth1 属于 br-lan 且 plant 无地址。
+- `verify_live` 增加模式断言：`lan` 接口存在且地址为 192.168.10.1/24；plant 模式下 eth1 属于 plant 而不属于 br-lan；非 plant 模式下 eth1 属于 br-lan 且 plant 无地址。
 - 失败路径与现有实现一致：尽力恢复两个文件并上报 `rollback` 状态；**不允许**出现"切换成功但管理路径不可达"——`enable-plant` 前置校验 AP 就绪或要求强制参数。
 
 ### 6.6 LuCI
@@ -217,12 +225,12 @@ ACL 与菜单结构不变（仍是 admin-only、固定控制器调用）。
 schema_version=2
 lan_interface=lan
 lan_device=br-lan
-lan_cidr=192.168.1.1/24
-lan_dhcp_pool=192.168.1.100-192.168.1.249
+lan_cidr=192.168.10.1/24
+lan_dhcp_pool=192.168.10.100-192.168.10.249
 plant_interface=plant
 plant_device=eth1
 plant_default_mode=inactive
-plant_cidr=192.168.10.254/24
+plant_cidr=192.168.20.254/24
 plant_dhcpv4_dhcpv6_ra_ndp=off
 lan_to_plant_protocols=icmp-echo,tcp
 lan_to_plant_snat=plant-address
@@ -253,14 +261,14 @@ plant_https_gate=root-password-and-explicit-enable
 
 | # | 用例 | 期望 |
 |---|---|---|
-| T1 | 全新刷机（不保留配置）上电，插网线 | PC 获得 192.168.1.x，网关 192.168.1.1 |
-| T2 | `ping 192.168.1.1` | 通 |
-| T3 | 浏览器 `https://192.168.1.1` | 进 LuCI，可设置 root 密码 |
-| T4 | 连管理 WiFi | 拿到 192.168.1.x，可 ping，可进 LuCI |
+| T1 | 全新刷机（不保留配置）上电，插网线 | PC 获得 192.168.10.x，网关 192.168.10.1 |
+| T2 | `ping 192.168.10.1` | 通 |
+| T3 | 浏览器 `https://192.168.10.1` | 进 LuCI，可设置 root 密码 |
+| T4 | 连管理 WiFi | 拿到 192.168.10.x，可 ping，可进 LuCI |
 | T5 | 扫描周围热点 | 看不到 `ImmortalWrt-2.4G/5G` 开放热点；只有 `TR3000-Lite-XXXXXX` 且为 WPA2 |
 | T6 | `logread \| grep -i mtwifi` | 无 `wait_for network.interface.lan` 超时错误 |
-| T7 | LuCI 切「启用 plant 模式」 | 成功；插线 PC 不再获得地址；WiFi 管理仍可达；plant 地址 192.168.10.254 无 DHCP、ping 不通 |
-| T8 | LuCI 切「退回接入模式」 | 成功；插线重新获得 192.168.1.x |
+| T7 | LuCI 切「启用 plant 模式」 | 成功；插线 PC 不再获得地址；WiFi 管理仍可达；plant 地址 192.168.20.254 无 DHCP、ping 不通 |
+| T8 | LuCI 切「退回接入模式」 | 成功；插线重新获得 192.168.10.x |
 | T9 | 断电重启（保留配置） | 模式与地址保持；AP 仍受管且加密 |
 | T10 | 升级已刷设备（保留旧配置） | 见 §7 迁移说明 |
 
@@ -268,7 +276,7 @@ plant_https_gate=root-password-and-explicit-enable
 
 - `docs/LITE-README.md`：网络默认值、首次部署流程（改为"插线即用"）、plant 模式说明、无线栈说明（mt_wifi）、真机验证清单更新。
 - `docs/TEST-PLAN.md`：新增 §6.8 的 T1–T10。
-- `docs/TR3000-LITE-PROVISIONING.md`、`docs/TR3000-LITE-REMOTE-ACCESS.md`：`mgmt`/192.168.77 → `lan`/192.168.1，管理路径描述改为"有线接入或管理 WiFi"。
+- `docs/TR3000-LITE-PROVISIONING.md`、`docs/TR3000-LITE-REMOTE-ACCESS.md`：`mgmt`/192.168.77 → `lan`/192.168.10，管理路径描述改为"有线接入或管理 WiFi"。
 - `docs/WIREGUARD-VPS-ROUTING.md`、`docs/SINGBOX-SPLIT-ROUTING.md`：涉及管理段的描述同步。
 - 新增 `docs/TR3000-LITE-LAN-ACCESS.md`：出厂接入与工业模式切换的操作手册（替代散落在 README 的段落）。
 - 旧设计文档 `2026-11-14-tr3000-lite-industrial-lan-management-design.md` 标注为"已被本设计取代（管理段与 WiFi 栈部分）"，保留历史。
@@ -281,17 +289,17 @@ plant_https_gate=root-password-and-explicit-enable
 - **必须保留配置时**：提供一次性迁移脚本（`/etc/uci-defaults/9x-tr3000-lite-lan-migrate`），做：把 `mgmt` 段的 DHCP/地址并入 `lan`、把 `plant` 释放为 `proto none`、把 `mgmt` 相关防火墙规则改名为 `lan` 规则并改源网段、删除 `mgmt` 段。迁移脚本必须幂等、失败回滚、并在 LuCI 状态页显示"配置来自旧版本，可能需要迁移"。
 - 该迁移脚本**本次必须实现**（否则现场升级即失联），但允许通过 `local/` 覆盖关闭。
 
-**192.168.77.0/24 → 192.168.1.0/24 的代码级迁移点**（全仓 24 处引用）：
+**192.168.77.0/24 → 192.168.10.0/24 的代码级迁移点**（全仓 24 处引用）：
 
 | 位置 | 现状 | 目标 |
 |---|---|---|
-| `scripts/tr3000-lite-plant.sh:133` | 管理网段重叠检查用 192.168.77.0/24 | 改为 192.168.1.0/24 |
-| `scripts/tr3000-lite-remote.sh:110` | 拒绝 Peer 源落在 192.168.77.0/24 | 改为 192.168.1.0/24 |
+| `scripts/tr3000-lite-plant.sh:133` | 管理网段重叠检查用 192.168.77.0/24 | 改为 192.168.10.0/24 |
+| `scripts/tr3000-lite-remote.sh:110` | 拒绝 Peer 源落在 192.168.77.0/24 | 改为 192.168.10.0/24 |
 | `scripts/build-lite.sh:209-210` | 契约 `mgmt_cidr`/`mgmt_dhcp_pool` | 改为 `lan_cidr`/`lan_dhcp_pool`（§6.7） |
 | `overlays/.../etc/config/{network,dhcp,firewall}` | `mgmt` 段与 `tr3000_lite_mgmt_plant_*` 规则 | 按 §6.1/§6.3 重写 |
 | `packages/luci-app-tr3000-lite/.../industrial-lan.js`、`uplinks.js` | 展示 mgmt 地址 | 展示 lan 地址 |
 | `tests/scripts/test_{scripts,tr3000_lite_plant}.py`、`tests/structure/*` | 断言 mgmt 契约 | 断言 lan 契约 |
-| `docs/{LITE-README,TEST-PLAN,TR3000-LITE-PROVISIONING,TR3000-LITE-REMOTE-ACCESS,WIREGUARD-VPS-ROUTING,SINGBOX-SPLIT-ROUTING}.md` | 描述 192.168.77 管理网 | 改为 192.168.1 接入网 |
+| `docs/{LITE-README,TEST-PLAN,TR3000-LITE-PROVISIONING,TR3000-LITE-REMOTE-ACCESS,WIREGUARD-VPS-ROUTING,SINGBOX-SPLIT-ROUTING}.md` | 描述 192.168.77 管理网 | 改为 192.168.10 接入网 |
 
 ## 8. 未验证项（UNRESOLVED）
 
@@ -299,10 +307,11 @@ plant_https_gate=root-password-and-explicit-enable
 |---|---|---|
 | mt_wifi 受管 AP 是否真能在 `network=lan` 下正常起 AP 并发 DHCP | UNRESOLVED（需真机） | mt_wifi 支持 `encryption=psk2`（`mtwifi_defs.lua:120`），但 `mtwifi_cfg` 对自定义 vif 的行为未验证 |
 | `mt_wifi` 是否在 `network=lan` 之外还需要其它前置（如 `phy`/`dbdc_main`） | UNRESOLVED | 需真机 `logread` |
-| eth1 从 `br-lan` 摘出后 br-lan 是否仍能承载 WiFi AP 并保持 192.168.1.1 | UNRESOLVED | 需真机 |
+| eth1 从 `br-lan` 摘出后 br-lan 是否仍能承载 WiFi AP 并保持 192.168.10.1 | UNRESOLVED | 需真机 |
 | `fw4 check` 对"lan zone ACCEPT + plant zone REJECT + lan→plant SNAT"的组合是否通过 | UNRESOLVED（可用 CI 内的 native nft 测试近似） | 已有 `tests/scripts/native_remote_nft.py` 可扩展 |
 | mt_wifi 驱动 `wait_for network.interface.lan` 的 120s 超时是否在新结构下消失 | UNRESOLVED | 预期消失（`lan` 存在），需真机确认 |
 | 真机端口角色（eth0=2.5G WAN / eth1=1G LAN） | 沿用既有未验证项 | DTS 已确认，物理插孔仍需现场核对 |
+| `plant` 默认地址由 `192.168.10.254` 改为 `192.168.20.254` | 已定，需现场同步 | 旧文档/现场笔记中的 `192.168.10.254` 需一并更新；`plant` 地址可改，冲突时可手动选段 |
 
 ## 9. 风险与回退
 
@@ -312,11 +321,11 @@ plant_https_gate=root-password-and-explicit-enable
 | 切到工业模式后无法回到接入模式 | 现场失联 | 切换前强制校验 AP 就绪或要求 `--force-local-console`；`restore --backup-id` 可回滚；备份保留 5 对 |
 | 迁移脚本错误导致升级后失联 | 现场批量失联 | 迁移脚本幂等 + 备份 + 失败不写盘；文档要求优先不保留配置刷机 |
 | 开放默认 AP 未被禁用 | 开放热点泄露 | 首启脚本 + init.d 服务双层禁用；CI 契约测试锁死；真机 T5 验收 |
-| `lan` 段 192.168.1.0/24 与现场已有网段冲突 | 路由异常 | 默认态可切回/改址（既有 plant 地址事务机制可复用为"lan 地址事务"，本期不做，记为后续项） |
+| `lan` 段 192.168.10.0/24 与现场已有网段冲突 | 路由异常 | 默认态可切回/改址（既有 plant 地址事务机制可复用为"lan 地址事务"，本期不做，记为后续项） |
 | `lan` 接口被上游 `12_network-generate-ula` 自动加上 ULA IPv6 | 路由器多一个 IPv6 地址（客户端仍不发 IPv6，因 RA 已禁用） | 保留上游默认行为；如需完全关闭，另加 `option ip6assign ''`，本期不做 |
 
 ## 10. 范围外但需记录的后续项
 
-- `lan` 地址段可配置（当前固定 192.168.1.1/24）——现场网段冲突时的补救手段；
+- `lan` 地址段可配置（当前固定 192.168.10.1/24）——现场网段冲突时的补救手段；
 - 真机冒烟测试自动化（需要设备农场或 QEMU + mt_wifi 模拟，暂不具备）；
 - `mgmt` 段的"第二管理网段"能力（当前已合并进 `lan`）。
