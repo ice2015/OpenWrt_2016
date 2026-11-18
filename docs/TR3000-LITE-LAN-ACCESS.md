@@ -62,6 +62,7 @@
 - `status --json` 返回 `mode`（`lan`/`plant`）、`lan.cidr`、`lan.dhcp_pool`、`plant.active`、`plant.cidr`、`ap_ready`、`legacy_config_detected`、`checks`、`backup_id`、`rollback`。
 - `enable-plant` 在管理 AP 未就绪时拒绝（`management_not_initialized`）；本地控制台可显式强制。
 - `apply` 只在工业模式有效（plant 未接管 `eth1` 时报 `invalid_device`）。
+- `--allow-mgmt` / 状态里的 `allow_mgmt` 指“允许**管理侧**（接入段）访问 plant”，沿用旧命名以保持控制器与脚本兼容；管理侧现在就是接入段 `lan`。
 - 备份目录 `/etc/tr3000-lite/backups` 仅 root 可读，最多保留五对；`rollback` 为 `degraded` 时必须保持 HUB 断开并用控制台检查，不要把命令成功当作链路恢复。
 
 无线侧：
