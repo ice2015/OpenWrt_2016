@@ -52,13 +52,21 @@
 
 ---
 
-### Task 1: 接入段 `lan` 与 DHCP 默认值
+### Task 1: 出厂可达的网络结构与契约（network + dhcp + firewall + 契约）
 
 **Files:**
 - Modify: `overlays/devices/tr3000-lite/files/etc/config/network`
 - Modify: `overlays/devices/tr3000-lite/files/etc/config/dhcp`
+- Modify: `overlays/devices/tr3000-lite/files/etc/config/firewall`
+- Modify: `scripts/build-lite.sh`（`lite-runtime-contract.txt`）
+- Modify: `scripts/tr3000-lite-plant.sh`、`scripts/tr3000-lite-remote.sh`（随配置对齐的常量与规则名）
 - Test: `tests/structure/test_repository_contract.py`
 - Test: `tests/scripts/test_scripts.py`
+- Test: `tests/scripts/test_tr3000_lite_plant.py`
+- Test: `tests/scripts/test_tr3000_lite_remote_controller.py`
+- Test: `tests/scripts/test_lite_build_evidence.py`
+
+> 执行记录：防火墙 zone 迁移与契约发布原计划在 Task 2 / Task 7，但契约同时描述 network、dhcp 与 firewall，拆开会让每个中间提交自相矛盾（契约说 `lan_to_plant_*`，防火墙里还是 `mgmt_*`）。故并入本任务一次完成；Task 2 只保留 native nft 语义门禁，Task 7 只保留构建期断言。
 
 **Interfaces:**
 - Consumes: 无（首个任务）。
@@ -152,89 +160,62 @@ config dhcp 'lan'
 Run: `python3 -m unittest tests.structure.test_repository_contract -v`
 Expected: PASS。
 
-- [ ] **Step 5: 补一条 configure-lite 集成断言**
+- [ ] **Step 5: 迁移防火墙 zone 到 `lan`**
+
+`overlays/devices/tr3000-lite/files/etc/config/firewall`：新增 `lan` zone（`list network 'lan'`、`input ACCEPT`、`output ACCEPT`、`forward ACCEPT`）、`forwarding lan→wan`；删除 `mgmt` zone 与其四条放行规则；把 `tr3000_lite_mgmt_plant_*` 四条规则改名 `tr3000_lite_lan_plant_*`，`src` 改 `lan`、`src_ip` 改 `192.168.10.0/24`、`dest_ip` 改 plant 段 `192.168.20.0/24`、`snat_ip` 改 `192.168.20.254`；`plant`/`wan`/`wg` zone 与 `tr3000_lite_plant_luci`（默认 `enabled '0'`）保持。
+
+对应测试：`tests/structure/test_repository_contract.py::test_lite_firewall_allows_management_from_the_access_segment`、`tests/scripts/test_tr3000_lite_plant.py::test_apply_updates_the_shipped_management_plant_rules`。
+
+- [ ] **Step 6: 控制器常量与规则名随配置对齐**
+
+`scripts/tr3000-lite-plant.sh`：管理网段重叠检查改为 `192.168.10.0/24`；候选渲染改写 `tr3000_lite_lan_plant_*` / `tr3000_lite_lan_plant_snat_*`；`CURRENT_MGMT` 读取新规则名。
+`scripts/tr3000-lite-remote.sh`：Peer 源地址不得落在接入段，常量改为 `192.168.10.0/24`。
+对应测试：`tests/scripts/test_tr3000_lite_plant.py::test_the_access_segment_is_not_a_valid_plant_address`、`tests/scripts/test_tr3000_lite_remote_controller.py::test_peer_sources_inside_the_access_segment_are_rejected`。
+
+- [ ] **Step 7: 发布契约 v2**
+
+`scripts/build-lite.sh` 的 `lite-runtime-contract.txt` 升级到 `schema_version=2`：`lan_*` 字段取代 `mgmt_*`，新增 `plant_default_mode=inactive`、`plant_default_cidr=192.168.20.254/24`、`wireless_stack=mt_wifi`、`management_ap_*` 字段。
+对应测试：`tests/scripts/test_lite_build_evidence.py::test_generated_runtime_contract_matches_lite_defaults_without_credentials`。
+
+- [ ] **Step 8: 补一条 configure-lite 集成断言**
 
 在 `tests/scripts/test_scripts.py` 新增 `test_lite_config_installs_reachable_access_segment()`（类 `ScriptInterfaceTests`）：调用既有 `run_lite_configure(lite_base_config())`，它返回 `(result, generated_config, installed_assets)`；断言 `installed_assets["files/etc/config/network"]` 含 `option ipaddr '192.168.10.1'`、`config device 'br_lan'`、`list ports 'eth1'`，`installed_assets["files/etc/config/dhcp"]` 含 `config dhcp 'lan'` 与 `option limit '150'`，且两者都不含 `mgmt`。
 
 Run: `python3 -m unittest tests.scripts.test_scripts.ScriptInterfaceTests.test_lite_config_installs_reachable_access_segment -v`
 Expected: PASS。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 9: 提交**
 
 ```bash
-git add overlays/devices/tr3000-lite/files/etc/config/network overlays/devices/tr3000-lite/files/etc/config/dhcp tests/structure/test_repository_contract.py tests/scripts/test_scripts.py
-git commit -m "feat(lite): ship a reachable access segment with DHCP"
+git add overlays/devices/tr3000-lite/files/etc/config scripts/build-lite.sh scripts/tr3000-lite-plant.sh scripts/tr3000-lite-remote.sh tests/
+git commit -m "feat(lite): ship a reachable access segment with DHCP and LAN firewall"
 ```
 
 ---
 
-### Task 2: 防火墙 zone 迁移到 `lan`
+### Task 2: 防火墙 zone 的 native nft 语义门禁（配置已并入 Task 1）
 
 **Files:**
-- Modify: `overlays/devices/tr3000-lite/files/etc/config/firewall`
-- Test: `tests/structure/test_repository_contract.py`
-- Test: `tests/scripts/native_remote_nft.py`（新增一个用例文件或在现有文件中追加）
+- Test: `tests/scripts/native_remote_nft.py`（追加一个用例文件或在现有文件中追加）
 
 **Interfaces:**
-- Consumes: Task 1 的 `lan` 段与 `plant` 默认无地址状态。
-- Produces: 防火墙 zone `lan`（`list network 'lan'`、`input ACCEPT`、`output ACCEPT`、`forward ACCEPT`）、`config forwarding`（`src lan`/`dest wan`）、zone `plant`/`wan`/`wg` 保持；规则 `tr3000_lite_lan_plant_icmp`、`tr3000_lite_lan_plant_tcp`、`tr3000_lite_lan_plant_snat_icmp`、`tr3000_lite_lan_plant_snat_tcp`（`src_ip 192.168.10.0/24`）；`mgmt` zone 与原 `tr3000_lite_mgmt_plant_*` 规则全部删除。
+- Consumes: Task 1 的 overlay `firewall`（`lan` zone、`lan→wan` 转发、`lan→plant` 放行与 SNAT）。
+- Produces: 一个在隔离 network namespace 里跑的 nftables 语义用例，证明 `lan` zone 放行、`192.168.10.0/24` 源地址的 SNAT 生效、`mgmt` zone 已不存在。
 
-- [ ] **Step 1: 写失败的防火墙契约测试**
+- [ ] **Step 1: 写失败的 native nft 用例**
 
-```python
-def test_lite_firewall_allows_management_from_the_access_segment(self) -> None:
-    fw = (ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8")
-    self.assertIn("config zone\n\toption name 'lan'", fw.replace("'lan'", "'lan'"))
-    self.assertIn("list network 'lan'", fw)
-    self.assertNotIn("'mgmt'", fw)
-    self.assertNotIn("tr3000_lite_mgmt_plant", fw)
-    self.assertIn("tr3000_lite_lan_plant_icmp", fw)
-    self.assertIn("option src_ip '192.168.10.0/24'", fw)
-```
+在 `tests/scripts/native_remote_nft.py` 追加：把 overlay `firewall` 交给 `fw4` 生成 nftables 规则集（复用现有用例的隔离 netns 夹具），断言规则集中存在 `lan` zone 的 accept 链与 `192.168.10.0/24` 源地址的 SNAT 规则，且不存在 `mgmt` zone。
 
-（实现时把第一条断言改成按行匹配的稳定写法，例如先切分出 `config zone` 段再检查 `option name 'lan'`。）
-
-- [ ] **Step 2: 跑测试确认失败**
-
-Run: `python3 -m unittest tests.structure.test_repository_contract.RepositoryContractTests.test_lite_firewall_allows_management_from_the_access_segment -v`
-Expected: FAIL（当前仍有 `mgmt` zone）。
-
-- [ ] **Step 3: 改写 overlay firewall**
-
-在 `overlays/devices/tr3000-lite/files/etc/config/firewall`：
-
-- 新增 zone：
-  ```
-  config zone
-  	option name 'lan'
-  	list network 'lan'
-  	option input 'ACCEPT'
-  	option output 'ACCEPT'
-  	option forward 'ACCEPT'
-  ```
-- 保留 `config defaults`（`flow_offloading '0'` 等）与 `wan`/`plant`/`wg` zone 不变；
-- 把原 `config forwarding`（`src mgmt` / `dest wan`）改为 `src lan` / `dest wan`；
-- 删除 `Allow-management-DHCP`/`DNS`/`SSH`/`HTTPS` 四条 `mgmt` 规则（`lan` zone 的 `input ACCEPT` 已覆盖）；
-- 把四条 `tr3000_lite_mgmt_plant_*` 规则改名为 `tr3000_lite_lan_plant_*`，`src_ip` 由 `192.168.77.0/24` 改为 `192.168.10.0/24`，`dest_ip` 仍为 `192.168.10.0/24`（Task 3 起由控制器按 plant CIDR 覆盖）；
-- `tr3000_lite_plant_luci` 规则保持 `enabled '0'`。
-
-- [ ] **Step 4: 跑测试确认通过**
-
-Run: `python3 -m unittest tests.structure.test_repository_contract -v`
-Expected: PASS。
-
-- [ ] **Step 5: 用 native nft 用例锁住 zone 语义**
-
-在 `tests/scripts/native_remote_nft.py` 追加一个用例：把 overlay 的 `firewall` 交给 `fw4` 生成 nftables 规则（复用现有用例的隔离 netns 夹具），断言生成的规则集中存在 `lan` zone 的 accept 链与 `192.168.10.0/24` 源地址的 SNAT 规则，且不存在 `mgmt` zone。
+- [ ] **Step 2: 跑用例确认通过或按环境 skip**
 
 Run: `sudo python3 -m unittest tests.scripts.test_scripts -v -k nft`（或该文件既有的显式 gate 命令）
-Expected: PASS（若环境无 sudo/netns，标记 skip 并在报告中说明）。
+Expected: PASS；若环境无 sudo/netns，标记 skip 并在报告中说明。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 3: 提交**
 
 ```bash
-git add overlays/devices/tr3000-lite/files/etc/config/firewall tests/structure/test_repository_contract.py tests/scripts/native_remote_nft.py
-git commit -m "feat(lite): move the management firewall zone to the access segment"
+git add tests/scripts/native_remote_nft.py
+git commit -m "test(lite): pin the access segment firewall semantics with native nft"
 ```
 
 ---
@@ -599,108 +580,45 @@ git commit -m "feat(lite): show the access segment and the industrial mode switc
 
 ---
 
-### Task 7: 产物契约与构建证据
+### Task 7: 构建期断言（契约已随 Task 1 发布）
 
 **Files:**
-- Modify: `scripts/build-lite.sh`
+- Modify: `scripts/build-lite.sh`（只增加构建期断言）
 - Test: `tests/scripts/test_lite_build_evidence.py`
 
 **Interfaces:**
 - Consumes: Task 1–3 的最终配置与控制器字段。
-- Produces: `lite-runtime-contract.txt` 升级到 `schema_version=2`，字段见 §Interfaces；构建脚本对 overlay 的三条硬断言（见 Step 3）。
+- Produces: 构建脚本对 overlay 的三条硬断言（见 Step 2）；契约 v2 已在 Task 1 发布。
 
 - [ ] **Step 1: 写失败的证据测试**
 
 在 `tests/scripts/test_lite_build_evidence.py` 新增：
 
 ```python
-def test_runtime_contract_reports_the_access_segment(self):
-    contract = self.contract_text()
-    self.assertIn("schema_version=2", contract)
-    self.assertIn("lan_interface=lan", contract)
-    self.assertIn("lan_device=br-lan", contract)
-    self.assertIn("lan_cidr=192.168.10.1/24", contract)
-    self.assertIn("lan_dhcp_pool=192.168.10.100-192.168.10.249", contract)
-    self.assertIn("plant_default_cidr=192.168.20.254/24", contract)
-    self.assertIn("wireless_stack=mt_wifi", contract)
-    self.assertIn("management_ap_network=lan", contract)
-    self.assertNotIn("mgmt_cidr", contract)
+def test_build_rejects_an_overlay_without_the_access_segment(self):
+    # 伪造缺少 lan 段的 overlay，构建必须失败而不是产出错误固件
+    ...
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+（实现方式：给 `run_build()` 增加 `overlay` 覆盖参数，注入一份没有 `config interface 'lan'` 的 network/dhcp/firewall，断言构建退出码非 0 且错误信息指向访问段缺失。）
 
-Run: `python3 -m unittest tests.scripts.test_lite_build_evidence -v`
-Expected: FAIL（契约仍是 `schema_version=1` 且含 `mgmt_cidr`）。
+- [ ] **Step 2: 在构建脚本里追加三条断言**
 
-- [ ] **Step 3: 更新契约与构建断言**
-
-`scripts/build-lite.sh` 的 `lite-runtime-contract.txt` 块改为：
-
-```
-schema_version=2
-evidence_kind=expected-defaults-not-live-state
-lan_interface=lan
-lan_device=br-lan
-lan_cidr=192.168.10.1/24
-lan_dhcp_pool=192.168.10.100-192.168.10.249
-plant_interface=plant
-plant_device=eth1
-plant_default_cidr=192.168.20.254/24
-plant_default_mode=inactive
-plant_dhcpv4_dhcpv6_ra_ndp=off
-lan_to_plant_protocols=icmp-echo,tcp
-lan_to_plant_snat=plant-address
-lan_plant_bridged=0
-luci_package=luci-app-tr3000-lite
-allow_luci=0
-allow_lan=1
-allow_wireguard=0
-plant_https_port=443
-plant_https_gate=root-password-and-explicit-enable
-wan_management=off
-wireless_stack=mt_wifi
-management_ap_network=lan
-management_ap_encryption=psk2
-management_ap_default_open_ap=disabled
-management_ap_heal_service=/etc/init.d/tr3000-lite-wifi
-uplink_order=wan,wwan,usbwan
-uplink_metrics=10,20,30
-uplink_interval_seconds=15
-uplink_fail_rounds=3
-uplink_recover_rounds=2
-uplink_daemon=/usr/sbin/lite-uplink-watch
-uplink_status=/usr/sbin/tr3000-lite-uplink-status
-uplink_event_hook=/usr/lib/tr3000-lite/uplink-changed
-usb_drivers=rndis_host,cdc_ether
-usb_hotplug=/etc/hotplug.d/net/90-tr3000-lite-usbwan
-usb_multiple_candidates=fail-closed
-usb_periodic_rescan=on-daemon-round
-wireless_client_config=standard-luci-only
-allow_wireguard_direct=0
-allow_wireguard_vps=0
-remote_controller=/usr/sbin/tr3000-lite-remote
-ddns_status=/usr/sbin/tr3000-lite-ddns-status
-enroll_script=/usr/sbin/tr3000-lite-enroll
-remote_schema_version=1
-ddns_schema_version=1
-enroll_schema_version=1
-```
-
-并在构建脚本里追加三条断言（任一不满足即 `fail`）：
+`scripts/build-lite.sh`（任一不满足即 `fail`）：
 1. Lite overlay 的 `etc/config/network` 含 `config interface 'lan'`、`option ipaddr '192.168.10.1'`、`config device 'br_lan'`、`list ports 'eth1'`；
 2. Lite overlay 的 `etc/config/dhcp` 含 `config dhcp 'lan'`；
 3. Lite overlay **不含** `etc/config/wireless`（固件不带无线配置）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [ ] **Step 3: 跑测试确认通过**
 
 Run: `python3 -m unittest tests.scripts.test_lite_build_evidence -v`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 4: 提交**
 
 ```bash
 git add scripts/build-lite.sh tests/scripts/test_lite_build_evidence.py
-git commit -m "feat(lite): publish the access segment runtime contract"
+git commit -m "feat(lite): fail the build when the access segment is missing"
 ```
 
 ---

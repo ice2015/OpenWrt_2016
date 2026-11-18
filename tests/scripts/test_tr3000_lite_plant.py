@@ -59,13 +59,19 @@ if cmd == 'uci':
         (savedir/args[0]).unlink(missing_ok=True)
     else: sys.exit(2)
 elif cmd == 'ip':
-    if 'route' in args: print('192.168.77.0/24 dev br-mgmt\n' + os.environ.get('EXTRA_ROUTE',''))
+    if 'route' in args: print('192.168.10.0/24 dev br-lan\n' + os.environ.get('EXTRA_ROUTE',''))
     elif 'addr' in args:
         if failure != 'missing_ip' or not fail_once('missing_ip'):
             text = (root/'etc/config/network').read_text()
-            import ipaddress, re
-            address = re.search(r"option '?ipaddr'? '([^']+)'", text).group(1)
-            mask = re.search(r"option '?netmask'? '([^']+)'", text).group(1)
+            import ipaddress, shlex
+            address = mask = None; section = None
+            for line in text.splitlines():
+                tokens = shlex.split(line, comments=True)
+                if not tokens: continue
+                if tokens[0] == 'config': section = tokens[2] if len(tokens) > 2 else None
+                elif section == 'plant' and tokens[0] == 'option':
+                    if tokens[1] == 'ipaddr': address = tokens[2]
+                    elif tokens[1] == 'netmask': mask = tokens[2]
             prefix = ipaddress.IPv4Network('0.0.0.0/'+mask).prefixlen
             if failure == 'wrong_prefix' and fail_once('wrong_prefix'): prefix = 25
             print('2: eth1 inet '+address+'/'+str(prefix)+' scope global eth1')
@@ -98,6 +104,14 @@ class PlantControllerTests(unittest.TestCase):
         config.mkdir(parents=True)
         for name in ('network', 'firewall', 'tr3000-lite'):
             shutil.copyfile(ROOT / 'overlays/devices/tr3000-lite/files/etc/config' / name, config/name)
+        # The shipped default leaves the industrial segment unbound; the
+        # controller only manages an address once the port is handed over.
+        network = config/'network'
+        network.write_text(network.read_text().replace(
+            "config interface 'plant'\n\toption proto 'none'\n",
+            "config interface 'plant'\n\toption device 'eth1'\n\toption proto 'static'\n"
+            "\toption ipaddr '192.168.20.254'\n\toption netmask '255.255.255.0'\n",
+        ))
         (self.root/'etc/shadow').write_text('root:!:0:0:99999:7:::\n')
         self.before = {name: (config/name).read_bytes() for name in ('network','firewall')}
         bindir = self.root/'bin'; bindir.mkdir()
@@ -203,11 +217,24 @@ printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
         self.assertEqual(network,firewall)
 
     def test_status_and_valid_address(self):
-        for data in (self.run_controller('status','--json'), self.run_controller('validate','--address','192.168.10.254/24')):
-            self.assertEqual('192.168.10.254',data['plant']['address'])
+        for data in (self.run_controller('status','--json'), self.run_controller('validate','--address','192.168.20.254/24')):
+            self.assertEqual('192.168.20.254',data['plant']['address'])
             self.assertEqual(24,data['plant'].get('prefix'))
             self.assertEqual('255.255.255.0',data['plant'].get('netmask'))
         self.unchanged()
+
+    def test_the_access_segment_is_not_a_valid_plant_address(self):
+        # 192.168.10.0/24 now belongs to the operator-facing access segment.
+        data = self.run_controller('validate','--address','192.168.10.254/24',code=2)
+        self.assertEqual('management_overlap',data['checks']['result'])
+        self.unchanged()
+
+    def test_apply_updates_the_shipped_management_plant_rules(self):
+        self.apply()
+        firewall = (self.root/'etc/config/firewall').read_text()
+        self.assertNotIn('tr3000_lite_mgmt_plant', firewall)
+        self.assertIn('tr3000_lite_lan_plant_tcp', firewall)
+        self.assertIn('tr3000_lite_lan_plant_snat_tcp', firewall)
 
     def test_status_reports_applied_prefix(self):
         data = self.run_controller('apply','--address','192.168.20.62/26','--allow-luci','false','--allow-mgmt','true')
@@ -223,7 +250,7 @@ printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
         self.unchanged()
 
     def test_invalid_inputs_leave_both_configs_unchanged(self):
-        for address in ('999.1.1.1/24','192.168.10.1/31','192.168.10.0/24','192.168.10.255/24','192.168.77.254/24','192.168.1.1/16'):
+        for address in ('999.1.1.1/24','192.168.20.1/31','192.168.20.0/24','192.168.20.255/24','192.168.10.254/24','192.168.1.1/16'):
             with self.subTest(address=address):
                 self.run_controller('validate','--address',address,code=2)
                 self.unchanged()

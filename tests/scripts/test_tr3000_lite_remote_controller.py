@@ -158,6 +158,12 @@ class RemoteControllerTests(unittest.TestCase):
         network.chmod(0o600)
         # Explicit private laboratory inputs, never the generic firmware defaults.
         self.set_option('network','wg_direct','listen_port','51820')
+        # The shipped default leaves the industrial segment inactive; remote
+        # plant traffic is only authorized once the operator enables it.
+        self.set_option('network','plant','proto','static')
+        self.set_option('network','plant','device','eth1')
+        self.set_option('network','plant','ipaddr','192.168.20.254')
+        self.set_option('network','plant','netmask','255.255.255.0')
         policy=self.root/'etc/config/tr3000-lite-remote'
         policy.write_text("config policy 'access'\n option allow_luci '1'\n option allow_plant '1'\n option direct_enabled '1'\n option vps_enabled '1'\n list vps_remote_source '10.88.0.20/32'\n")
         for role,value in zip(('direct','vps'),self.private):
@@ -244,8 +250,8 @@ class RemoteControllerTests(unittest.TestCase):
         forward_rules=(private/'remote-forward.nft').read_text()
         self.assertIn('iifname "wg_direct" tcp dport 443 ip saddr != { 10.77.0.10/32 } drop',input_rules)
         self.assertIn('iifname "wg_vps" tcp dport 443 ip daddr != 10.88.0.2/32 drop',input_rules)
-        self.assertIn('iifname "wg_direct" ip daddr != 192.168.10.0/24 drop',forward_rules)
-        self.assertIn('oifname "wg_direct" ip saddr != 192.168.10.0/24 drop',forward_rules)
+        self.assertIn('iifname "wg_direct" ip daddr != 192.168.20.0/24 drop',forward_rules)
+        self.assertIn('oifname "wg_direct" ip saddr != 192.168.20.0/24 drop',forward_rules)
         self.assertIn('oifname "wg_direct" ct direction != reply drop',forward_rules)
         for chain in ('input','forward'):
             path=private/('remote-'+chain+'.nft')
@@ -260,7 +266,7 @@ class RemoteControllerTests(unittest.TestCase):
         self.run_controller('set-policy','--allow-luci','false','--allow-plant','true')
         forward_rules=(private/'remote-forward.nft').read_text()
         self.assertIn('ip daddr != 192.168.20.192/26 drop',forward_rules)
-        self.assertNotIn('192.168.10.',forward_rules)
+        self.assertNotIn('192.168.20.0/24',forward_rules)
 
     def test_offload_is_unsupported_without_mutating_foreign_defaults(self):
         for option in ('flow_offloading','flow_offloading_hw'):
@@ -300,7 +306,7 @@ class RemoteControllerTests(unittest.TestCase):
         self.assertTrue(data['effective']['allow_luci']); self.assertTrue(data['effective']['allow_plant'])
         self.assertEqual(['10.77.0.10/32'],data['sources']['direct'])
         self.assertEqual(['10.88.0.20/32'],data['sources']['vps'])
-        self.assertEqual('192.168.10.0/24',data['plant']['cidr'])
+        self.assertEqual('192.168.20.0/24',data['plant']['cidr'])
         owned=self.owned()
         inputs=[r for r in owned if r['.type']=='rule' and r.get('dest_port')=='443']
         self.assertEqual(2,len(inputs))
@@ -311,13 +317,13 @@ class RemoteControllerTests(unittest.TestCase):
         forwards=[r for r in owned if r['.type']=='rule' and r.get('dest')=='plant']
         self.assertEqual(4,len(forwards))
         for r in forwards:
-            self.assertEqual('192.168.10.0/24',r['dest_ip'])
+            self.assertEqual('192.168.20.0/24',r['dest_ip'])
             self.assertIn(r['proto'],('icmp','tcp'))
             if r['proto']=='icmp': self.assertEqual('echo-request',r['icmp_type'])
         nats=[r for r in owned if r['.type']=='nat']; self.assertEqual(4,len(nats))
         for r in nats:
             self.assertEqual('plant',r['src']); self.assertNotIn('dest',r)
-            self.assertEqual('192.168.10.254',r['snat_ip']); self.assertEqual('SNAT',r['target'])
+            self.assertEqual('192.168.20.254',r['snat_ip']); self.assertEqual('SNAT',r['target'])
             self.assertIn(r['src_ip'],('10.77.0.10/32','10.88.0.20/32'))
         self.assertEqual(self.foreign,[r for r in self.sections('firewall') if not (r.get('.name') or '').startswith(PREFIX)])
         self.assertEqual(self.network_before,(self.root/'etc/config/network').read_bytes())
@@ -359,6 +365,17 @@ class RemoteControllerTests(unittest.TestCase):
         self.assertEqual([],self.permissions())
         self.assertFalse(data['effective']['allow_luci'])
         self.assertFalse(data['effective']['allow_plant'])
+
+    def test_peer_sources_inside_the_access_segment_are_rejected(self):
+        # The operator access segment is not a peer source; a peer must never
+        # claim an address the router serves itself.
+        self.set_option('network','engineer','allowed_ips',['192.168.10.5/32'])
+        data=self.run_controller('sync',code=2)
+        self.assertEqual('invalid_sources',data['checks']['result'])
+        self.assertEqual([],self.permissions())
+        self.set_option('network','engineer','allowed_ips',['10.77.0.10/32'])
+        data=self.run_controller('sync')
+        self.assertEqual(['10.77.0.10/32'],data['sources']['direct'])
 
     def test_no_peers_or_unroutable_vps_sources_never_authorize_a_zone(self):
         self.write_sections('network',[row for row in self.sections('network') if row['.name']!='engineer'])

@@ -39,7 +39,7 @@ read_state() {
 	CURRENT_ADDRESS=$(get network.plant.ipaddr || :)
 	CURRENT_NETMASK=$(get network.plant.netmask || :)
 	CURRENT_LUCI=$(get firewall.tr3000_lite_plant_luci.enabled || printf 0)
-	CURRENT_MGMT=$(get firewall.tr3000_lite_mgmt_plant_tcp.enabled || printf 0)
+	CURRENT_MGMT=$(get firewall.tr3000_lite_lan_plant_tcp.enabled || printf 0)
 }
 
 emit() {
@@ -128,9 +128,9 @@ validate_address() {
 	lite_valid_cidr "$ADDRESS" || fail 2 invalid_address
 	PLANT_IP=${ADDRESS%/*}; PLANT_PREFIX=${ADDRESS#*/}
 	lite_check_address_not_network_or_broadcast "$PLANT_IP" "$PLANT_PREFIX" || fail 2 unusable_host
-	# The management subnet is reserved even when its AP currently has no route.
+	# The operator access subnet is reserved for the management segment.
 	plant_n=$(lite_ipv4_number "$PLANT_IP"); plant_m=$(lite_prefix_mask "$PLANT_PREFIX")
-	mgmt_n=$(lite_ipv4_number 192.168.77.0); mgmt_m=$(lite_prefix_mask 24)
+	mgmt_n=$(lite_ipv4_number 192.168.10.0); mgmt_m=$(lite_prefix_mask 24)
 	[ $((plant_n & mgmt_m)) -ne "$mgmt_n" ] &&
 		[ $((mgmt_n & plant_m)) -ne $((plant_n & plant_m)) ] || fail 2 management_overlap
 	lite_valid_iface "$DEVICE" || fail 2 invalid_device
@@ -198,11 +198,11 @@ render_candidate() {
 	mgmt=0; [ "$ALLOW_MGMT" != true ] || mgmt=1
 	candidate_set "firewall.tr3000_lite_plant_luci.enabled=$luci"
 	for proto in icmp tcp; do
-		for section in "tr3000_lite_mgmt_plant_$proto" "tr3000_lite_mgmt_plant_snat_$proto"; do
+		for section in "tr3000_lite_lan_plant_$proto" "tr3000_lite_lan_plant_snat_$proto"; do
 			candidate_set "firewall.$section.enabled=$mgmt"
 			candidate_set "firewall.$section.dest_ip=$(plant_network_cidr "$ADDRESS")"
 		done
-		candidate_set "firewall.tr3000_lite_mgmt_plant_snat_$proto.snat_ip=$PLANT_IP"
+		candidate_set "firewall.tr3000_lite_lan_plant_snat_$proto.snat_ip=$PLANT_IP"
 	done
 	for package in network firewall; do
 		candidate_uci commit "$package" || fail 3 candidate_commit

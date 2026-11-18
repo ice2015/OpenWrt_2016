@@ -321,6 +321,51 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         for manifest in (ROOT / "manifests/devices").glob("*.json"):
             self.assertNotIn("tr3000-lite", manifest.read_text(encoding="utf-8"))
 
+    def test_lite_overlay_ships_reachable_access_segment(self) -> None:
+        network = (ROOT / "overlays/devices/tr3000-lite/files/etc/config/network").read_text(encoding="utf-8")
+        self.assertIn("config interface 'lan'", network)
+        self.assertIn("option device 'br-lan'", network)
+        self.assertIn("option ipaddr '192.168.10.1'", network)
+        self.assertIn("option netmask '255.255.255.0'", network)
+        self.assertIn("config device 'br_lan'", network)
+        self.assertIn("option name 'br-lan'", network)
+        self.assertIn("option type 'bridge'", network)
+        self.assertIn("list ports 'eth1'", network)
+        # The industrial segment must not claim the only LAN port by default.
+        plant = network.split("config interface 'plant'", 1)[1]
+        self.assertNotIn("option device", plant.split("config", 1)[0])
+        self.assertIn("option proto 'none'", plant)
+
+    def test_lite_overlay_serves_dhcp_on_the_access_segment(self) -> None:
+        dhcp = (ROOT / "overlays/devices/tr3000-lite/files/etc/config/dhcp").read_text(encoding="utf-8")
+        self.assertIn("config dhcp 'lan'", dhcp)
+        self.assertIn("option interface 'lan'", dhcp)
+        self.assertIn("option start '100'", dhcp)
+        self.assertIn("option limit '150'", dhcp)
+        self.assertIn("option dhcpv4 'server'", dhcp)
+        self.assertNotIn("config dhcp 'mgmt'", dhcp)
+
+    def test_lite_firewall_allows_management_from_the_access_segment(self) -> None:
+        from tests.scripts.test_scripts import uci_sections
+        firewall = uci_sections((ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8"))
+        sections = {s[".name"]: s for s in firewall if s[".name"]}
+        zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
+        self.assertIn("lan", zones)
+        self.assertEqual(["lan"], zones["lan"]["network"])
+        self.assertEqual("ACCEPT", zones["lan"]["input"])
+        self.assertEqual("ACCEPT", zones["lan"]["forward"])
+        self.assertNotIn("mgmt", zones)
+        self.assertTrue(any(s[".type"] == "forwarding" and s["src"] == "lan" and s["dest"] == "wan" for s in firewall))
+        for proto in ("icmp", "tcp"):
+            rule = sections[f"tr3000_lite_lan_plant_{proto}"]
+            self.assertEqual("lan", rule["src"])
+            self.assertEqual("192.168.10.0/24", rule["src_ip"])
+            self.assertEqual("192.168.20.0/24", rule["dest_ip"])
+            snat = sections[f"tr3000_lite_lan_plant_snat_{proto}"]
+            self.assertEqual("192.168.20.254", snat["snat_ip"])
+            self.assertEqual("SNAT", snat["target"])
+        self.assertNotIn("tr3000_lite_mgmt_plant_icmp", sections)
+
     def test_required_layer_files_exist(self) -> None:
         required = {
             ".editorconfig",

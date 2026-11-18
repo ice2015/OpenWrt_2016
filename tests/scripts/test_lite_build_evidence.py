@@ -96,38 +96,44 @@ else echo offline-commit; fi
         self.assertIn("CONFIG_PACKAGE_luci-app-tr3000-lite=y", evidence["selected-packages.txt"].splitlines())
         self.assertIn("lite-runtime-contract.txt", evidence)
         contract = dict(line.split("=", 1) for line in evidence["lite-runtime-contract.txt"].splitlines())
-        self.assertEqual("1", contract["schema_version"])
+        self.assertEqual("2", contract["schema_version"])
         self.assertEqual("expected-defaults-not-live-state", contract["evidence_kind"])
         configs = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
         network = {s[".name"]: s for s in uci_sections((configs / "network").read_text())}
         policy = uci_sections((configs / "tr3000-lite").read_text())[0]
-        self.assertEqual(network["plant"]["device"], contract["plant_device"])
-        self.assertEqual(str(ipaddress.IPv4Interface(network["plant"]["ipaddr"] + "/" + network["plant"]["netmask"])), contract["plant_cidr"])
-        self.assertEqual(network["mgmt"]["device"], contract["mgmt_device"])
-        self.assertEqual(str(ipaddress.IPv4Interface(network["mgmt"]["ipaddr"] + "/" + network["mgmt"]["netmask"])), contract["mgmt_cidr"])
+        self.assertEqual("lan", contract["lan_interface"])
+        self.assertEqual(network["lan"]["device"], contract["lan_device"])
+        self.assertEqual(str(ipaddress.IPv4Interface(network["lan"]["ipaddr"] + "/" + network["lan"]["netmask"])), contract["lan_cidr"])
         dhcp = {s[".name"]: s for s in uci_sections((configs / "dhcp").read_text())}
-        mgmt_net = ipaddress.IPv4Interface(contract["mgmt_cidr"]).network
-        start = int(dhcp["mgmt"]["start"])
-        end = start + int(dhcp["mgmt"]["limit"]) - 1
-        self.assertEqual(f"{mgmt_net[start]}-{mgmt_net[end]}", contract["mgmt_dhcp_pool"])
+        lan_net = ipaddress.IPv4Interface(contract["lan_cidr"]).network
+        start = int(dhcp["lan"]["start"])
+        end = start + int(dhcp["lan"]["limit"]) - 1
+        self.assertEqual(f"{lan_net[start]}-{lan_net[end]}", contract["lan_dhcp_pool"])
+        # The industrial segment stays inactive and must not claim the LAN port.
+        self.assertEqual("none", network["plant"]["proto"])
+        self.assertNotIn("device", network["plant"])
+        self.assertEqual("inactive", contract["plant_default_mode"])
+        self.assertEqual("eth1", contract["plant_device"])
+        self.assertFalse(ipaddress.IPv4Interface(contract["plant_default_cidr"]).network.overlaps(lan_net))
         self.assertEqual("1", dhcp["plant"]["ignore"])
         for service in ("dhcpv4", "dhcpv6", "ra", "ndp"):
             self.assertEqual("disabled", dhcp["plant"][service])
         firewall = {s[".name"]: s for s in uci_sections((configs / "firewall").read_text()) if s[".name"]}
         for proto in ("icmp", "tcp"):
-            rule = firewall[f"tr3000_lite_mgmt_plant_{proto}"]
-            snat = firewall[f"tr3000_lite_mgmt_plant_snat_{proto}"]
+            rule = firewall[f"tr3000_lite_lan_plant_{proto}"]
+            snat = firewall[f"tr3000_lite_lan_plant_snat_{proto}"]
             self.assertEqual(contract["allow_mgmt"], rule["enabled"])
-            self.assertEqual(str(ipaddress.IPv4Interface(contract["plant_cidr"]).network), rule["dest_ip"])
-            self.assertEqual(network["plant"]["ipaddr"], snat["snat_ip"])
+            self.assertEqual("lan", rule["src"])
+            self.assertEqual(str(ipaddress.IPv4Interface(contract["plant_default_cidr"]).network), rule["dest_ip"])
+            self.assertEqual(contract["plant_default_cidr"].split("/")[0], snat["snat_ip"])
             self.assertEqual("SNAT", snat["target"])
         self.assertEqual(contract["allow_luci"], firewall["tr3000_lite_plant_luci"]["enabled"])
         self.assertEqual(contract["plant_https_port"], firewall["tr3000_lite_plant_luci"]["dest_port"])
         for flag in ("allow_luci", "allow_mgmt", "allow_wireguard"):
             self.assertEqual(policy[flag], contract[flag])
         self.assertEqual("luci-app-tr3000-lite", contract["luci_package"])
-        self.assertEqual("icmp-echo,tcp", contract["mgmt_to_plant_protocols"])
-        self.assertEqual("plant-address", contract["mgmt_to_plant_snat"])
+        self.assertEqual("icmp-echo,tcp", contract["lan_to_plant_protocols"])
+        self.assertEqual("plant-address", contract["lan_to_plant_snat"])
         self.assertEqual("off", contract["plant_dhcpv4_dhcpv6_ra_ndp"])
         self.assertEqual("root-password-and-ap-initialized", contract["plant_https_gate"])
         self.assertNotIn("SENSITIVE-FIXTURE", "\n".join(evidence.values()))

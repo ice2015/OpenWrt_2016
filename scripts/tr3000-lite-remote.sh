@@ -107,7 +107,7 @@ collect_sources() {
 		if [ "$PLANT_OK" = true ]; then
 			lite_cidr_contains "$PLANT_CIDR" "${ip%/32}" && return 1
 		fi
-		lite_cidr_contains 192.168.77.0/24 "${ip%/32}" && return 1
+		lite_cidr_contains 192.168.10.0/24 "${ip%/32}" && return 1
 	done
 	for ip in $DIRECT_SOURCES; do printf '%s\n' "$vps_allowed" | grep -Fxq "$ip" && return 1; done
 	return 0

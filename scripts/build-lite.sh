@@ -199,26 +199,31 @@ cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/build.config"
 # Expected public defaults only: never read device wireless, shadow or private UCI.
 # This describes the shipped policy; it does not assert a successful device boot.
 cat > "$ARTIFACT_DIR/lite-runtime-contract.txt" <<'EOF'
-schema_version=1
+schema_version=2
 evidence_kind=expected-defaults-not-live-state
+lan_interface=lan
+lan_device=br-lan
+lan_cidr=192.168.10.1/24
+lan_dhcp_pool=192.168.10.100-192.168.10.249
 plant_interface=plant
 plant_device=eth1
-plant_cidr=192.168.10.254/24
-mgmt_interface=mgmt
-mgmt_device=br-mgmt
-mgmt_cidr=192.168.77.1/24
-mgmt_dhcp_pool=192.168.77.100-192.168.77.149
+plant_default_mode=inactive
+plant_default_cidr=192.168.20.254/24
+plant_dhcpv4_dhcpv6_ra_ndp=off
+lan_to_plant_protocols=icmp-echo,tcp
+lan_to_plant_snat=plant-address
+lan_plant_bridged=0
 luci_package=luci-app-tr3000-lite
 allow_luci=0
 allow_mgmt=1
 allow_wireguard=0
 plant_https_port=443
 plant_https_gate=root-password-and-ap-initialized
-plant_dhcpv4_dhcpv6_ra_ndp=off
-mgmt_to_plant_protocols=icmp-echo,tcp
-mgmt_to_plant_snat=plant-address
-mgmt_plant_bridged=0
 wan_management=off
+wireless_stack=mt_wifi
+management_ap_network=lan
+management_ap_encryption=psk2
+management_ap_default_open_ap=disabled
 uplink_order=wan,wwan,usbwan
 uplink_metrics=10,20,30
 uplink_interval_seconds=15

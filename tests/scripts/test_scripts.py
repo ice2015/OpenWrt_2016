@@ -464,22 +464,26 @@ class ScriptInterfaceTests(unittest.TestCase):
         result, _, assets = run_lite_configure(lite_base_config())
         self.assertEqual(0, result.returncode, result.stderr)
         network = {s[".name"]: s for s in uci_sections(assets["files/etc/config/network"])}
-        self.assertEqual("static", network["plant"]["proto"])
-        self.assertEqual("eth1", network["plant"]["device"])
-        self.assertEqual("192.168.10.254", network["plant"]["ipaddr"])
-        self.assertEqual("255.255.255.0", network["plant"]["netmask"])
-        self.assertEqual("br-mgmt", network["mgmt"]["device"])
-        self.assertEqual("192.168.77.1", network["mgmt"]["ipaddr"])
+        self.assertEqual("static", network["lan"]["proto"])
+        self.assertEqual("br-lan", network["lan"]["device"])
+        self.assertEqual("192.168.10.1", network["lan"]["ipaddr"])
+        self.assertEqual("255.255.255.0", network["lan"]["netmask"])
+        self.assertEqual("none", network["plant"]["proto"])
+        self.assertNotIn("device", network["plant"])
+        self.assertNotIn("mgmt", network)
         bridges = [s for s in network.values() if s[".type"] == "device"]
         self.assertEqual(1, len(bridges))
-        self.assertEqual("br-mgmt", bridges[0]["name"])
-        self.assertNotIn("eth1", bridges[0].get("ports", []))
+        self.assertEqual("br_lan", bridges[0][".name"])
+        self.assertEqual("br-lan", bridges[0]["name"])
+        self.assertEqual("bridge", bridges[0]["type"])
+        self.assertEqual(["eth1"], bridges[0]["ports"])
         dhcp = {s[".name"]: s for s in uci_sections(assets["files/etc/config/dhcp"])}
         self.assertEqual("1", dhcp["plant"]["ignore"])
         for service in ("dhcpv4", "dhcpv6", "ra", "ndp"):
             self.assertEqual("disabled", dhcp["plant"][service])
-        self.assertEqual("100", dhcp["mgmt"]["start"])
-        self.assertEqual("50", dhcp["mgmt"]["limit"])
+        self.assertEqual("100", dhcp["lan"]["start"])
+        self.assertEqual("150", dhcp["lan"]["limit"])
+        self.assertNotIn("mgmt", dhcp)
         policy = uci_sections(assets["files/etc/config/tr3000-lite"])[0]
         self.assertEqual("plant", policy[".name"])
         for option, value in (("allow_luci", "0"), ("allow_mgmt", "1"), ("allow_wireguard", "0")):
@@ -490,20 +494,10 @@ class ScriptInterfaceTests(unittest.TestCase):
         for option, value in (("src", "plant"), ("proto", "tcp"), ("dest_port", "443"), ("enabled", "0"), ("target", "ACCEPT")):
             self.assertEqual(value, luci[option])
         self.assertNotIn("dest", luci)
-        for proto in ("icmp", "tcp"):
-            rule = sections[f"tr3000_lite_mgmt_plant_{proto}"]
-            for option, value in (("src", "mgmt"), ("dest", "plant"), ("dest_ip", "192.168.10.0/24"), ("family", "ipv4"), ("proto", proto), ("target", "ACCEPT"), ("enabled", "1")):
-                self.assertEqual(value, rule[option])
-            nat = sections[f"tr3000_lite_mgmt_plant_snat_{proto}"]
-            for option, value in ((".type", "nat"), ("src", "plant"), ("src_ip", "192.168.77.0/24"), ("dest_ip", "192.168.10.0/24"), ("snat_ip", "192.168.10.254"), ("family", "ipv4"), ("proto", proto), ("target", "SNAT"), ("enabled", "1")):
-                self.assertEqual(value, nat[option])
-            self.assertNotIn("dest", nat)
-        self.assertEqual("echo-request", sections["tr3000_lite_mgmt_plant_icmp"]["icmp_type"])
         zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
-        for name in ("plant", "mgmt"):
-            zone = zones[name]
-            self.assertEqual("REJECT", zone["input"])
-            self.assertEqual("REJECT", zone["forward"])
+        self.assertIn("plant", zones)
+        self.assertEqual("REJECT", zones["plant"]["input"])
+        self.assertEqual("REJECT", zones["plant"]["forward"])
         self.assertEqual("REJECT", zones["plant"]["output"])
         self.assertFalse(any(s[".type"] == "forwarding" and s["src"] == "plant" for s in firewall))
         self.assertEqual(
@@ -520,6 +514,20 @@ class ScriptInterfaceTests(unittest.TestCase):
             self.assertEqual((ROOT / f"files/etc/config/{config}").read_text(encoding="utf-8"), full_assets[f"files/etc/config/{config}"])
         self.assertNotIn("files/etc/config/tr3000-lite", full_assets)
         self.assertFalse(any("tr3000-lite" in path for path in full_assets))
+
+    def test_lite_config_installs_reachable_access_segment(self) -> None:
+        result, _, assets = run_lite_configure(lite_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        network = assets["files/etc/config/network"]
+        self.assertIn("config interface 'lan'", network)
+        self.assertIn("option ipaddr '192.168.10.1'", network)
+        self.assertIn("config device 'br_lan'", network)
+        self.assertIn("list ports 'eth1'", network)
+        dhcp = assets["files/etc/config/dhcp"]
+        self.assertIn("config dhcp 'lan'", dhcp)
+        self.assertIn("option limit '150'", dhcp)
+        self.assertNotIn("mgmt", network)
+        self.assertNotIn("mgmt", dhcp)
 
     def test_lite_config_rejects_missing_device_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
