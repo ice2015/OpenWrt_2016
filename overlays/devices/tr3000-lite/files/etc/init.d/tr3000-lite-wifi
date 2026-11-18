@@ -1,0 +1,10 @@
+#!/bin/sh /etc/rc.common
+# Keep exactly one encrypted management AP per radio and publish the
+# readiness marker. A pending repair is logged and retried on the next boot.
+START=20
+STOP=10
+
+start() {
+	/usr/sbin/tr3000-lite-wifi repair ||
+		logger -t tr3000-lite-wifi "management AP repair pending"
+}

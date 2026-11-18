@@ -539,6 +539,15 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertIn("Lite overlay not found", result.stderr)
         self.assertEqual({}, assets)
 
+    def test_lite_installs_the_wireless_self_healing_controller(self) -> None:
+        result, _, assets = run_lite_configure(lite_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        for path in ("files/usr/sbin/tr3000-lite-wifi",
+                     "files/usr/sbin/tr3000-lite-wifi-ap",
+                     "files/etc/init.d/tr3000-lite-wifi"):
+            self.assertIn(path, assets, "missing wireless self-healing asset: " + path)
+        self.assertIn("tr3000-lite-wifi repair", assets["files/etc/init.d/tr3000-lite-wifi"])
+
     def test_lite_installs_fixed_plant_controller(self) -> None:
         result, _, assets = run_lite_configure(lite_base_config())
         self.assertEqual(0, result.returncode, result.stderr)

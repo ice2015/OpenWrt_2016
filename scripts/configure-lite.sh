@@ -197,6 +197,14 @@ install -m 0755 "$SCRIPT_DIR/tr3000-lite-ddns-status.sh" \
 	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-ddns-status"
 install -m 0644 "$SCRIPT_DIR/tr3000-lite-ddns-lib.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/ddns-lib.sh"
+# The self-healing controller repairs the radio on every later boot; it runs
+# the same first-boot implementation from a permanent path.
+install -m 0755 "$SCRIPT_DIR/tr3000-lite-wifi.sh" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-wifi"
+install -m 0755 "$LITE_OVERLAY/etc/init.d/tr3000-lite-wifi" \
+	"$SOURCE_DIR/files/etc/init.d/tr3000-lite-wifi"
+install -m 0755 "$LITE_OVERLAY/etc/uci-defaults/91-tr3000-lite-management-ap" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-lite-wifi-ap"
 install -m 0755 "$SCRIPT_DIR/tr3000-lite-ddns-event.sh" \
 	"$SOURCE_DIR/files/usr/lib/tr3000-lite/ddns-event"
 install -m 0755 "$SCRIPT_DIR/tr3000-lite-enroll.sh" \

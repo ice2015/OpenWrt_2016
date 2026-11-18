@@ -24,12 +24,14 @@ delimiter=' '
 if '-d' in a:
     i=a.index('-d'); delimiter=a[i+1]; del a[i:i+2]
 directory=pathlib.Path(a[a.index('-c')+1])
-delta=pathlib.Path(a[a.index('-t')+1])/'wireless'
+p=directory/'wireless'
+delta=pathlib.Path(a[a.index('-t')+1])/'wireless' if '-t' in a else None
 for flag in ('-c','-C','-t'):
     if flag in a:
         i=a.index(flag); del a[i:i+2]
-p=directory/'wireless'; d=json.loads(p.read_text()); action=a[0]
-if delta.is_file(): d=json.loads(delta.read_text())
+d=json.loads(p.read_text()); action=a[0]
+if delta is not None and delta.is_file(): d=json.loads(delta.read_text())
+if delta is None: delta=p
 names=[k for k,v in d.items() if v=='wifi-device']
 anonymous=d.get('.anonymous',[])
 def selector(k):
@@ -95,7 +97,8 @@ elif action=='commit':
         d={new+k[len(old):] if k==old or k.startswith(old+'.') else k:v for k,v in d.items()}
         reloaded.append(new)
     if anonymous: d['.anonymous']=reloaded
-    p.write_text(json.dumps(d)); delta.unlink(missing_ok=True)
+    p.write_text(json.dumps(d))
+    if delta != p: delta.unlink(missing_ok=True)
 else: sys.exit(2)
 '''
 
@@ -215,6 +218,74 @@ file=91-tr3000-lite-management-ap
         for ap in self.aps(first):
             self.assertEqual(first[ap+'.ssid'],second[ap+'.ssid'])
             self.assertEqual(first[ap+'.key'],second[ap+'.key'])
+
+    def ap_script_text(self):
+        text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
+        text=text.replace('RUNTIME=/tmp','RUNTIME="'+self.root.as_posix()+'/tmp"')
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/dev/urandom',(self.root/'random').as_posix())):
+            text=text.replace(old,new)
+        return text
+
+    def install_ap_script(self):
+        target=self.root/'usr/sbin/tr3000-lite-wifi-ap'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.ap_script_text(),newline='\n'); target.chmod(0o755)
+        return target
+
+    def install_fake_wifi(self):
+        target=self.root/'bin/wifi'
+        target.write_text('#!/bin/sh\ntouch "$WIFI_FIXTURE/reloaded"\n',newline='\n'); target.chmod(0o755)
+        return target
+
+    def run_service(self, *args, success=True, **extra):
+        service=ROOT/'scripts/tr3000-lite-wifi.sh'
+        self.assertTrue(service.is_file(),'wireless self-healing controller is missing')
+        text=service.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),
+                        ('/usr/sbin/tr3000-lite-wifi-ap',(self.root/'usr/sbin/tr3000-lite-wifi-ap').as_posix()),
+                        ('/sbin/wifi',(self.root/'bin/wifi').as_posix())):
+            text=text.replace(old,new)
+        target=self.root/'bin/tr3000-lite-wifi'; target.write_text(text,newline='\n'); target.chmod(0o755)
+        result=subprocess.run([bash_executable(),str(target),*args],capture_output=True,text=True,
+                              env=dict(os.environ,WIFI_FIXTURE=self.root.as_posix(),TEST_PYTHON=Path(sys.executable).as_posix(),**extra))
+        self.assertEqual(success,result.returncode==0,result.stdout+result.stderr)
+        return result
+
+    def test_repair_restores_a_missing_managed_ap(self):
+        self.install_ap_script(); self.install_fake_wifi()
+        self.state=dict(MTWIFI_STATE); self.save()
+        self.run_service('repair')
+        d=self.load()
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertTrue(self.marker().is_file())
+        self.assertTrue((self.root/'reloaded').exists())
+
+    def test_repair_disables_a_resurrected_open_ap(self):
+        self.install_ap_script(); self.install_fake_wifi()
+        d=self.run_ap(state=MTWIFI_STATE)
+        resurrected=dict(d); resurrected['wireless.default_radio0.disabled']='0'
+        self.state=resurrected; self.save()
+        self.marker().unlink(missing_ok=True)
+        self.run_service('repair')
+        self.assertEqual('1',self.load()['wireless.default_radio0.disabled'])
+        self.assertTrue(self.marker().is_file())
+
+    def test_marker_is_written_only_after_verification(self):
+        self.install_ap_script(); self.install_fake_wifi()
+        self.state={}; self.save()
+        self.run_service('repair',success=False)
+        self.assertFalse(self.marker().exists())
+
+    def test_status_reports_the_management_ap_state(self):
+        self.install_ap_script()
+        self.run_ap(state=MTWIFI_STATE)
+        data=json.loads(self.run_service('status','--json').stdout)
+        self.assertTrue(data['ready'])
+        self.assertEqual(2,data['radio_count'])
+        self.assertEqual(2,data['managed_aps'])
+        self.assertEqual(0,data['open_aps'])
+        self.assertTrue(data['ssid_present'])
+        self.assertTrue(data['key_present'])
 
     def test_detected_radios_have_encrypted_shared_identity(self):
         d=self.run_ap(); aps=self.aps(d); self.assertEqual(2,len(aps))
