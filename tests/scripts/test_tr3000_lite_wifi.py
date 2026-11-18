@@ -342,8 +342,14 @@ class ManagementGateTests(unittest.TestCase):
     reset_live = plant_tests.PlantControllerTests.reset_live
     unchanged = plant_tests.PlantControllerTests.unchanged
     run_controller = plant_tests.PlantControllerTests.run_controller
-    def test_root_password_and_ap_marker_both_required(self):
-        for password,marker,code in (('!',False,2),('$6$fixture',False,2),('!',True,2),('',True,2),('$6$fixture',True,0)):
+    render_sections = plant_tests.PlantControllerTests.render_sections
+    set_plant_section = plant_tests.PlantControllerTests.set_plant_section
+    access_mode = plant_tests.PlantControllerTests.access_mode
+    set_root_password = plant_tests.PlantControllerTests.set_root_password
+    def test_plant_https_requires_only_a_root_password(self):
+        # The plant Web gate is the root password plus the operator's explicit
+        # choice; the management AP readiness guards the port handover instead.
+        for password,marker,code in (('!',False,2),('$6$fixture',False,0),('!',True,2),('',True,2),('$6$fixture',True,0)):
             with self.subTest(password_set=bool(password),marker=marker):
                 self.reset_live()
                 (self.root/'etc/shadow').write_text('root:'+password+':0:0:99999:7:::\n')
