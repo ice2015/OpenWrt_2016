@@ -339,6 +339,13 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertNotIn("option device", plant.split("config", 1)[0])
         self.assertIn("option proto 'none'", plant)
 
+    def test_lite_overlay_ships_no_wireless_configuration(self) -> None:
+        overlay = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
+        self.assertFalse((overlay / "wireless").exists(),
+                         "the Lite overlay must not ship a wireless configuration or credentials")
+        self.assertFalse((ROOT / "files/etc/config/wireless").exists(),
+                         "the shared rootfs must not ship a wireless configuration")
+
     def test_lite_overlay_serves_dhcp_on_the_access_segment(self) -> None:
         dhcp = (ROOT / "overlays/devices/tr3000-lite/files/etc/config/dhcp").read_text(encoding="utf-8")
         self.assertIn("config dhcp 'lan'", dhcp)

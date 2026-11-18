@@ -14,7 +14,8 @@ from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, 
 
 class LiteBuildEvidenceTests(unittest.TestCase):
     def run_build(self, *, drop_package=False, drop_image_package=False,
-                  missing_manifest=False, extra_image_package=None, invalid_image=False):
+                  missing_manifest=False, extra_image_package=None, invalid_image=False,
+                  overlay=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             repo, source, upstream, artifacts, fake_bin = [root / name for name in
@@ -42,6 +43,14 @@ class LiteBuildEvidenceTests(unittest.TestCase):
                     entry=tarfile.TarInfo("sysupgrade-cudy_tr3000-v1-ubootmod/CONTROL")
                     entry.size=len(payload)
                     archive.addfile(entry, io.BytesIO(payload))
+            # The build asserts the shipped access segment, so the fixture
+            # carries the real overlay configuration.
+            access = source / "files/etc/config"
+            access.mkdir(parents=True, exist_ok=True)
+            for name in ("network", "dhcp"):
+                content = (ROOT / "overlays/devices/tr3000-lite/files/etc/config" / name).read_text(encoding="utf-8")
+                if overlay and name in overlay: content = overlay[name]
+                (access / name).write_text(content, encoding="utf-8")
             image_packages=["luci-app-tr3000-lite", "wpad-openssl", "kmod-usb-net",
                             "kmod-usb-net-rndis", "kmod-usb-net-cdc-ether"]
             if drop_image_package:
@@ -56,7 +65,7 @@ class LiteBuildEvidenceTests(unittest.TestCase):
             target_index.write_text("Package: kmod-usb-net\nVersion: 1.0\n", encoding="utf-8")
             # Runtime private configuration must never be copied into evidence.
             wireless = source / "files/etc/config/wireless"
-            wireless.parent.mkdir(parents=True)
+            wireless.parent.mkdir(parents=True, exist_ok=True)
             wireless.write_text("option key 'SENSITIVE-FIXTURE-DO-NOT-EXPORT'\n", encoding="utf-8")
             scripts = {
                 repo / "scripts/configure-lite.sh": "exit 0\n",
@@ -158,6 +167,13 @@ else echo offline-commit; fi
         self.assertEqual("/etc/hotplug.d/net/90-tr3000-lite-usbwan",contract["usb_hotplug"])
         self.assertEqual("on-daemon-round",contract["usb_periodic_rescan"])
         self.assertNotIn("SENSITIVE-FIXTURE","\n".join(evidence.values()))
+
+    def test_build_rejects_an_overlay_without_the_access_segment(self):
+        broken = {"network": "config interface 'wan'\n\toption device 'eth0'\n\toption proto 'dhcp'\n"}
+        result, evidence = self.run_build(overlay=broken)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("access segment", result.stderr)
+        self.assertNotIn("lite-runtime-contract.txt", evidence)
 
     def test_image_evidence_requires_actual_packages_and_valid_sysupgrade(self):
         for arguments,message in (
