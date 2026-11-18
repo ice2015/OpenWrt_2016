@@ -64,7 +64,7 @@
 [Interface]
 PrivateKey = <Engineer_Direct_Private_Key>
 Address = 10.77.0.10/32
-DNS = 192.168.77.1
+DNS = 192.168.10.1
 
 [Peer]
 PublicKey = <TR3000_Direct_Public_Key>

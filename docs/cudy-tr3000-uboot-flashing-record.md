@@ -98,28 +98,31 @@ images/
 
 ### 2. 历史故障与当前 Lite 契约
 
-上述现象记录的是旧 Lite 镜像：当时共享 `files/` 将 plant 设为 `proto 'none'`，管理网桥没有接入口，也没有管理 AP。它解释旧镜像行为，不能用来判断当前 Lite 镜像或证明硬件无故障。`22 MB` 是历史观察值，不是当前镜像大小合同。
+上述现象记录的是旧 Lite 镜像：当时共享 `files/` 将 plant 设为 `proto 'none'`，既没有接入段也没有管理 AP，所以插线拿不到地址、手工静态地址也 ping 不通。它解释旧镜像行为，不能用来判断当前 Lite 镜像或证明硬件无故障。`22 MB` 是历史观察值，不是当前镜像大小合同。
 
 当前 Lite 专用 overlay 覆盖共享配置，Full 不受此变更影响：
 
 | 项目 | 当前 Lite 默认行为 |
 | --- | --- |
-| WAN / plant 设备 | 候选 `eth0` / `eth1`，必须逐口插拔验证机壳实际映射 |
-| plant | 独立 `eth1`，静态 `192.168.10.254/24` 开机立即生效；DHCPv4、DHCPv6、RA、NDP 服务关闭 |
-| mgmt | 独立 `br-mgmt`，`192.168.77.1/24`，加密管理 AP，DHCP 池 `.100–.149`，不与 plant 桥接 |
-| mgmt → plant | 默认允许当前 plant CIDR 的 ICMP Echo/TCP，SNAT 为 plant 地址；工业设备无需默认网关；UDP/二层发现不开放 |
-| plant → 路由器 | HTTPS 443 默认关闭，设置非空 root 密码且 AP 初始化标记存在后才可显式启用；HTTP/SSH 不开放 |
+| WAN / LAN 设备 | 候选 `eth0` / `eth1`，必须逐口插拔验证机壳实际映射 |
+| 接入段 `lan` | `br-lan`（`eth1` + 管理 AP），`192.168.10.1/24`，DHCP 池 `.100–.249`；出厂即插线可用 |
+| 管理 AP | `TR3000-Lite-<MAC 后 6 位>`，WPA2 (`psk2`)，每机随机密钥，只存 `0600` 的 `/etc/config/wireless`；固件不含凭据 |
+| 工业段 `plant` | **默认不启用**；在「工业 LAN」显式切换后由 `eth1` 接管，默认 `192.168.20.254/24`，DHCPv4、DHCPv6、RA、NDP 服务关闭 |
+| 接入段 → plant | 默认允许当前 plant CIDR 的 ICMP Echo/TCP，SNAT 为 plant 地址；工业设备无需默认网关；UDP/二层发现不开放 |
+| plant → 路由器 | HTTPS 443 默认关闭，非空 root 密码且显式启用后才可开放；HTTP/SSH 不开放 |
 | WAN / WireGuard | WAN 管理关闭；WireGuard 工业访问及 listener 默认关闭 |
 
-**LAN 接入工业 HUB 前必须人工确认 `192.168.10.254`（或修改后的地址）未占用且网段适用**。不能仅凭构建成功、ARP 自动探测或旧刷机记录认定地址安全。
+**接入工业 HUB 前必须人工确认 plant 地址（默认 `192.168.20.254`，或修改后的地址）未占用且网段适用**。不能仅凭构建成功、ARP 自动探测或旧刷机记录认定地址安全。
 
 ### 3. 当前首次管理与恢复路径
 
-在可信工位保持 LAN 与 HUB 断开，通过 UART/本地控制台设置 root 密码，私下读取设备生成的 WPA2 管理 SSID/密钥，再连接 AP 访问 `https://192.168.77.1`。随机凭据不在仓库、构建日志或 Artifact 中。plant HTTPS 初始关闭，不能将“静态 PC 直连 LAN”写作首次 Web 开通方式；需要先经控制台/随机 AP 满足 root+AP 门禁并显式启用。没有控制台且不知道随机 AP 凭据时，先在可信工位完成初始化。
+在可信工位保持 LAN 与 HUB 断开。出厂状态插线即可用：PC 拿到 `192.168.10.x`，`ping 192.168.10.1` 通，浏览器访问 `https://192.168.10.1` 设置非空 root 密码；用 Wi-Fi 时私下读取设备生成的 WPA2 SSID/密钥再连接。随机凭据不在仓库、构建日志或 Artifact 中。plant HTTPS 初始关闭，需要非空 root 密码并显式启用；管理 AP 未就绪时不允许把唯一 LAN 口交给工业段。
+
+升级到本固件必须**不保留配置**（`sysupgrade -n` 或首次安装）：旧版 Lite 配置没有接入段，保留后仍是旧结构。检测到旧结构时固件会在日志与 LuCI 顶部提示，不会自动改写配置。
 
 “网络 → 工业 LAN”提供 CIDR 验证、应用与策略开关；后端在通过地址/路由/ARP 检查后备份 network/firewall、检查候选 fw4、重载并验证，失败尽力恢复。JSON 中保留 backup_id 和回滚结果；必要时控制台执行 `/usr/sbin/tr3000-lite-plant restore --backup-id BACKUP_ID`，使用真实后端备份 ID。降级回滚需现场检查，不能保证断电和驱动故障下管理必然恢复。
 
-完整操作见 [Lite 部署说明](LITE-README.md) 和 [测试计划](TEST-PLAN.md)。实际首次无线发现、AP+STA 连续可用、Linux 权限、真实 firewall4/netifd 回滚及新镜像启动仍未验证；本记录的历史 U-Boot 成功不能替代这些验收。
+完整操作见 [Lite 部署说明](LITE-README.md)、[接入段与工业模式](TR3000-LITE-LAN-ACCESS.md) 和 [测试计划](TEST-PLAN.md)。实际首次无线发现、AP+STA 连续可用、Linux 权限、真实 firewall4/netifd 回滚及新镜像启动仍未验证；本记录的历史 U-Boot 成功不能替代这些验收。
 
 ---
 
@@ -134,6 +137,6 @@ images/
 
 ### 2. 后续系统选择
 
-使用本项目当前 Lite 时，保持管理 AP 与 plant 三层隔离，按上节在可信工位初始化，再确认地址冲突与物理端口映射。不要把 LAN 并入 `br-mgmt` 或在 plant 启用 DHCP 来解决首次登录，这会把管理广播送入工业 HUB。
+使用本项目当前 Lite 时，出厂用接入段（`192.168.10.1/24`，含 DHCP）完成初始化与维护，工业段只在明确需要时接管唯一 LAN 口；按上节在可信工位初始化，再确认地址冲突与物理端口映射。不要在 plant 段启用 DHCP 来解决首次登录，这会把管理广播送入工业 HUB。
 
 其他系统必须分别核实精确硬件、128 MiB NAND、112 MiB UBI 布局与安装方法；本文历史 U-Boot Web 记录不构成当前 sysupgrade 镜像通用刷写兼容保证。Lite Artifact 的 `lite-runtime-contract.txt` 仅记录公开预期默认值，应同时核对最终 `build.config`、`selected-packages.txt` 中的 `luci-app-tr3000-lite` 和 sysupgrade SHA256，真机验收仍需单独执行。

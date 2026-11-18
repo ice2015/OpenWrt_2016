@@ -5,7 +5,7 @@ Full 默认编译 sing-box，但不配置透明代理、不启用服务、不修
 ## 安全策略
 
 - 默认最终出口为 `direct`，只让明确列出的目的域名/IP 使用 `travel-vps`；
-- RFC1918、Tailscale `100.64.0.0/10`、plant、mgmt、WireGuard 端点和 cloudflared 控制流量必须直连；
+- RFC1918、Tailscale `100.64.0.0/10`、plant、接入段、WireGuard 端点和 cloudflared 控制流量必须直连；
 - 不创建捕获全部 TCP/UDP 的透明 inbound，不接管 PLC/HMI 工业流量；
 - DNS 规则需与所安装 sing-box 版本匹配，避免 DNS 环路、泄漏和与 dnsmasq 冲突；
 - 从构建 Artifact 的包清单确认实际版本，再对照该版本文档调整字段。

@@ -24,27 +24,31 @@
 ## 网络安全默认值
 
 - `wan` 使用 DHCP Client，metric 10；不提供 DHCP relay。
-- `plant` 是不桥接的独立逻辑接口，`eth1` 默认静态地址 **`192.168.10.254/24` 开机立即生效**，不是 DHCP Client。DHCPv4、DHCPv6、RA、NDP 服务均永久关闭。该地址不是通用现场地址：**LAN 接入工业 HUB 前必须人工确认地址未占用且网段适用**；不适用时保持 LAN 与 HUB 断开，先在隔离环境修改。
-- `mgmt` 使用单独的 `br-mgmt` 和 `192.168.77.1/24` 管理地址，DHCP 池为 `192.168.77.100–192.168.77.149`。首次启动的 Lite defaults 脚本为实际检测到的每个无线设备创建一个始终启用的 WPA2-PSK (`psk2`) 管理 AP，SSID 为 `TR3000-Lite-<MAC 末六位大写十六进制>`；没有有效 MAC 时持久保存随机后缀。所有管理 AP 共用由 16 个随机字节生成的 32 位小写十六进制密钥；固件不含固定凭据，脚本不输出密钥。重复运行保留已有管理 SSID/密钥，不创建重复 AP；无无线设备、凭据不完整或提交/验证失败时保留 defaults 脚本以便重试。成功后才写入 `/etc/tr3000-lite/management-ap.initialized`。
-- 防火墙默认拒绝转发，允许 `mgmt → wan`；默认还允许 `mgmt → 当前 plant CIDR` 的 ICMP Echo 和普通 TCP 单播，并 SNAT 为当前 plant 地址，因此 PLC/HMI 无默认网关也可回程。UDP、广播/组播发现和其他目标网段不放行。`plant` 不可主动访问 WAN、WireGuard 或 mgmt；WAN 不可访问管理面或工业网。plant 到路由器仅可按门禁启用 HTTPS 443，默认关闭，HTTP/SSH 不开放。
+- `lan` 是出厂的接入段：`br-lan`（成员 `eth1` 与管理 AP），路由器地址 **`192.168.10.1/24`**，DHCP 池 `192.168.10.100–192.168.10.249`。插线或连 WiFi 即拿到地址、可 ping 通、可进 `https://192.168.10.1`。工厂设备只有一个 LAN 口，它默认属于接入段而不是工业段。
+- `plant` 是不桥接的工业段接口，**默认不启用**（`proto none`，不绑定 `eth1`）。只有操作员在「网络 → TR3000 Lite → 工业 LAN」显式「启用 plant 模式」后，`eth1` 才从 `br-lan` 摘出交给 plant，默认静态地址 **`192.168.20.254/24`**。DHCPv4、DHCPv6、RA、NDP 服务在 plant 段永久关闭。接入工业 HUB 前必须人工确认地址未占用且网段适用。
+- 首次启动的 Lite defaults 脚本为实际检测到的每个无线设备创建一个始终启用的 WPA2-PSK (`psk2`) 管理 AP，SSID 为 `TR3000-Lite-<MAC 末六位大写十六进制>`；没有有效 MAC 时持久保存随机后缀。所有管理 AP 共用由 16 个随机字节生成的 32 位小写十六进制密钥；固件不含固定凭据，脚本不输出密钥。重复运行保留已有管理 SSID/密钥，不创建重复 AP；无无线设备、凭据不完整或提交/验证失败时保留 defaults 脚本以便重试。成功后才写入 `/etc/tr3000-lite/management-ap.initialized`。无线栈是 mt_wifi：驱动每次重建无线配置可能带出它自己的开放默认 AP，`/etc/init.d/tr3000-lite-wifi` 每次启动都会检查并重新禁用它，同时补齐受管 AP。
+- 防火墙默认拒绝转发，允许 `lan → wan`；默认还允许 `lan → 当前 plant CIDR` 的 ICMP Echo 和普通 TCP 单播，并 SNAT 为当前 plant 地址，因此 PLC/HMI 无默认网关也可回程。UDP、广播/组播发现和其他目标网段不放行。`plant` 不可主动访问 WAN、WireGuard 或接入段；WAN 不可访问管理面或工业网。plant 到路由器仅可按门禁启用 HTTPS 443，默认关闭，HTTP/SSH 不开放。
 - WireGuard 接口、UDP listener 和工业远程访问默认关闭。没有密钥、PSK、VPS 地址或客户网段被写入固件。
 - Lite 配置使用 `eth0`/`eth1` 作为 WAN/plant 的候选 Linux 设备名。上游 DTS 显示两个 MAC，但无法仅靠 DTS 确认机壳上的物理插孔角色；首次部署必须用 `ip link` 配合逐口插拔/链路灯做实机映射核验。若核验不符，不要连接现场网络或执行 `plant-profile.sh`。
 
 ## 首次配置与工业 LAN 变更
 
-1. 在可信工位隔离上电，LAN 不接工业 HUB。先核验设备版本、布局和物理端口；默认 plant 地址已经生效，首次启动不会替操作员检查现场冲突。
-2. 使用可信 UART/本地控制台设置非空 root 密码；AP defaults 成功后，从权限为 `0600` 的 `/etc/config/wireless` 私下读取随机 SSID/密钥，连接管理 AP，再访问 `https://192.168.77.1`。无法读取随机密钥时应回到控制台，不能假定存在通用 Wi-Fi 密码或首次有线 Web 登录。AP 初始化失败须修复无线发现/配置并重试，不能以绕过标记开启 plant Web 代替。
-3. root 密码非空且 `/etc/tr3000-lite/management-ap.initialized` 存在后，才能在“网络 → 工业 LAN”启用 plant HTTPS。AP 初始化本身不开放 plant HTTPS。需要有线管理时，用隔离 PC 的同网段静态地址，先通过上述管理路径启用 HTTPS，之后访问 `https://192.168.10.254`；plant 不提供 DHCP，也不以 ping 响应作为 Web 可达判据。核验设备证书指纹；密钥和密码仅保留在设备/可信密码库，不进入日志或 Artifact。
-4. 在“工业 LAN”页面填写地址/前缀并验证，通过后再应用。后端拒绝非法、网络号/广播地址、与 mgmt/活动路由重叠的地址、WAN 设备复用及 ARP 冲突/探测失败。当前地址是已配置地址时，重复应用仍会探测同网段其他主机；自动探测不能替代 HUB 接入前的人工确认。
-5. 应用同时生成 network/firewall 配对备份，候选 `fw4 check` 通过后重载，再核验实际地址/路由/防火墙。失败时尽力恢复两个文件；这不是跨配置的 ACID 事务。页面提示当前会话可能断开，应保留控制台及管理 AP 恢复路径。
-6. 人工确认当前 plant 地址未占用、网段正确且与上行不重叠后，再接入工业 HUB。变更 plant 地址后，mgmt 放行目标和 SNAT 同步更新；已有远端路由需另外核对，本里程碑不启用 WireGuard 工业访问。
+详细的接入与切换手册见 [TR3000-Lite 接入段与工业模式](TR3000-LITE-LAN-ACCESS.md)。
+
+1. 在可信工位隔离上电，LAN 口先不接工业 HUB。先核验设备版本、布局和物理端口。
+2. 插网线或连管理 AP，PC 拿到 `192.168.10.x`；`ping 192.168.10.1` 通，浏览器打开 `https://192.168.10.1` 设置非空 root 密码。需要 Wi-Fi 时，从权限为 `0600` 的 `/etc/config/wireless` 私下读取随机 SSID/密钥；固件不含固定凭据，也不能假定存在通用 Wi-Fi 密码。
+3. 在“工业 LAN”页面点「启用 plant 模式」把唯一 LAN 口交给工业段。后端会校验地址、生成 network/firewall 配对备份、候选 `fw4 check` 通过后重载并核验实况，失败尽力回滚。切换前必须确认管理 AP 已就绪（交出有线口后管理路径只剩 WiFi）。plant 段不提供 DHCP，也不以 ping 响应作为 Web 可达判据；核验设备证书指纹，密钥和密码仅保留在设备/可信密码库。
+4. 在“工业 LAN”页面填写 plant 地址/前缀并验证，通过后再应用。后端拒绝非法、网络号/广播地址、与接入段/活动路由重叠的地址、WAN 设备复用及 ARP 冲突/探测失败。当前地址是已配置地址时，重复应用仍会探测同网段其他主机；自动探测不能替代 HUB 接入前的人工确认。
+5. 人工确认当前 plant 地址未占用、网段正确且与上行不重叠后，再接入工业 HUB。变更 plant 地址后，接入段放行目标和 SNAT 同步更新；已有远端路由需另外核对，本里程碑不启用 WireGuard 工业访问。需要退回时点「退回接入模式」，有线口立刻恢复 DHCP。
 
 控制台可使用固定后端（不要用旧 `plant-profile.sh` 绕过配对防火墙更新）：
 
 ```sh
 /usr/sbin/tr3000-lite-plant status --json
-/usr/sbin/tr3000-lite-plant validate --address 192.168.10.254/24
-/usr/sbin/tr3000-lite-plant apply --address 192.168.10.254/24 --allow-luci true --allow-mgmt true
+/usr/sbin/tr3000-lite-plant validate --address 192.168.20.254/24
+/usr/sbin/tr3000-lite-plant enable-plant --address 192.168.20.254/24
+/usr/sbin/tr3000-lite-plant disable-plant
+/usr/sbin/tr3000-lite-plant apply --address 192.168.20.254/24 --allow-luci true --allow-mgmt true
 # 用 apply 返回的真实 backup_id 替换 BACKUP_ID：
 /usr/sbin/tr3000-lite-plant restore --backup-id BACKUP_ID
 ```
@@ -63,7 +67,7 @@
 
 ### USB 4G：只自动接管已支持的 USB Ethernet
 
-默认只支持由设备自身完成 SIM/APN/蜂窝拨号、表现为 `rndis_host` 或 `cdc_ether` 普通 USB 网卡并提供 DHCP 的路由棒。热插拔根据真实 sysfs USB 父设备和驱动识别，不猜 `usb0`；PCI/虚拟网卡、NCM、QMI、MBIM、传统串口拨号不在默认范围。自动绑定后启用 `usbwan`；拔出后仅清理本模块拥有的绑定，不抢占 WAN、plant、mgmt、wwan 或手工接管的接口。
+默认只支持由设备自身完成 SIM/APN/蜂窝拨号、表现为 `rndis_host` 或 `cdc_ether` 普通 USB 网卡并提供 DHCP 的路由棒。热插拔根据真实 sysfs USB 父设备和驱动识别，不猜 `usb0`；PCI/虚拟网卡、NCM、QMI、MBIM、传统串口拨号不在默认范围。自动绑定后启用 `usbwan`；拔出后仅清理本模块拥有的绑定，不抢占 WAN、plant、lan、wwan 或手工接管的接口。
 
 同时出现两台受支持候选设备时，自动路径失败关闭，不会任选第一台；移除多余设备后重试。确需保留多台时必须先由管理员显式规划和手工接管接口，不能依靠自动选择。热插拔事件使用锁；遇到正在应用的工业 LAN 事务时会等待或暂缓，守护进程每轮再做幂等 USB 重扫，避免一次事件遗漏后永远不能恢复。USB 诊断显示驱动、VID/PID、绑定或歧义/阻止状态，不输出 SIM、密码或密钥。
 
@@ -80,7 +84,7 @@ Lite 专用 `lite-uplink-watch` procd 服务与 Full 的旧共享实现隔离。
 - [TR3000-Lite 双通道远程访问运维指南](TR3000-LITE-REMOTE-ACCESS.md)
 - [WireGuard/VPS 路由指南](WIREGUARD-VPS-ROUTING.md)
 
-管理 Wi-Fi 不桥接到 plant。首次部署必须在可信串口/本地控制台设置非空 root 密码，并从权限为 `0600` 的 `/etc/config/wireless` 读取该设备生成的管理 SSID/密钥；不要把密钥贴入日志或构建产物。AP 初始化本身不启用 plant HTTPS 或远程管理；控制器只有在非空 root 密码和 AP 初始化标记同时存在时才允许启用 plant HTTPS。首次启动无线设备发现、双频 AP 与 STA 共存、STA 断线期间管理 AP 持续可用、mgmt HTTPS/SSH 登录、plant HTTPS 门禁及 Linux 文件权限仍需真机验证。`wpad-openssl` 固定为必需包，最终配置拒绝其他 `wpad-*` 提供者。
+管理 Wi-Fi 不桥接到 plant。首次部署必须在可信串口/本地控制台设置非空 root 密码，并从权限为 `0600` 的 `/etc/config/wireless` 读取该设备生成的管理 SSID/密钥；不要把密钥贴入日志或构建产物。AP 初始化本身不启用 plant HTTPS 或远程管理；plant HTTPS 的门禁是非空 root 密码加操作员显式启用，而管理 AP 的就绪状态守卫“交出唯一 LAN 口”这一步。首次启动无线设备发现、双频 AP 与 STA 共存、STA 断线期间管理 AP 持续可用、接入段 HTTPS/SSH 登录、工业模式切换实况、plant HTTPS 门禁及 Linux 文件权限仍需真机验证。`wpad-openssl` 固定为必需包，最终配置拒绝其他 `wpad-*` 提供者。
 
 ## 构建与产物
 

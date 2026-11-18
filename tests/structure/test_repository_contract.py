@@ -404,6 +404,17 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertNotIn("192.168.77", uplinks)
         self.assertNotIn("'mgmt'", uplinks)
 
+    def test_lite_documents_describe_the_access_segment(self) -> None:
+        handbook = ROOT / "docs/TR3000-LITE-LAN-ACCESS.md"
+        self.assertTrue(handbook.is_file(), "missing the Lite access segment handbook")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn("docs/TR3000-LITE-LAN-ACCESS.md", readme)
+        for document in ("docs/LITE-README.md", "docs/TR3000-LITE-PROVISIONING.md",
+                         "docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/SINGBOX-SPLIT-ROUTING.md"):
+            text = (ROOT / document).read_text(encoding="utf-8")
+            self.assertNotIn("192.168.77", text, document + " still documents the retired management segment")
+            self.assertNotIn("br-mgmt", text, document + " still documents the retired management bridge")
+
     def test_required_layer_files_exist(self) -> None:
         required = {
             ".editorconfig",

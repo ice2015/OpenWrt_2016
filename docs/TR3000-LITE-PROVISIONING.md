@@ -29,7 +29,7 @@ flowchart TD
 
 1. **环境隔离**：新设备首次上电必须在受控工位进行，**严禁将设备 LAN (plant) 接口接入工业现场交换机/HUB**。
 2. **本地控制台加固**：
-   - 通过 USB-to-UART 串口或连接管理 Wi-Fi（默认由 `br-mgmt` 分配 `192.168.77.x` 地址）。
+   - 通过 USB-to-UART 串口或连接管理 Wi-Fi（默认由接入段 `lan` 分配 `192.168.10.x` 地址）。
    - 执行 `passwd` 设置强口令 root 密码。
    - 检查 `/etc/tr3000-lite/management-ap.initialized` 确认无线管理平面已正常初始化。
    > [!CAUTION]
