@@ -62,7 +62,7 @@ def main():
         incoming='' if state=='unprotected' else (root/('native-'+state+'-input.nft')).read_text()
         forwarding='' if state=='unprotected' else (root/('native-'+state+'-forward.nft')).read_text()
         late_input='' if state=='unprotected' else 'iifname "wg_direct" tcp dport 443 accept'
-        late_forward='' if state=='unprotected' else 'iifname "wg_direct" ip daddr 192.168.10.0/24 meta l4proto tcp accept'
+        late_forward='' if state=='unprotected' else 'iifname "wg_direct" ip daddr 192.168.20.0/24 meta l4proto tcp accept'
         # Broad late accepts intentionally exercise the guard in front of
         # established/related handling. Reloading the table does NOT flush CT.
         rules='''table inet remote_guard_test {
@@ -79,7 +79,7 @@ ct state { established, related } accept
 }
 chain output { type filter hook output priority filter; policy accept; }
 chain postrouting { type nat hook postrouting priority srcnat; policy accept;
-oifname "plant" ip saddr 10.77.0.10 ip daddr 192.168.10.0/24 snat to 192.168.10.254
+oifname "plant" ip saddr 10.77.0.10 ip daddr 192.168.20.0/24 snat to 192.168.20.254
 }
 }
 '''
@@ -94,7 +94,7 @@ oifname "plant" ip saddr 10.77.0.10 ip daddr 192.168.10.0/24 snat to 192.168.10.
         run('sysctl','-qw','net.ipv4.ip_forward=1')
         for namespace,device,remote,address,peer in (
             (peers[0],'wg_direct','pc0','10.77.0.2/24','10.77.0.10/24'),
-            (peers[1],'plant','plc0','192.168.10.254/24','192.168.10.8/24')):
+            (peers[1],'plant','plc0','192.168.20.254/24','192.168.20.8/24')):
             run('ip','netns','add',namespace); created.append(namespace)
             run('ip','link','add',device,'type','veth','peer','name',remote)
             run('ip','link','set',remote,'netns',namespace)
@@ -103,12 +103,12 @@ oifname "plant" ip saddr 10.77.0.10 ip daddr 192.168.10.0/24 snat to 192.168.10.
             run('ip','-n',namespace,'link','set','lo','up')
             run('ip','-n',namespace,'addr','add',peer,'dev',remote)
             run('ip','-n',namespace,'link','set',remote,'up')
-        run('ip','-n',peers[0],'route','add','192.168.10.0/24','via','10.77.0.2')
-        run('ip','-n',peers[1],'route','add','default','via','192.168.10.254')
+        run('ip','-n',peers[0],'route','add','192.168.20.0/24','via','10.77.0.2')
+        run('ip','-n',peers[1],'route','add','default','via','192.168.20.254')
         policy('on')
         spawn(None,ECHO,443); spawn(peers[1],ECHO,2502)
         https=spawn(peers[0],CLIENT,'10.77.0.2',443)
-        plant=spawn(peers[0],CLIENT,'192.168.10.8',2502)
+        plant=spawn(peers[0],CLIENT,'192.168.20.8',2502)
         exchange(https,'https-before','https-before')
         exchange(plant,'plant-before','plant-before')
         policy('unprotected')

@@ -366,6 +366,20 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             self.assertEqual("SNAT", snat["target"])
         self.assertNotIn("tr3000_lite_mgmt_plant_icmp", sections)
 
+    def test_native_nft_gate_uses_the_shipped_plant_segment(self) -> None:
+        # The native gate models the industrial segment in real network
+        # namespaces; its constants must follow the shipped plant default.
+        from tests.scripts.test_scripts import uci_sections
+        native = (ROOT / "tests/scripts/native_remote_nft.py").read_text(encoding="utf-8")
+        firewall = {s[".name"]: s for s in uci_sections((ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8")) if s[".name"]}
+        plant_cidr = firewall["tr3000_lite_lan_plant_tcp"]["dest_ip"]
+        plant_address = firewall["tr3000_lite_lan_plant_snat_tcp"]["snat_ip"]
+        self.assertIn("ip daddr " + plant_cidr + " meta l4proto tcp accept", native)
+        self.assertIn("ip daddr " + plant_cidr + " snat to " + plant_address, native)
+        self.assertIn("'" + plant_address + "/24'", native)
+        self.assertIn("'" + plant_address.replace(".254", ".8") + "/24'", native)
+        self.assertNotIn("192.168.10.0/24' via", native)
+
     def test_required_layer_files_exist(self) -> None:
         required = {
             ".editorconfig",
