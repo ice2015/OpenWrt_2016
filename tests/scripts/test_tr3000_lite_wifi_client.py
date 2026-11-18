@@ -62,7 +62,7 @@ class WifiClientTests(unittest.TestCase):
                         self.assertEqual(value, removed[key], key)
                     for ap in fixture.aps(removed):
                         self.assertEqual('0', removed[ap+'.disabled'])
-                        self.assertEqual('mgmt', removed[ap+'.network'])
+                        self.assertEqual('lan', removed[ap+'.network'])
                         self.assertEqual('psk2', removed[ap+'.encryption'])
                 finally:
                     fixture.doCleanups()
@@ -82,8 +82,11 @@ const L = { url: (...parts) => '/custom-luci/' + parts.join('/') };
 const page = new Function('view', 'fs', 'ui', 'E', '_', 'window', 'L', source)(
   {extend: x => x}, {exec() { throw Error('render must not execute commands'); }}, {}, E,
   x => x, {}, L);
-const tree = page.render({schema_version:1, plant:{address:'192.168.10.254', prefix:24,
-  netmask:'255.255.255.0', allow_luci:false, allow_mgmt:true}, backup_id:''});
+const tree = page.render({schema_version:2, mode:'lan',
+  lan:{cidr:'192.168.10.1/24', netmask:'255.255.255.0', dhcp_pool:'192.168.10.100-192.168.10.249'},
+  plant:{address:'192.168.20.254', prefix:24, netmask:'255.255.255.0', cidr:'192.168.20.0/24',
+  active:false, allow_luci:false, allow_mgmt:true, dhcp:'disabled'},
+  ap_ready:true, legacy_config_detected:false, backup_id:''});
 const walk = item => !item || typeof item !== 'object' ? [] :
   [item, ...[item.children].flat(Infinity).flatMap(walk)];
 const text = item => typeof item === 'string' ? item : !item ? '' :
