@@ -31,6 +31,8 @@ CHECKS=ok; ROLLBACK=none; BACKUP_ID=; ADDRESS=
 DEVICE=; CURRENT_ADDRESS=; CURRENT_NETMASK=; CURRENT_LUCI=0; CURRENT_MGMT=0
 LOCKED=0; DIRTY=0; CANDIDATE=
 OVERRIDE_INSTALLED=0; FW4_LOCKED=0
+MODE=lan; LEGACY=0; AP_READY=false; TARGET_MODE=; PLANT_IP=; PLANT_PREFIX=
+LAN_ADDRESS=; LAN_NETMASK=; LAN_CIDR=; LAN_DHCP_POOL=; PLANT_CIDR=; BRIDGE_PORTS=
 
 get() { uci -q -c "$CONFIG" get "$1" 2>/dev/null; }
 
@@ -40,16 +42,55 @@ read_state() {
 	CURRENT_NETMASK=$(get network.plant.netmask || :)
 	CURRENT_LUCI=$(get firewall.tr3000_lite_plant_luci.enabled || printf 0)
 	CURRENT_MGMT=$(get firewall.tr3000_lite_lan_plant_tcp.enabled || printf 0)
+	LAN_ADDRESS=$(get network.lan.ipaddr || :)
+	LAN_NETMASK=$(get network.lan.netmask || :)
+	BRIDGE_PORTS=$(get network.br_lan.ports || :)
+	[ -n "$LAN_ADDRESS" ] && [ -n "$LAN_NETMASK" ] ||
+		{ LAN_ADDRESS=$(plant_lan_cidr | cut -d/ -f1); LAN_NETMASK=$(plant_lan_netmask); }
+	LAN_CIDR="$LAN_ADDRESS/$(plant_netmask_prefix "$LAN_NETMASK")"
+	PLANT_CIDR=
+	[ -n "$CURRENT_ADDRESS" ] && [ -n "$CURRENT_NETMASK" ] &&
+		PLANT_CIDR=$(plant_network_cidr "$CURRENT_ADDRESS/$(plant_netmask_prefix "$CURRENT_NETMASK")")
+	LAN_DHCP_POOL=$(lan_dhcp_pool)
+	if [ -n "$DEVICE" ]; then MODE=plant; else MODE=lan; fi
+	# A configuration without the access segment, or one that still carries the
+	# retired management segment, predates this firmware and cannot be trusted.
+	LEGACY=0
+	[ -n "$(get network.lan.ipaddr || :)" ] || LEGACY=1
+	[ -z "$(get network.mgmt.ipaddr || :)" ] || LEGACY=1
+	[ -n "$DEVICE" ] && [ -z "$(get network.br_lan.name || :)" ] && LEGACY=1
+	AP_READY=false
+	safe_file "$ROOT/etc/tr3000-lite/management-ap.initialized" && AP_READY=true
+}
+
+lan_dhcp_pool() {
+	pool_start=$(get dhcp.lan.start || :)
+	pool_limit=$(get dhcp.lan.limit || :)
+	[ -n "$pool_start" ] && [ -n "$pool_limit" ] || { printf '\n'; return 0; }
+	pool_base=$(lite_ipv4_number "$LAN_ADDRESS") || { printf '\n'; return 0; }
+	pool_mask=$(lite_prefix_mask "$(plant_netmask_prefix "$LAN_NETMASK")") || { printf '\n'; return 0; }
+	pool_base=$((pool_base & pool_mask))
+	printf '%s-%s\n' "$(plant_ipv4_dotted $((pool_base + pool_start)))" \
+		"$(plant_ipv4_dotted $((pool_base + pool_start + pool_limit - 1)))"
 }
 
 emit() {
-	printf '{"schema_version":1,"plant":{"device":'; plant_json_string "$DEVICE"
+	printf '{"schema_version":2,"mode":'; plant_json_string "$MODE"
+	printf ',"lan":{"cidr":'; plant_json_string "$LAN_CIDR"
+	printf ',"netmask":'; plant_json_string "$LAN_NETMASK"
+	printf ',"dhcp_pool":'; plant_json_string "$LAN_DHCP_POOL"
+	printf '},"plant":{"device":'; plant_json_string "$DEVICE"
 	printf ',"address":'; plant_json_string "$CURRENT_ADDRESS"
 	printf ',"prefix":%s,"netmask":' "$(plant_netmask_prefix "$CURRENT_NETMASK")"
 	plant_json_string "$CURRENT_NETMASK"
-	printf ',"allow_luci":%s,"allow_mgmt":%s,"dhcp":"disabled"},"checks":' \
+	printf ',"cidr":'; plant_json_string "$PLANT_CIDR"
+	printf ',"active":%s,"allow_luci":%s,"allow_mgmt":%s,"dhcp":"disabled"},' \
+		"$([ "$MODE" = plant ] && printf true || printf false)" \
 		"$([ "$CURRENT_LUCI" = 1 ] && printf true || printf false)" \
 		"$([ "$CURRENT_MGMT" = 1 ] && printf true || printf false)"
+	printf '"ap_ready":%s,"legacy_config_detected":%s,"checks":' \
+		"$([ "$AP_READY" = true ] && printf true || printf false)" \
+		"$([ "$LEGACY" = 1 ] && printf true || printf false)"
 	printf '{"result":'; plant_json_string "$CHECKS"
 	printf '},"backup_id":'; plant_json_string "$BACKUP_ID"
 	printf ',"rollback":'; plant_json_string "$ROLLBACK"; printf '}\n'
@@ -93,15 +134,27 @@ lock() {
 }
 
 verify_live() {
-	verify_ip=$(get network.plant.ipaddr) || return 1
-	verify_mask=$(get network.plant.netmask) || return 1
-	verify_prefix=$(plant_netmask_prefix "$verify_mask")
-	[ "$verify_prefix" != null ] || return 1
-	verify_device=$(get network.plant.device) || return 1
-	lite_valid_ipv4 "$verify_ip" && lite_valid_iface "$verify_device" || return 1
-	ip -4 addr show dev "$verify_device" | awk -v address="$verify_ip/$verify_prefix" '
-		{ for (i=1; i<=NF; i++) if ($i == "inet" && $(i+1) == address) found=1 }
-		END { exit !found }' || return 1
+	case "$TARGET_MODE" in
+	plant)
+		verify_ip=$(get network.plant.ipaddr) || return 1
+		verify_mask=$(get network.plant.netmask) || return 1
+		verify_prefix=$(plant_netmask_prefix "$verify_mask")
+		[ "$verify_prefix" != null ] || return 1
+		verify_device=$(get network.plant.device) || return 1
+		lite_valid_ipv4 "$verify_ip" && lite_valid_iface "$verify_device" || return 1
+		ip -4 addr show dev "$verify_device" | awk -v address="$verify_ip/$verify_prefix" '
+			{ for (i=1; i<=NF; i++) if ($i == "inet" && $(i+1) == address) found=1 }
+			END { exit !found }' || return 1
+		# The industrial segment owns the port; the access bridge must not.
+		case " $(get network.br_lan.ports || :) " in *" $verify_device "*) return 1 ;; esac
+		;;
+	lan)
+		[ "$(get network.lan.ipaddr || :)" = "$(plant_lan_cidr | cut -d/ -f1)" ] || return 1
+		[ "$(get network.lan.netmask || :)" = "$(plant_lan_netmask)" ] || return 1
+		[ -z "$(get network.plant.device || :)" ] || return 1
+		case " $(get network.br_lan.ports || :) " in *" $DEVICE "*) : ;; *) return 1 ;; esac
+		;;
+	esac
 	ip -4 route show >/dev/null 2>&1 && fw4 check >/dev/null 2>&1
 }
 
@@ -142,10 +195,17 @@ validate_address() {
 
 management_gate() {
 	[ "$ALLOW_LUCI" != true ] && return 0
-	safe_file "$ROOT/etc/tr3000-lite/management-ap.initialized" || fail 2 management_not_initialized
 	safe_file "$ROOT/etc/shadow" || fail 2 root_password_required
 	awk -F: '$1 == "root" && $2 != "" && $2 !~ /^[!*]/ { found=1 } END { exit !found }' \
 		"$ROOT/etc/shadow" || fail 2 root_password_required
+}
+
+# Handing the only LAN port to the industrial segment removes the wired
+# recovery path, so the management AP must be ready unless the operator
+# explicitly works from a local console.
+ap_gate() {
+	[ "$FORCE_LOCAL_CONSOLE" = true ] && return 0
+	safe_file "$ROOT/etc/tr3000-lite/management-ap.initialized" || fail 2 management_not_initialized
 }
 
 backup_pair() {
@@ -187,13 +247,40 @@ finalize_transaction() {
 # -t permits commit, unlike -P; -C '' disables conf2dir overrides.
 candidate_uci() { uci -q -c "$CANDIDATE" -C '' -t "$CANDIDATE/.uci" "$@"; }
 candidate_set() { candidate_uci set "$1" >/dev/null 2>&1 || fail 3 candidate_uci; }
+# Read the committed candidate value; pending deltas are not authoritative.
+candidate_read() { uci -q -c "$CANDIDATE" -C '' get "$1" 2>/dev/null || :; }
+
+# The only wired port belongs to the access bridge until the operator hands
+# it over to the industrial segment.
+plant_bridge_port() {
+	for port in $(get network.br_lan.ports || :); do printf '%s\n' "$port"; return 0; done
+	return 1
+}
 
 render_candidate() {
 	mkdir "$CANDIDATE/.uci" || fail 3 candidate_directory
 	for package in network firewall; do cp "$CONFIG/$package" "$CANDIDATE/$package" || fail 3 candidate_copy; done
-	candidate_set "network.plant.proto=static"
-	candidate_set "network.plant.ipaddr=$PLANT_IP"
-	candidate_set "network.plant.netmask=$(lite_prefix_to_netmask "$PLANT_PREFIX")"
+	case "$TARGET_MODE" in
+	plant)
+		candidate_set "network.plant.device=$DEVICE"
+		candidate_set "network.plant.proto=static"
+		candidate_set "network.plant.ipaddr=$PLANT_IP"
+		candidate_set "network.plant.netmask=$(lite_prefix_to_netmask "$PLANT_PREFIX")"
+		case " $(candidate_read network.br_lan.ports) " in
+			*" $DEVICE "*) candidate_uci delete "network.br_lan.ports" >/dev/null 2>&1 || fail 3 candidate_uci ;;
+		esac
+		;;
+	lan)
+		candidate_set "network.plant.proto=none"
+		candidate_uci delete "network.plant.device" >/dev/null 2>&1 || :
+		candidate_uci delete "network.plant.ipaddr" >/dev/null 2>&1 || :
+		candidate_uci delete "network.plant.netmask" >/dev/null 2>&1 || :
+		case " $(candidate_read network.br_lan.ports) " in
+			*" $DEVICE "*) : ;;
+			*) candidate_uci add_list "network.br_lan.ports=$DEVICE" >/dev/null 2>&1 || fail 3 candidate_uci ;;
+		esac
+		;;
+	esac
 	luci=0; [ "$ALLOW_LUCI" != true ] || luci=1
 	mgmt=0; [ "$ALLOW_MGMT" != true ] || mgmt=1
 	candidate_set "firewall.tr3000_lite_plant_luci.enabled=$luci"
@@ -274,7 +361,35 @@ case "$COMMAND" in
 	status) emit ;;
 	validate) validate_address; emit ;;
 	apply)
-		lock; prepare_candidate; read_state; validate_address; management_gate; backup_pair; render_candidate
+		lock; prepare_candidate; read_state; validate_address; management_gate; backup_pair
+		TARGET_MODE=plant; render_candidate
+		check_candidate
+		install_candidate
+		finalize_transaction || fail 3 backup_pruning
+		read_state; emit
+		;;
+	enable-plant)
+		lock; prepare_candidate; read_state
+		[ "$MODE" = lan ] || fail 2 already_plant_mode
+		DEVICE=$(plant_bridge_port) || fail 2 no_lan_port
+		validate_address
+		ap_gate
+		ALLOW_MGMT=true
+		ALLOW_LUCI=$([ "$CURRENT_LUCI" = 1 ] && printf true || printf false)
+		management_gate
+		backup_pair; TARGET_MODE=plant; render_candidate
+		check_candidate
+		install_candidate
+		finalize_transaction || fail 3 backup_pruning
+		read_state; emit
+		;;
+	disable-plant)
+		lock; prepare_candidate; read_state
+		[ "$MODE" = plant ] || fail 2 already_lan_mode
+		ALLOW_MGMT=false
+		ALLOW_LUCI=$([ "$CURRENT_LUCI" = 1 ] && printf true || printf false)
+		management_gate
+		backup_pair; TARGET_MODE=lan; render_candidate
 		check_candidate
 		install_candidate
 		finalize_transaction || fail 3 backup_pruning
@@ -288,6 +403,13 @@ case "$COMMAND" in
 			[ -n "$ROOT" ] || [ "$(stat -c %u "$BACKUPS/$BACKUP_ID.$package")" = 0 ] || fail 2 backup_owner
 			cp "$BACKUPS/$BACKUP_ID.$package" "$CANDIDATE/$package" || fail 3 candidate_copy
 		done
+		# The restored snapshot decides which segment owns the wired port.
+		restore_device=$(candidate_read network.plant.device)
+		if [ -n "$restore_device" ]; then
+			TARGET_MODE=plant; DEVICE=$restore_device
+		else
+			TARGET_MODE=lan; DEVICE=$(plant_bridge_port || printf eth1)
+		fi
 		# Restoring an older HTTPS-enabled policy must pass today's staging gate.
 		# Missing, invalid and enabled values all require the gate. Only an
 		# explicitly disabled fw4 boolean may bypass it.

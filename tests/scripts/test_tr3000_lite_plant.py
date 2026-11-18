@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 
-from tests.scripts.test_scripts import ROOT, bash_executable
+from tests.scripts.test_scripts import ROOT, bash_executable, uci_sections
 
 
 FAKE = r'''
@@ -36,24 +36,72 @@ if cmd == 'uci':
     args = [a for a in args if a != '-q']
     action, *args = args
     def read(package):
-        data = {}; section = None
+        entries = []; index = {}; section = None
         for line in (directory / package).read_text().splitlines():
             t = shlex.split(line, comments=True)
-            if t and t[0] == 'config': section = t[2] if len(t) > 2 else None
-            elif section and len(t) > 2 and t[0] == 'option': data[section+'.'+t[1]] = t[2]
-        return data
+            if not t: continue
+            if t[0] == 'config':
+                kind = t[1]
+                if len(t) > 2:
+                    key = t[2]
+                else:
+                    count = sum(1 for e in entries if e[0] == '@'+kind)
+                    key = '@%s[%d]' % (kind, count)
+                entries.append([key, kind, {}])
+                index[key] = entries[-1][2]
+                section = key
+            elif section and len(t) > 2 and t[0] == 'option':
+                index[section][t[1]] = t[2]
+            elif section and len(t) > 2 and t[0] == 'list':
+                options = index[section]
+                value = options.get(t[1])
+                if value is None: options[t[1]] = [t[2]]
+                elif isinstance(value, list): value.append(t[2])
+                else: options[t[1]] = [value, t[2]]
+        return entries, index
+    def write(package, entries):
+        text = ''
+        for key, kind, options in entries:
+            if key.startswith('@'): text += "config %s\n" % kind
+            else: text += "config %s '%s'\n" % (kind, key)
+            for option, value in options.items():
+                if isinstance(value, list):
+                    for item in value: text += " list '%s' '%s'\n" % (option, item)
+                else: text += " option '%s' '%s'\n" % (option, value)
+        (directory/package).write_text(text)
+    def option_of(package, key):
+        entries, index = read(package)
+        section, _, option = key.rpartition('.')
+        return index.get(section, {}).get(option)
     if action == 'get':
         package, key = args[0].split('.', 1)
-        value = read(package).get(key)
+        value = option_of(package, key)
         if value is None: sys.exit(1)
-        print(value)
+        print(' '.join(value) if isinstance(value, list) else value)
     elif action == 'set':
         key, value = args[0].split('=',1); package, key = key.split('.',1)
-        data = read(package); data[key] = value
-        sections = {}
-        for key, value in data.items():
-            section, option = key.split('.',1); sections.setdefault(section, {})[option] = value
-        (directory/package).write_text(''.join("config interface '%s'\n"%s+''.join(" option '%s' '%s'\n"%(k,v) for k,v in opts.items()) for s,opts in sections.items()))
+        entries, index = read(package)
+        section, _, option = key.rpartition('.')
+        if section not in index: sys.exit(1)
+        index[section][option] = value
+        write(package, entries)
+    elif action == 'delete':
+        package, key = args[0].split('.', 1)
+        entries, index = read(package)
+        section, _, option = key.rpartition('.')
+        if section in index: index[section].pop(option, None)
+        write(package, entries)
+    elif action == 'add_list':
+        key, value = args[0].split('=',1); package, key = key.split('.',1)
+        entries, index = read(package)
+        section, _, option = key.rpartition('.')
+        if section not in index: sys.exit(1)
+        options = index[section]
+        current = options.get(option)
+        if current is None: options[option] = [value]
+        elif isinstance(current, list): current.append(value)
+        else: options[option] = [current, value]
+        write(package, entries)
     elif action == 'commit':
         # UCI commit consumes saved deltas, even with a relocated confdir.
         (savedir/args[0]).unlink(missing_ok=True)
@@ -95,6 +143,45 @@ elif cmd == 'stat':
 
 
 class PlantControllerTests(unittest.TestCase):
+    def render_sections(self, rows):
+        text = ''
+        for row in rows:
+            if row['.name'] is None: text += "config %s\n" % row['.type']
+            else: text += "config %s '%s'\n" % (row['.type'], row['.name'])
+            for key, value in row.items():
+                if key.startswith('.'): continue
+                if isinstance(value, list):
+                    for item in value: text += " list '%s' '%s'\n" % (key, item)
+                else: text += " option '%s' '%s'\n" % (key, value)
+        return text
+
+    def set_plant_section(self, device=None, address=None, netmask=None, proto='none'):
+        path = self.root/'etc/config/network'
+        rows = uci_sections(path.read_text())
+        for row in rows:
+            if row['.name'] == 'plant':
+                for key in ('device', 'ipaddr', 'netmask'): row.pop(key, None)
+                row['proto'] = proto
+                if device: row['device'] = device
+                if address: row['ipaddr'] = address
+                if netmask: row['netmask'] = netmask
+            elif row['.name'] == 'br_lan':
+                # The industrial segment owns the port while it is active.
+                ports = ['eth1'] if device is None else [p for p in row.get('ports', []) if p != device]
+                if ports: row['ports'] = ports
+                else: row.pop('ports', None)
+        path.write_text(self.render_sections(rows))
+
+    def access_mode(self):
+        """Return the fixture to the shipped access mode."""
+        self.set_plant_section()
+        self.before = {name: (self.root/'etc/config'/name).read_bytes() for name in ('network','firewall')}
+
+    def set_root_password(self, value='$6$fixture$hash'):
+        path = self.root/'etc/shadow'
+        path.write_text('root:%s:0:0:99999:7:::\n' % value)
+        path.chmod(0o600)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -102,16 +189,14 @@ class PlantControllerTests(unittest.TestCase):
         (self.root/'tmp').mkdir()
         config = self.root / 'etc/config'
         config.mkdir(parents=True)
-        for name in ('network', 'firewall', 'tr3000-lite'):
+        for name in ('network', 'firewall', 'dhcp', 'tr3000-lite'):
             shutil.copyfile(ROOT / 'overlays/devices/tr3000-lite/files/etc/config' / name, config/name)
+        # Canonical fixture text: the fake UCI writes sections the same way.
+        for name in ('network', 'firewall'):
+            (config/name).write_text(self.render_sections(uci_sections((config/name).read_text())))
         # The shipped default leaves the industrial segment unbound; the
         # controller only manages an address once the port is handed over.
-        network = config/'network'
-        network.write_text(network.read_text().replace(
-            "config interface 'plant'\n\toption proto 'none'\n",
-            "config interface 'plant'\n\toption device 'eth1'\n\toption proto 'static'\n"
-            "\toption ipaddr '192.168.20.254'\n\toption netmask '255.255.255.0'\n",
-        ))
+        self.set_plant_section(device='eth1', address='192.168.20.254', netmask='255.255.255.0', proto='static')
         (self.root/'etc/shadow').write_text('root:!:0:0:99999:7:::\n')
         self.before = {name: (config/name).read_bytes() for name in ('network','firewall')}
         bindir = self.root/'bin'; bindir.mkdir()
@@ -128,8 +213,8 @@ class PlantControllerTests(unittest.TestCase):
         result = subprocess.run([bash_executable(), '-c', 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; PLANT_TEST_PATH=$PATH; export PATH PLANT_TEST_PATH; exec sh "$@"', 'sh', (ROOT/'scripts/tr3000-lite-plant.sh').as_posix(), *args], env=dict(self.env, **environment), text=True, capture_output=True)
         self.assertEqual(code, result.returncode, result.stdout+result.stderr)
         data = json.loads(result.stdout)
-        self.assertEqual({'schema_version','plant','checks','backup_id','rollback'}, set(data))
-        self.assertEqual(1, data['schema_version'])
+        self.assertEqual({'schema_version','mode','lan','plant','ap_ready','legacy_config_detected','checks','backup_id','rollback'}, set(data))
+        self.assertEqual(2, data['schema_version'])
         return data
 
     def unchanged(self):
@@ -303,6 +388,11 @@ printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
             if call[0] == 'uci' and '-c' in call and 'tr3000-lite-candidate.' in call[call.index('-c')+1]:
                 self.assertIn('-C',call)
                 self.assertEqual('',call[call.index('-C')+1])
+                action = next((a for a in call if a in ('get','set','delete','add_list','commit')), None)
+                if action == 'get':
+                    # Reads must not see pending deltas.
+                    self.assertNotIn('-t',call)
+                    continue
                 self.assertIn('-t',call)
                 self.assertTrue(call[call.index('-t')+1].endswith('/.uci'))
         self.run_controller('restore','--backup-id',result['backup_id'])
@@ -387,29 +477,89 @@ printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
             path = backups/('safe.'+package)
             contents = self.before[package].decode()
             if package == 'firewall':
-                contents = contents.replace("option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '0'", "option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '1'")
+                contents = contents.replace("option 'name' 'Allow-Lite-plant-HTTPS'\n option 'enabled' '0'", "option 'name' 'Allow-Lite-plant-HTTPS'\n option 'enabled' '1'")
             path.write_text(contents)
             subprocess.run([bash_executable(),'-c','chmod 600 "$1"','sh',path.as_posix()],check=True)
         data = self.run_controller('restore','--backup-id','safe',code=2)
-        self.assertEqual('management_not_initialized',data['checks']['result'])
+        self.assertEqual('root_password_required',data['checks']['result'])
         self.unchanged()
+
+    def test_enable_plant_moves_the_lan_port_to_plant(self):
+        self.access_mode()
+        result = self.run_controller('enable-plant','--address','192.168.20.254/24','--force-local-console')
+        network = {s['.name']: s for s in uci_sections((self.root/'etc/config/network').read_text())}
+        self.assertEqual('eth1', network['plant']['device'])
+        self.assertEqual('static', network['plant']['proto'])
+        self.assertEqual('192.168.20.254', network['plant']['ipaddr'])
+        self.assertEqual('255.255.255.0', network['plant']['netmask'])
+        self.assertNotIn('eth1', network['br_lan'].get('ports', []))
+        self.assertEqual('plant', result['mode'])
+        self.assertTrue(result['plant']['active'])
+
+    def test_disable_plant_returns_the_lan_port_to_the_bridge(self):
+        self.access_mode()
+        self.run_controller('enable-plant','--address','192.168.20.254/24','--force-local-console')
+        result = self.run_controller('disable-plant')
+        network = {s['.name']: s for s in uci_sections((self.root/'etc/config/network').read_text())}
+        self.assertEqual(['eth1'], network['br_lan']['ports'])
+        self.assertEqual('none', network['plant']['proto'])
+        self.assertNotIn('device', network['plant'])
+        self.assertEqual('lan', result['mode'])
+        self.assertFalse(result['plant']['active'])
+
+    def test_enable_plant_requires_a_ready_management_ap(self):
+        self.access_mode()
+        result = self.run_controller('enable-plant','--address','192.168.20.254/24',code=2)
+        self.assertEqual('management_not_initialized', result['checks']['result'])
+        self.unchanged()
+        marker = self.root/'etc/tr3000-lite/management-ap.initialized'
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text('initialized\n'); marker.chmod(0o600)
+        result = self.run_controller('enable-plant','--address','192.168.20.254/24')
+        self.assertEqual('plant', result['mode'])
+
+    def test_status_reports_the_access_segment_and_the_current_mode(self):
+        self.access_mode()
+        data = self.run_controller('status','--json')
+        self.assertEqual('lan', data['mode'])
+        self.assertEqual('192.168.10.1/24', data['lan']['cidr'])
+        self.assertEqual('192.168.10.100-192.168.10.249', data['lan']['dhcp_pool'])
+        self.assertFalse(data['plant']['active'])
+        self.assertFalse(data['legacy_config_detected'])
+        self.assertFalse(data['ap_ready'])
+
+    def test_legacy_configuration_is_reported(self):
+        path = self.root/'etc/config/network'
+        path.write_text(path.read_text() + "\nconfig interface 'mgmt'\n option 'proto' 'static'\n option 'ipaddr' '192.168.77.1'\n")
+        data = self.run_controller('status','--json')
+        self.assertTrue(data['legacy_config_detected'])
+
+    def test_plant_https_needs_only_a_root_password(self):
+        self.access_mode()
+        self.set_root_password()
+        self.run_controller('enable-plant','--address','192.168.20.254/24','--force-local-console')
+        data = self.run_controller('apply','--address','192.168.20.254/24','--allow-luci','true','--allow-mgmt','true')
+        self.assertTrue(data['plant']['allow_luci'])
+        self.set_root_password('')
+        blocked = self.run_controller('apply','--address','192.168.20.254/24','--allow-luci','true','--allow-mgmt','true',code=2)
+        self.assertEqual('root_password_required', blocked['checks']['result'])
 
     def test_restore_gates_all_values_except_explicit_disabled_booleans(self):
         for value in (None,'true','yes','on','1','invalid',''):
             with self.subTest(enabled=value):
                 self.reset_live()
-                old = b"option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '0'"
-                new = b"option name 'Allow-Lite-plant-HTTPS'"
-                if value is not None: new += ("\n\toption enabled '"+value+"'").encode()
+                old = b"option 'name' 'Allow-Lite-plant-HTTPS'\n option 'enabled' '0'"
+                new = b"option 'name' 'Allow-Lite-plant-HTTPS'"
+                if value is not None: new += ("\n option 'enabled' '"+value+"'").encode()
                 self.write_backup('policy',firewall=self.before['firewall'].replace(old,new))
                 data = self.run_controller('restore','--backup-id','policy',code=2)
-                self.assertEqual('management_not_initialized',data['checks']['result'])
+                self.assertEqual('root_password_required',data['checks']['result'])
                 self.unchanged()
 
     def test_restore_accepts_explicit_disabled_boolean_values(self):
         for value in ('false','no','off','0'):
             with self.subTest(enabled=value):
-                firewall = self.before['firewall'].replace(b"option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '0'",("option name 'Allow-Lite-plant-HTTPS'\n\toption enabled '"+value+"'").encode())
+                firewall = self.before['firewall'].replace(b"option 'name' 'Allow-Lite-plant-HTTPS'\n option 'enabled' '0'",("option 'name' 'Allow-Lite-plant-HTTPS'\n option 'enabled' '"+value+"'").encode())
                 self.write_backup('disabled',firewall=firewall)
                 self.run_controller('restore','--backup-id','disabled')
                 self.assertEqual(firewall,(self.root/'etc/config/firewall').read_bytes())

@@ -23,7 +23,7 @@ plant_json_string() {
 }
 
 plant_usage() {
-	printf 'Usage: %s status --json | validate --address IPV4/PREFIX | apply --address IPV4/PREFIX --allow-luci true|false --allow-mgmt true|false | restore --backup-id SAFE_ID\n' "$0"
+	printf 'Usage: %s status --json | validate --address IPV4/PREFIX | apply --address IPV4/PREFIX --allow-luci true|false --allow-mgmt true|false | enable-plant --address IPV4/PREFIX [--force-local-console] | disable-plant | restore --backup-id SAFE_ID\n' "$0"
 }
 
 plant_safe_id() {
@@ -33,7 +33,7 @@ plant_safe_id() {
 
 plant_parse() {
 	COMMAND=${1:-}; [ "$#" -gt 0 ] && shift
-	ADDRESS=; ALLOW_LUCI=; ALLOW_MGMT=; BACKUP_ID=; JSON=
+	ADDRESS=; ALLOW_LUCI=; ALLOW_MGMT=; BACKUP_ID=; JSON=; FORCE_LOCAL_CONSOLE=false
 	while [ "$#" -gt 0 ]; do
 		# Every option with a value requires a nonempty value; an empty first
 		# occurrence must not evade the repeated-option checks below.
@@ -42,9 +42,10 @@ plant_parse() {
 		esac
 		case "$COMMAND:$1" in
 			status:--json) [ -z "$JSON" ] || return 1; JSON=1; shift ;;
-			validate:--address|apply:--address) [ "$#" -ge 2 ] && [ -z "$ADDRESS" ] || return 1; ADDRESS=$2; shift 2 ;;
+			validate:--address|apply:--address|enable-plant:--address) [ "$#" -ge 2 ] && [ -z "$ADDRESS" ] || return 1; ADDRESS=$2; shift 2 ;;
 			apply:--allow-luci) [ "$#" -ge 2 ] && [ -z "$ALLOW_LUCI" ] || return 1; ALLOW_LUCI=$2; shift 2 ;;
 			apply:--allow-mgmt) [ "$#" -ge 2 ] && [ -z "$ALLOW_MGMT" ] || return 1; ALLOW_MGMT=$2; shift 2 ;;
+			enable-plant:--force-local-console) [ "$FORCE_LOCAL_CONSOLE" = false ] || return 1; FORCE_LOCAL_CONSOLE=true; shift ;;
 			restore:--backup-id) [ "$#" -ge 2 ] && [ -z "$BACKUP_ID" ] || return 1; BACKUP_ID=$2; shift 2 ;;
 			*) return 1 ;;
 		esac
@@ -54,9 +55,23 @@ plant_parse() {
 		validate) [ -n "$ADDRESS" ] ;;
 		apply) [ -n "$ADDRESS" ] || return 1
 			case "$ALLOW_LUCI:$ALLOW_MGMT" in true:true|true:false|false:true|false:false) return 0 ;; *) return 1 ;; esac ;;
+		enable-plant) [ -n "$ADDRESS" ] ;;
+		disable-plant) return 0 ;;
 		restore) plant_safe_id "$BACKUP_ID" ;;
 		*) return 1 ;;
 	esac
+}
+
+# The operator access segment is fixed; the industrial segment is chosen by
+# the operator and defaults to a segment that cannot collide with it.
+plant_lan_cidr() { printf '192.168.10.1/24\n'; }
+plant_lan_netmask() { printf '255.255.255.0\n'; }
+plant_default_plant_cidr() { printf '192.168.20.254/24\n'; }
+
+plant_ipv4_dotted() {
+	plant_dotted_number=$1
+	printf '%s.%s.%s.%s\n' $(((plant_dotted_number >> 24) & 255)) $(((plant_dotted_number >> 16) & 255)) \
+		$(((plant_dotted_number >> 8) & 255)) $((plant_dotted_number & 255))
 }
 
 plant_network_cidr() {

@@ -135,7 +135,7 @@ else echo offline-commit; fi
         self.assertEqual("icmp-echo,tcp", contract["lan_to_plant_protocols"])
         self.assertEqual("plant-address", contract["lan_to_plant_snat"])
         self.assertEqual("off", contract["plant_dhcpv4_dhcpv6_ra_ndp"])
-        self.assertEqual("root-password-and-ap-initialized", contract["plant_https_gate"])
+        self.assertEqual("root-password-and-explicit-enable", contract["plant_https_gate"])
         self.assertNotIn("SENSITIVE-FIXTURE", "\n".join(evidence.values()))
         self.assertIn("firmware/SHA256SUMS", evidence)
 
