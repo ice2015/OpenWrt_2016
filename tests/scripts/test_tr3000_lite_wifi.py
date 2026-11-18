@@ -100,15 +100,41 @@ else: sys.exit(2)
 '''
 
 
+MTWIFI_STATE={
+ 'wireless.radio0':'wifi-device',
+ 'wireless.radio0.type':'mtwifi',
+ 'wireless.radio0.phy':'ra0',
+ 'wireless.radio0.country':'CN',
+ 'wireless.radio1':'wifi-device',
+ 'wireless.radio1.type':'mtwifi',
+ 'wireless.radio1.phy':'ra1',
+ 'wireless.default_radio0':'wifi-iface',
+ 'wireless.default_radio0.device':'radio0',
+ 'wireless.default_radio0.mode':'ap',
+ 'wireless.default_radio0.network':'lan',
+ 'wireless.default_radio0.ssid':'ImmortalWrt-2.4G',
+ 'wireless.default_radio0.encryption':'none',
+ 'wireless.default_radio1':'wifi-iface',
+ 'wireless.default_radio1.device':'radio1',
+ 'wireless.default_radio1.mode':'ap',
+ 'wireless.default_radio1.network':'lan',
+ 'wireless.default_radio1.ssid':'ImmortalWrt-5G',
+ 'wireless.default_radio1.encryption':'none',
+}
+
+
 class ManagementAPTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
-        for p in ('etc/config','etc/uci-defaults','sys/class/net/eth0','bin','tmp'):
+        for p in ('etc/config','etc/uci-defaults','sys/class/net/ra0','sys/class/net/eth0','bin','tmp'):
             (self.root/p).mkdir(parents=True)
         (self.root/'etc/config/wireless').touch()
         (self.root/'etc/shadow').write_text('root:!:0:0:99999:7:::\n')
-        (self.root/'sys/class/net/eth0/address').write_text('02:ab:cd:12:34:ef\n')
+        # The radio hardware names the management network; a wired port
+        # address must never leak into the SSID.
+        (self.root/'sys/class/net/ra0/address').write_text('02:ab:cd:12:34:ef\n')
+        (self.root/'sys/class/net/eth0/address').write_text('aa:bb:cc:dd:ee:ff\n')
         (self.root/'random').write_bytes(bytes(range(16))*4)
         (self.root/'bin/fake.py').write_text(FAKE)
         uci=self.root/'bin/uci'
@@ -120,7 +146,9 @@ class ManagementAPTests(unittest.TestCase):
     def load(self): return json.loads((self.root/'etc/config/wireless').read_text())
     def marker(self): return self.root/'etc/tr3000-lite/management-ap.initialized'
 
-    def run_ap(self, success=True, **extra):
+    def run_ap(self, success=True, state=None, **extra):
+        if state is not None:
+            self.state=state; self.save()
         self.assertTrue(SCRIPT.is_file(), 'management AP defaults script is missing')
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
         text=text.replace('RUNTIME=/tmp','RUNTIME="'+self.root.as_posix()+'/tmp"')
@@ -161,10 +189,37 @@ file=91-tr3000-lite-management-ap
 
     def aps(self,d): return [k for k,v in d.items() if v=='wifi-iface' and d.get(k+'.tr3000_lite_managed')=='1']
 
+    def test_mtwifi_default_open_aps_are_disabled(self):
+        d=self.run_ap(state=MTWIFI_STATE)
+        self.assertEqual('1',d.get('wireless.default_radio0.disabled'))
+        self.assertEqual('1',d.get('wireless.default_radio1.disabled'))
+
+    def test_managed_ap_binds_the_access_segment_with_wpa2(self):
+        d=self.run_ap(state=MTWIFI_STATE); aps=self.aps(d)
+        self.assertEqual(2,len(aps))
+        for ap in aps:
+            self.assertEqual('lan',d[ap+'.network'])
+            self.assertEqual('psk2',d[ap+'.encryption'])
+            self.assertEqual('ap',d[ap+'.mode'])
+            self.assertEqual('0',d[ap+'.disabled'])
+            self.assertEqual(32,len(d[ap+'.key']))
+            self.assertEqual('TR3000-Lite-1234EF',d[ap+'.ssid'])
+
+    def test_ssid_suffix_uses_the_radio_mac_not_a_wired_port(self):
+        d=self.run_ap(state=MTWIFI_STATE); aps=self.aps(d)
+        self.assertEqual({'TR3000-Lite-1234EF'},{d[a+'.ssid'] for a in aps})
+
+    def test_repeated_run_keeps_the_same_identity(self):
+        first=self.run_ap(state=MTWIFI_STATE)
+        second=self.run_ap(state=MTWIFI_STATE)
+        for ap in self.aps(first):
+            self.assertEqual(first[ap+'.ssid'],second[ap+'.ssid'])
+            self.assertEqual(first[ap+'.key'],second[ap+'.key'])
+
     def test_detected_radios_have_encrypted_shared_identity(self):
         d=self.run_ap(); aps=self.aps(d); self.assertEqual(2,len(aps))
         for ap in aps:
-            for option,value in {'mode':'ap','network':'mgmt','encryption':'psk2','disabled':'0','ssid':'TR3000-Lite-1234EF','key':'000102030405060708090a0b0c0d0e0f'}.items(): self.assertEqual(value,d[ap+'.'+option])
+            for option,value in {'mode':'ap','network':'lan','encryption':'psk2','disabled':'0','ssid':'TR3000-Lite-1234EF','key':'000102030405060708090a0b0c0d0e0f'}.items(): self.assertEqual(value,d[ap+'.'+option])
         self.assertEqual({'radio0','radioOdd'},{d[a+'.device'] for a in aps})
 
     def test_repeat_and_new_radio_preserve_credentials(self):
@@ -299,7 +354,7 @@ file=91-tr3000-lite-management-ap
                 self.state={'wireless.radio0':'wifi-device'}; self.save()
                 self.marker().unlink(missing_ok=True)
                 if stage=='suffix_move':
-                    (self.root/'sys/class/net/eth0/address').write_text('00:00:00:00:00:00')
+                    (self.root/'sys/class/net/ra0/address').write_text('00:00:00:00:00:00')
                 before=self.load()
                 d=self.run_ap(False,FAIL_STAGE=stage)
                 if stage in ('marker_write','marker_move'):
@@ -321,7 +376,8 @@ file=91-tr3000-lite-management-ap
                 self.save(); self.run_ap(False,**{failure:'1'})
 
     def test_random_fallback_suffix_is_persisted(self):
-        (self.root/'sys/class/net/eth0/address').write_text('00:00:00:00:00:00')
+        # Without a usable radio address the suffix is random but persisted.
+        (self.root/'sys/class/net/ra0/address').write_text('00:00:00:00:00:00')
         d=self.run_ap(); self.assertEqual({'TR3000-Lite-000102'},{d[a+'.ssid'] for a in self.aps(d)})
         self.assertEqual(d,self.run_ap())
 

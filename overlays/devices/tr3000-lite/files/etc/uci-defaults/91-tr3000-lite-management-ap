@@ -47,10 +47,16 @@ sections() {
 	sed -n "s/^wireless\.\([^.=]*\)=$1\$/\1/p" "$TMP/sections"
 }
 interface_uses_radio() {
-	# A newline delimiter separates list entries; scalar values stay intact.
-	device_members=$(uci_ap -d '
-' get "wireless.$1.device" 2>/dev/null) || return 1
-	printf '%s\n' "$device_members" | grep -Fxq -e "$2"
+	# mtwifi writes a scalar device, mac80211 may write a list. Read the
+	# exported value instead of relying on a list-only delimiter option.
+	uci_ap show wireless | awk -v section="wireless.$1" -v radio="$2" '
+		index($0, section ".device=") == 1 {
+			value = substr($0, length(section) + 8)
+			gsub(/[^A-Za-z0-9_.-]/, " ", value)
+			count = split(value, parts, " ")
+			for (i = 1; i <= count; i++) if (parts[i] == radio) found = 1
+		}
+		END { exit !found }'
 }
 radios=$(sections wifi-device) || fail radio_discovery
 [ -n "$radios" ] || fail no_radios
@@ -154,7 +160,9 @@ if [ -z "$SSID" ]; then
 		if valid_mac "$mac"; then suffix=$(printf %s "$mac" | tr -d : | tail -c 6 | tr a-f A-F); break; fi
 	done
 	if [ -z "$suffix" ]; then
-		for path in /sys/class/net/*/address; do
+		# Only the radio hardware may name the management network; a wired
+		# port address must never leak into the SSID.
+		for path in /sys/class/net/ra*/address /sys/class/net/mtwifi*/address /sys/class/net/wlan*/address; do
 			[ -f "$path" ] || continue
 			mac=$(cat "$path")
 			if valid_mac "$mac"; then suffix=$(printf %s "$mac" | tr -d : | tail -c 6 | tr a-f A-F); break; fi
@@ -197,7 +205,7 @@ for radio in $radios; do
 			''|none|open) uci_ap set "wireless.$candidate.disabled=1" || fail disable_open_ap;;
 		esac
 	done
-	for assignment in "device=$radio" 'tr3000_lite_managed=1' 'mode=ap' 'network=mgmt' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
+	for assignment in "device=$radio" 'tr3000_lite_managed=1' 'mode=ap' 'network=lan' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
 		uci_ap set "wireless.$section.$assignment" || fail interface_configure
 	done
 	uci_ap set "wireless.$radio.disabled=0" || fail radio_enable
@@ -218,7 +226,7 @@ verify() {
 			fi
 			[ "$(get "wireless.$section.device")" = "$radio" ] || continue
 			count=$((count+1))
-			for pair in 'mode=ap' 'network=mgmt' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
+			for pair in 'mode=ap' 'network=lan' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
 				[ "$(get "wireless.$section.${pair%%=*}")" = "${pair#*=}" ] || return 1
 			done
 		done
