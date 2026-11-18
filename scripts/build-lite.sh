@@ -105,6 +105,22 @@ sh "$SCRIPT_DIR/configure-lite.sh" \
 	--ccache-dir "$CCACHE_DIR"
 cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/build.config"
 
+# The shipped overlay must keep the operator access segment reachable: a
+# factory device has to hand out an address, answer ping and serve LuCI.
+ACCESS_NETWORK="$SOURCE_DIR/files/etc/config/network"
+ACCESS_DHCP="$SOURCE_DIR/files/etc/config/dhcp"
+[ -f "$ACCESS_NETWORK" ] || fail "Lite overlay is missing the access segment network configuration"
+[ -f "$ACCESS_DHCP" ] || fail "Lite overlay is missing the access segment DHCP configuration"
+for access_token in "config interface 'lan'" "option ipaddr '192.168.10.1'" \
+	"config device 'br_lan'" "list ports 'eth1'"; do
+	grep -Fq "$access_token" "$ACCESS_NETWORK" ||
+		fail "Lite overlay access segment is incomplete: $access_token"
+done
+grep -Fq "config dhcp 'lan'" "$ACCESS_DHCP" ||
+	fail "Lite overlay access segment has no DHCP configuration"
+[ ! -e "$REPO_ROOT/overlays/devices/tr3000-lite/files/etc/config/wireless" ] ||
+	fail "Lite overlay must not ship a wireless configuration"
+
 if [ -n "${SOURCE_SHA:-}" ]; then
 	SOURCE_DATE_EPOCH=$(git -C "$SOURCE_DIR" show -s --format=%ct "$SOURCE_SHA")
 	export SOURCE_DATE_EPOCH
@@ -191,21 +207,6 @@ done <<EOF
 $IMAGE_LIST
 EOF
 [ "$IMAGE_COUNT" -gt 0 ] || fail "no firmware image was packaged"
-# The shipped overlay must keep the operator access segment reachable: a
-# factory device has to hand out an address, answer ping and serve LuCI.
-ACCESS_NETWORK="$SOURCE_DIR/files/etc/config/network"
-ACCESS_DHCP="$SOURCE_DIR/files/etc/config/dhcp"
-[ -f "$ACCESS_NETWORK" ] || fail "Lite overlay is missing the access segment network configuration"
-[ -f "$ACCESS_DHCP" ] || fail "Lite overlay is missing the access segment DHCP configuration"
-for access_token in "config interface 'lan'" "option ipaddr '192.168.10.1'" \
-	"config device 'br_lan'" "list ports 'eth1'"; do
-	grep -Fq "$access_token" "$ACCESS_NETWORK" ||
-		fail "Lite overlay access segment is incomplete: $access_token"
-done
-grep -Fq "config dhcp 'lan'" "$ACCESS_DHCP" ||
-	fail "Lite overlay access segment has no DHCP configuration"
-[ ! -e "$REPO_ROOT/overlays/devices/tr3000-lite/files/etc/config/wireless" ] ||
-	fail "Lite overlay must not ship a wireless configuration"
 grep '^CONFIG_PACKAGE_.*=y$' "$SOURCE_DIR/.config" | sort > "$ARTIFACT_DIR/selected-packages.txt"
 grep -Fxq 'CONFIG_PACKAGE_luci-app-tr3000-lite=y' "$ARTIFACT_DIR/selected-packages.txt" ||
 	fail "final selected packages do not include luci-app-tr3000-lite"

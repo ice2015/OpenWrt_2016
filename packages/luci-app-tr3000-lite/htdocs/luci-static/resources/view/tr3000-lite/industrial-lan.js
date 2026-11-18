@@ -99,8 +99,13 @@ return view.extend({
 			' — ' + _('DHCP pool: ') + status.lan.dhcp_pool);
 		var ap = E('p', { 'id': 'lan-ap' }, _('Management AP: ') +
 			(status.ap_ready ? _('ready') : _('not ready')));
+		// The industrial segment has no address until it is enabled; offer the
+		// documented public default so the handover needs no typing.
+		var defaultAddress = status.plant.address ?
+			status.plant.address + '/' + (status.plant.prefix === null ? '' : status.plant.prefix) :
+			'192.168.20.254/24';
 		var address = E('input', { 'id': 'plant-address', 'type': 'text', 'class': 'cbi-input-text',
-			'value': status.plant.address + '/' + (status.plant.prefix === null ? '' : status.plant.prefix) });
+			'value': defaultAddress });
 		var https = E('input', { 'id': 'plant-https', 'type': 'checkbox', 'checked': status.plant.allow_luci });
 		var mgmt = E('input', { 'id': 'plant-mgmt', 'type': 'checkbox', 'checked': status.plant.allow_mgmt });
 		var feedback = E('p', { 'role': 'status', 'aria-live': 'polite' });

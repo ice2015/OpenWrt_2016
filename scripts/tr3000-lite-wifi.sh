@@ -31,11 +31,6 @@ option_of() {
 	printf '%s\n' "$EXPORTED" | sed -n "s/^wireless\.$1\.$2='\(.*\)'$/\1/p"
 }
 
-section_name() {
-	value=${1#wireless.}
-	printf '%s\n' "${value%%=*}"
-}
-
 # The state comes from the live wireless configuration only. A missing or
 # unsafe configuration means the radio is not ready yet, never a failure.
 read_state() {
@@ -45,15 +40,8 @@ read_state() {
 	[ -f "$WIRELESS" ] && [ ! -L "$WIRELESS" ] || return 1
 	[ ! -L "$STATE" ] || return 1
 	EXPORTED=$(uci -q -c "$CONFIG" show wireless 2>/dev/null) || return 1
-	radios=; ifaces=
-	while IFS= read -r line; do
-		case "$line" in
-			wireless.*=wifi-device) radios="$radios $(section_name "$line")" ;;
-			wireless.*=wifi-iface) ifaces="$ifaces $(section_name "$line")" ;;
-		esac
-	done <<EOF
-$EXPORTED
-EOF
+	radios=$(printf '%s\n' "$EXPORTED" | sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p')
+	ifaces=$(printf '%s\n' "$EXPORTED" | sed -n 's/^wireless\.\([^.=]*\)=wifi-iface$/\1/p')
 	for radio in $radios; do RADIO_COUNT=$((RADIO_COUNT + 1)); done
 	for section in $ifaces; do
 		[ "$(option_of "$section" mode)" = ap ] || continue
@@ -115,7 +103,12 @@ case "$COMMAND" in
 		read_state || fail wireless_not_ready
 		if [ "$READY" = 1 ]; then
 			# The identity is in place; only the readiness marker may lag.
-			[ -f "$MARKER" ] && [ ! -L "$MARKER" ] || fail marker_missing
+			if [ ! -f "$MARKER" ]; then
+				mkdir -p "$STATE" || fail state_directory
+				chmod 0700 "$STATE" || fail state_permissions
+				printf 'initialized\n' > "$MARKER" || fail marker_write
+				chmod 0600 "$MARKER" || fail marker_permissions
+			fi
 			emit_status
 			exit 0
 		fi

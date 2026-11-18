@@ -270,6 +270,13 @@ file=91-tr3000-lite-management-ap
         self.assertEqual('1',self.load()['wireless.default_radio0.disabled'])
         self.assertTrue(self.marker().is_file())
 
+    def test_repair_publishes_a_missing_readiness_marker(self):
+        self.install_ap_script(); self.install_fake_wifi()
+        self.run_ap(state=MTWIFI_STATE)
+        self.marker().unlink(missing_ok=True)
+        self.run_service('repair')
+        self.assertTrue(self.marker().is_file())
+
     def test_marker_is_written_only_after_verification(self):
         self.install_ap_script(); self.install_fake_wifi()
         self.state={}; self.save()

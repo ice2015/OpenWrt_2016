@@ -397,6 +397,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertIn("legacy_config_detected", view)
         self.assertIn("lan.cidr", view)
         self.assertIn("ap_ready", view)
+        self.assertIn("192.168.20.254/24", view)
         # The retired management segment must be gone from the view.
         self.assertNotIn("192.168.77", view)
         self.assertNotIn("br-mgmt", view)
