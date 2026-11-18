@@ -74,8 +74,11 @@ const page = new Function('view', 'fs', 'ui', 'E', '_', 'window', 'L', source)(
   { extend: x => x }, fs, ui, E, x => x,
   { confirm: message => { confirmation = message; return confirmed; } },
   { url: (...parts) => '/cgi-bin/luci/' + parts.join('/') });
-const state = {schema_version:1, plant:{device:'eth1', address:'192.168.10.254', prefix:24,
-  netmask:'255.255.255.0', allow_luci:false, allow_mgmt:true, dhcp:'disabled'},
+const state = {schema_version:2, mode:'plant',
+  lan:{cidr:'192.168.10.1/24', netmask:'255.255.255.0', dhcp_pool:'192.168.10.100-192.168.10.249'},
+  plant:{device:'eth1', address:'192.168.20.254', prefix:24, netmask:'255.255.255.0',
+  cidr:'192.168.20.0/24', active:true, allow_luci:false, allow_mgmt:true, dhcp:'disabled'},
+  ap_ready:true, legacy_config_detected:false,
   checks:{result:'ok'}, backup_id:'', rollback:'none'};
 const ok = data => ({code:0, stdout:JSON.stringify(data), stderr:''});
 const walk = item => !item || typeof item !== 'object' ? [] :
@@ -95,12 +98,12 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
   const mgmt = byId(tree, 'plant-mgmt');
   const validate = byId(tree, 'plant-validate');
   const apply = byId(tree, 'plant-apply');
-  assert.equal(address.value, '192.168.10.254/24');
+  assert.equal(address.value, '192.168.20.254/24');
   assert.equal(luci.checked, false); assert.equal(mgmt.checked, true);
   assert.equal(apply.disabled, true);
   await apply.attrs.click(); assert.equal(calls.length, 0);
   replies.push(ok(state)); await validate.attrs.click();
-  assert.deepEqual(calls.shift(), ['validate', '--address', '192.168.10.254/24']);
+  assert.deepEqual(calls.shift(), ['validate', '--address', '192.168.20.254/24']);
   assert.equal(apply.disabled, false);
   address.value = '192.168.20.254/26'; address.attrs.input();
   assert.equal(apply.disabled, true);
@@ -145,7 +148,7 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
   }
   replies.push({code:2, stdout:JSON.stringify({...state, checks:{result:'management_overlap'}}), stderr:secret});
   await validate.attrs.click();
-  assert.match(text(notices.at(-1)), /overlaps.*management/i, 'allowlisted rejection should explain validation failure');
+  assert.match(text(notices.at(-1)), /overlaps.*access/i, 'allowlisted rejection should explain validation failure');
   for (const data of [{...state, backup_id:secret}, {...state, backup_id:'../backup'},
     {...state, backup_id:'x'.repeat(81)}, {...state, rollback:secret},
     {...state, checks:{result:secret}}]) {
@@ -201,7 +204,7 @@ const status={schema_version:1,active:'wan',previous:'wwan',status_error:false,r
     {name:'usbwan',device:'modem7',address:'203.0.113.2',gateway:'203.0.113.1',base_metric:30,effective_metric:30,health:'healthy',failures:0,successes:0,available:true,link:true}],
   usb:{state:'bound',device:'modem7',driver:'rndis_host',vid:'2c7c',pid:'0125',path:'/devices/platform/usb1/1-1'},
   wireless:{mode:'ap_client',error:false,interfaces:[
-    {section:'management',radio:'radioOdd',ifname:'phy7-ap0',phy:'phy7',mode:'ap',network:'mgmt',enabled:true,up:true,channel:6,frequency:2437,shared_phy:true},
+    {section:'management',radio:'radioOdd',ifname:'phy7-ap0',phy:'phy7',mode:'ap',network:'lan',enabled:true,up:true,channel:6,frequency:2437,shared_phy:true},
     {section:'client',radio:'radioOther',ifname:'wlanOdd',phy:'phy7',mode:'sta',network:'wwan',enabled:true,up:false,channel:6,frequency:2437,shared_phy:true}]}};
 const ok = data => ({code:0,stdout:JSON.stringify(data),stderr:''});
 (async()=>{
@@ -379,6 +382,20 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertIn("'" + plant_address + "/24'", native)
         self.assertIn("'" + plant_address.replace(".254", ".8") + "/24'", native)
         self.assertNotIn("192.168.10.0/24' via", native)
+
+    def test_lite_luci_view_exposes_the_access_segment_and_mode_switch(self) -> None:
+        view = (ROOT / "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js").read_text(encoding="utf-8")
+        self.assertIn("enable-plant", view)
+        self.assertIn("disable-plant", view)
+        self.assertIn("legacy_config_detected", view)
+        self.assertIn("lan.cidr", view)
+        self.assertIn("ap_ready", view)
+        # The retired management segment must be gone from the view.
+        self.assertNotIn("192.168.77", view)
+        self.assertNotIn("br-mgmt", view)
+        uplinks = (ROOT / "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/uplinks.js").read_text(encoding="utf-8")
+        self.assertNotIn("192.168.77", uplinks)
+        self.assertNotIn("'mgmt'", uplinks)
 
     def test_required_layer_files_exist(self) -> None:
         required = {

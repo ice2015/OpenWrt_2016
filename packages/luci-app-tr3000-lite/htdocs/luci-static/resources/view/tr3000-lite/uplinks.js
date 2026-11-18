@@ -41,7 +41,7 @@ function validate(data) {
 	wifi.interfaces.forEach(function(row) {
 		if (!row || !safeName(row.section, 64, false) || !safeName(row.radio, 64, false) ||
 			!safeName(row.ifname, 15, true) || !safeName(row.phy, 32, true) ||
-			[ 'ap', 'sta' ].indexOf(row.mode) === -1 || row.network !== (row.mode === 'ap' ? 'mgmt' : 'wwan') ||
+			[ 'ap', 'sta' ].indexOf(row.mode) === -1 || row.network !== (row.mode === 'ap' ? 'lan' : 'wwan') ||
 			![ 'enabled', 'up', 'shared_phy' ].every(function(key) { return typeof row[key] === 'boolean'; }) ||
 			!(row.channel === null || integer(row.channel, 1, 233)) ||
 			!(row.frequency === null || integer(row.frequency, 1, 65535)))
