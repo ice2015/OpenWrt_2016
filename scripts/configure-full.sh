@@ -126,12 +126,19 @@ install -m 0755 "$SCRIPT_DIR/service-toggle.sh" "$SOURCE_DIR/files/usr/sbin/tr30
 install -m 0755 "$SCRIPT_DIR/tr3000-full-wifi.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-wifi"
 install -m 0755 "$FULL_OVERLAY/etc/uci-defaults/91-tr3000-full-management-ap" \
 	"$SOURCE_DIR/files/usr/sbin/tr3000-full-wifi-ap"
-install -m 0755 "$SCRIPT_DIR/lite-uplink-watch.sh" "$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
+install -m 0755 "$SCRIPT_DIR/tr3000-full-uplink-watch.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-uplink-watch"
+install -m 0755 "$SCRIPT_DIR/tr3000-full-uplink-status.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-uplink-status"
+mkdir -p "$SOURCE_DIR/files/usr/lib/tr3000-full"
+install -m 0644 "$SCRIPT_DIR/tr3000-full-uplink-lib.sh" "$SOURCE_DIR/files/usr/lib/tr3000-full/uplink-lib.sh"
+install -m 0644 "$SCRIPT_DIR/tr3000-full-usbwan-lib.sh" "$SOURCE_DIR/files/usr/lib/tr3000-full/usbwan-lib.sh"
+install -m 0755 "$SCRIPT_DIR/tr3000-full-uplink-changed.sh" "$SOURCE_DIR/files/usr/lib/tr3000-full/uplink-changed"
 install -m 0644 "$SCRIPT_DIR/lite-common.sh" "$SOURCE_DIR/files/usr/sbin/lite-common.sh"
-install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
-	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
-install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
-	"$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch"
+# The shared rootfs still carries the Lite-named watcher for the Lite build;
+# Full ships its own controller, so drop the shared leftovers from this image.
+rm -f "$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch" \
+	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch" \
+	"$SOURCE_DIR/files/etc/config/lite-uplink-watch" \
+	"$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
 
 DYNAMIC_SEED=$(mktemp "$SOURCE_DIR/.config.full-options.XXXXXX")
 TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.full.XXXXXX")

@@ -425,8 +425,12 @@ esac
         self.assertEqual(LIB.read_text(),assets['files/usr/lib/tr3000-lite/uplink-lib.sh'])
         result,_,assets=run_full_configure(full_base_config())
         self.assertEqual(0,result.returncode,result.stderr)
-        self.assertEqual((ROOT/'scripts/lite-uplink-watch.sh').read_text(),assets['files/usr/sbin/lite-uplink-watch'])
-        self.assertNotIn('files/usr/lib/tr3000-lite/uplink-lib.sh',assets)
+        self.assertEqual((ROOT/'scripts/tr3000-full-uplink-watch.sh').read_text(),assets['files/usr/sbin/tr3000-full-uplink-watch'])
+        self.assertEqual((ROOT/'scripts/tr3000-full-uplink-lib.sh').read_text(),assets['files/usr/lib/tr3000-full/uplink-lib.sh'])
+        self.assertNotIn('files/usr/sbin/lite-uplink-watch',assets)
+        self.assertNotIn('files/etc/init.d/lite-uplink-watch',assets)
+        self.assertNotIn('files/etc/config/lite-uplink-watch',assets)
+        self.assertNotIn('files/etc/uci-defaults/90-lite-uplink-watch',assets)
 
 
 if __name__=='__main__': unittest.main()
