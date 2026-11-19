@@ -147,6 +147,8 @@ cp "$SEED" "$DYNAMIC_SEED"
 for ENTRY in \
 	"tailscale:$INCLUDE_TAILSCALE" \
 	"sing-box:$INCLUDE_SINGBOX" \
+	"luci-app-homeproxy:$INCLUDE_SINGBOX" \
+	"luci-i18n-homeproxy-zh-cn:$INCLUDE_SINGBOX" \
 	"cloudflared:$INCLUDE_CLOUDFLARED" \
 	"luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
 	"luci-i18n-cloudflared-zh-cn:$INCLUDE_CLOUDFLARED"
@@ -218,7 +220,7 @@ for PACKAGE in \
 	luci-app-tr3000-full luci-i18n-base-zh-cn luci-proto-wireguard \
 	luci-ssl-openssl luci-theme-bootstrap openssh-server openssh-sftp-server \
 	tcpdump-mini ubi-utils wireguard-tools \
-	luci-app-homeproxy luci-i18n-homeproxy-zh-cn ucode-mod-digest \
+	ucode-mod-digest \
 	luci-app-ddns ddns-scripts ddns-scripts-cloudflare luci-i18n-ddns-zh-cn \
 	luci-theme-argon luci-app-argon-config luci-i18n-argon-config-zh-cn \
 	wpad-openssl
@@ -232,6 +234,8 @@ fi
 for ENTRY in \
 	"tailscale:$INCLUDE_TAILSCALE" \
 	"sing-box:$INCLUDE_SINGBOX" \
+	"luci-app-homeproxy:$INCLUDE_SINGBOX" \
+	"luci-i18n-homeproxy-zh-cn:$INCLUDE_SINGBOX" \
 	"cloudflared:$INCLUDE_CLOUDFLARED" \
 	"luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
 	"luci-i18n-cloudflared-zh-cn:$INCLUDE_CLOUDFLARED"

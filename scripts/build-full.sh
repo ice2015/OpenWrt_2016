@@ -177,7 +177,7 @@ IMAGE_MANIFESTS=$(find "$TARGET_DIR" -maxdepth 1 -type f \
 	-name '*cudy_tr3000-v1-ubootmod.manifest' | sort)
 [ "$(printf '%s\n' "$IMAGE_MANIFESTS" | awk 'NF { n++ } END { print n+0 }')" -eq 1 ] ||
 	fail "expected exactly one image package manifest for cudy_tr3000-v1-ubootmod"
-for package in luci-app-tr3000-full luci-app-homeproxy sing-box wpad-openssl \
+for package in luci-app-tr3000-full wpad-openssl \
 	luci-theme-argon ddns-scripts-cloudflare kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether; do
 	awk -v package="$package" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS" ||
 		fail "image manifest is missing required package: $package"
@@ -190,7 +190,8 @@ EXPECTED_USB_PACKAGES=$(printf '%s\n' kmod-usb-net kmod-usb-net-cdc-ether kmod-u
 [ "$IMAGE_USB_PACKAGES" = "$EXPECTED_USB_PACKAGES" ] ||
 	fail "image manifest contains an unexpected USB network package"
 for entry in "cloudflared:$INCLUDE_CLOUDFLARED" "luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
-	"tailscale:$INCLUDE_TAILSCALE"; do
+	"tailscale:$INCLUDE_TAILSCALE" "sing-box:$INCLUDE_SINGBOX" \
+	"luci-app-homeproxy:$INCLUDE_SINGBOX"; do
 	PACKAGE=${entry%%:*}
 	VALUE=${entry#*:}
 	if [ "$VALUE" = true ]; then

@@ -591,7 +591,7 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertNotIn("CONFIG_PACKAGE_luci-theme-aurora=y", config)
 
     def test_full_config_requires_each_home_router_package_after_defconfig(self) -> None:
-        for package in ("luci-app-homeproxy", "ucode-mod-digest", "ddns-scripts-cloudflare",
+        for package in ("ucode-mod-digest", "ddns-scripts-cloudflare",
                         "luci-theme-argon", "wpad-openssl"):
             with self.subTest(package=package):
                 result, _, _ = run_full_configure(
@@ -599,6 +599,18 @@ class ScriptInterfaceTests(unittest.TestCase):
                     seed_contents="")
                 self.assertNotEqual(0, result.returncode)
                 self.assertIn(f"required Full package was not selected: {package}", result.stderr)
+
+    def test_full_singbox_switch_off_also_removes_homeproxy(self) -> None:
+        # HomeProxy depends on sing-box; with the switch off, defconfig would
+        # drop it, so the seed/gates must not hard-require it.
+        result, config, _ = run_full_configure(full_base_config(), include_singbox="false")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("CONFIG_PACKAGE_sing-box=y", config)
+        self.assertNotIn("CONFIG_PACKAGE_luci-app-homeproxy=y", config)
+        self.assertNotIn("CONFIG_PACKAGE_luci-i18n-homeproxy-zh-cn=y", config)
+        result, config, _ = run_full_configure(full_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CONFIG_PACKAGE_luci-app-homeproxy=y", config)
 
     def test_full_tailscale_defaults_off_and_switch_overrides(self) -> None:
         result, config, _ = run_full_configure(full_base_config())
