@@ -112,8 +112,12 @@ mkdir -p "$SOURCE_DIR/package/luci-app-tr3000-full"
 cp -R "$LOCAL_LUCI_PACKAGE/." "$SOURCE_DIR/package/luci-app-tr3000-full/"
 mkdir -p "$SOURCE_DIR/files"
 cp -R "$REPO_ROOT/files/." "$SOURCE_DIR/files/"
+# Device-scoped Full assets win over the shared rootfs.
+FULL_OVERLAY="$REPO_ROOT/overlays/devices/tr3000-full/files"
+[ -d "$FULL_OVERLAY" ] || fail "Full overlay not found: $FULL_OVERLAY"
+cp -R "$FULL_OVERLAY/." "$SOURCE_DIR/files/"
 mkdir -p "$SOURCE_DIR/files/root/scripts" "$SOURCE_DIR/files/usr/sbin"
-for SCRIPT in plant-profile.sh plant-access.sh preflight.sh lite-common.sh singbox-rollback.sh; do
+for SCRIPT in preflight.sh lite-common.sh; do
 	install -m 0755 "$SCRIPT_DIR/$SCRIPT" "$SOURCE_DIR/files/root/scripts/$SCRIPT"
 done
 install -m 0755 "$SCRIPT_DIR/service-toggle.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-service"
@@ -123,8 +127,6 @@ install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
 install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch"
-install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/95-tr3000-full-services" \
-	"$SOURCE_DIR/files/etc/uci-defaults/95-tr3000-full-services"
 
 DYNAMIC_SEED=$(mktemp "$SOURCE_DIR/.config.full-options.XXXXXX")
 TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.full.XXXXXX")

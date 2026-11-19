@@ -538,11 +538,47 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_full_first_boot_policy_disables_remote_services(self) -> None:
         defaults = (
-            ROOT / "files/etc/uci-defaults/95-tr3000-full-services"
+            ROOT / "overlays/devices/tr3000-full/files/etc/uci-defaults/95-tr3000-full-services"
         ).read_text(encoding="utf-8")
 
         for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
             self.assertIn(f"disable {service}", defaults)
+
+    def test_full_overlay_ships_home_router_network(self) -> None:
+        overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+        network = (overlay / "network").read_text(encoding="utf-8")
+        self.assertIn("config interface 'lan'", network)
+        self.assertIn("option ipaddr '192.168.10.1'", network)
+        self.assertIn("config device 'br_lan'", network)
+        self.assertIn("list ports 'eth1'", network)
+        self.assertNotIn("plant", network)
+        self.assertNotIn("mgmt", network)
+        dhcp = (overlay / "dhcp").read_text(encoding="utf-8")
+        self.assertIn("config dhcp 'lan'", dhcp)
+        self.assertIn("option start '100'", dhcp)
+        self.assertIn("option limit '150'", dhcp)
+
+    def test_full_firewall_keeps_tunnels_closed_by_default(self) -> None:
+        from tests.scripts.test_scripts import uci_sections
+        overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+        firewall = uci_sections((overlay / "firewall").read_text(encoding="utf-8"))
+        sections = {s[".name"]: s for s in firewall if s[".name"]}
+        zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
+        self.assertEqual("ACCEPT", zones["lan"]["input"])
+        self.assertNotIn("plant", zones)
+        self.assertNotIn("mgmt", zones)
+        for name in ("tr3000_full_wg_mgmt", "tr3000_full_wg_icmp", "tr3000_full_wg_listener"):
+            self.assertEqual("0", sections[name]["enabled"])
+        self.assertTrue(any(s[".type"] == "forwarding" and s["src"] == "wg" and s["dest"] == "lan" for s in firewall))
+        self.assertFalse(any(s[".type"] == "forwarding" and s["src"] == "wg" and s["dest"] == "wan" for s in firewall))
+        self.assertFalse(any(n.startswith("tr3000_lite_") for n in sections))
+
+    def test_full_only_assets_left_the_shared_rootfs(self) -> None:
+        for name in ("network", "dhcp", "firewall"):
+            self.assertFalse((ROOT / "files/etc/config" / name).exists())
+        self.assertFalse((ROOT / "files/etc/tr3000-full/examples/sing-box.json.example").exists())
+        self.assertFalse((ROOT / "files/etc/config/wireless").exists())
+        self.assertFalse((ROOT / "overlays/devices/tr3000-full/files/etc/config/wireless").exists())
 
 
 if __name__ == "__main__":

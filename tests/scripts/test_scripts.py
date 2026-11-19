@@ -511,9 +511,11 @@ class ScriptInterfaceTests(unittest.TestCase):
         full_result, _, full_assets = run_full_configure(full_base_config())
         self.assertEqual(0, full_result.returncode, full_result.stderr)
         for config in ("network", "dhcp", "firewall"):
-            self.assertEqual((ROOT / f"files/etc/config/{config}").read_text(encoding="utf-8"), full_assets[f"files/etc/config/{config}"])
+            self.assertEqual((ROOT / f"overlays/devices/tr3000-full/files/etc/config/{config}").read_text(encoding="utf-8"), full_assets[f"files/etc/config/{config}"])
         self.assertNotIn("files/etc/config/tr3000-lite", full_assets)
         self.assertFalse(any("tr3000-lite" in path for path in full_assets))
+        for retired in ("plant-profile.sh", "plant-access.sh", "singbox-rollback.sh"):
+            self.assertNotIn(f"files/root/scripts/{retired}", full_assets)
 
     def test_lite_config_installs_reachable_access_segment(self) -> None:
         result, _, assets = run_lite_configure(lite_base_config())
@@ -637,11 +639,15 @@ class ScriptInterfaceTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("files/usr/sbin/tr3000-full-service", installed_assets)
-        self.assertIn("files/root/scripts/plant-access.sh", installed_assets)
         self.assertIn("files/etc/uci-defaults/95-tr3000-full-services", installed_assets)
-        self.assertIn("files/etc/tr3000-full/examples/sing-box.json.example", installed_assets)
         self.assertIn("files/etc/tr3000-full/examples/cloudflared.yml.example", installed_assets)
-        self.assertIn("files/root/scripts/singbox-rollback.sh", installed_assets)
+        for retired in (
+            "files/root/scripts/plant-access.sh",
+            "files/root/scripts/plant-profile.sh",
+            "files/root/scripts/singbox-rollback.sh",
+            "files/etc/tr3000-full/examples/sing-box.json.example",
+        ):
+            self.assertNotIn(retired, installed_assets)
         self.assertIn(
             "package/luci-app-tr3000-full/Makefile",
             installed_assets,
