@@ -121,6 +121,11 @@ for SCRIPT in preflight.sh lite-common.sh; do
 	install -m 0755 "$SCRIPT_DIR/$SCRIPT" "$SOURCE_DIR/files/root/scripts/$SCRIPT"
 done
 install -m 0755 "$SCRIPT_DIR/service-toggle.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-service"
+# The self-healing controller repairs the radio on every later boot; it runs
+# the same first-boot implementation from a permanent path.
+install -m 0755 "$SCRIPT_DIR/tr3000-full-wifi.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-wifi"
+install -m 0755 "$FULL_OVERLAY/etc/uci-defaults/91-tr3000-full-management-ap" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-full-wifi-ap"
 install -m 0755 "$SCRIPT_DIR/lite-uplink-watch.sh" "$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
 install -m 0644 "$SCRIPT_DIR/lite-common.sh" "$SOURCE_DIR/files/usr/sbin/lite-common.sh"
 install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
