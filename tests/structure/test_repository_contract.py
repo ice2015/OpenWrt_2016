@@ -125,6 +125,19 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
   assert.deepEqual(calls.shift(), ['apply', '--address', '192.168.30.254/24', '--allow-luci', 'true', '--allow-mgmt', 'false']);
   assert.equal(apply.disabled, true, 'must revalidate before another apply');
   assert.match(text(tree), /Backup ID: safe-backup/, 'successful apply must expose its safe recovery ID');
+  // The factory default is access mode: the industrial segment has no address.
+  const access = structuredClone(state);
+  access.mode = 'lan';
+  access.plant = {device:'', address:'', prefix:null, netmask:'', cidr:'', active:false,
+    allow_luci:false, allow_mgmt:true, dhcp:'disabled'};
+  access.ap_ready = false;
+  const accessTree = page.render(access);
+  assert.match(text(accessTree), /192\.168\.10\.1\/24/, 'access mode must show the access segment');
+  assert.match(text(accessTree), /192\.168\.10\.100-192\.168\.10\.249/, 'access mode must show the DHCP pool');
+  const accessAddress = byId(accessTree, 'plant-address');
+  assert.equal(accessAddress.value, '192.168.20.254/24', 'the handover must offer the public plant default');
+  assert.match(text(accessTree), /not ready/i, 'access mode must show that the management AP is not ready');
+  assert.match(text(accessTree), /not enabled/i, 'access mode must say that the industrial segment is off');
   const secret = 'SECRET /etc/private /bin/sh stack trace';
   for (const reply of [{code:2, stdout:JSON.stringify(state), stderr:secret},
     {code:0, stdout:secret, stderr:secret}, ok({schema_version:99}),
@@ -280,7 +293,7 @@ const remoteData = {
   policy: { allow_luci: false, allow_plant: false },
   effective: { allow_luci: true, allow_plant: true },
   sources: { direct: ["10.10.1.10/32"], vps: ["10.20.1.10/32"] },
-  plant: { address: "192.168.10.254", cidr: "192.168.10.0/24" },
+  plant: { address: "192.168.20.254", cidr: "192.168.20.0/24" },
   checks: { result: "ok" },
   degraded: false
 };
@@ -306,8 +319,8 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
   const data = await page.load();
   assert.equal(calls.length, 2);
   const rendered = text(page.render(data));
-  assert.ok(rendered.includes('10.10.1.1/32, 192.168.10.0/24'));
-  assert.ok(rendered.includes('10.20.1.2/32, 192.168.10.0/24'));
+  assert.ok(rendered.includes('10.10.1.1/32, 192.168.20.0/24'));
+  assert.ok(rendered.includes('10.20.1.2/32, 192.168.20.0/24'));
   assert.ok(!rendered.includes('0.0.0.0/0'));
   assert.ok(rendered.includes('Do NOT activate both profiles simultaneously'));
   console.log('Remote access LuCI view contract passed');

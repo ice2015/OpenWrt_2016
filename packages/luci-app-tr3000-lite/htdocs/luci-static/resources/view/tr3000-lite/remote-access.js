@@ -48,7 +48,7 @@ return view.extend({
 	render: function(data) {
 		var remote = data.remote;
 		var ddns = data.ddns;
-		var plantCidr = remote.plant.cidr || '192.168.10.0/24';
+		var plantCidr = remote.plant.cidr || '192.168.20.0/24';
 
 		var directIp = remote.roles.wg_direct.address || '10.10.1.1/32';
 		var vpsIp = remote.roles.wg_vps.address || '10.20.1.2/32';

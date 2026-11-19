@@ -43,7 +43,7 @@ function checkMessage(check) {
 }
 
 function invoke(args) {
-	var failure = _('Industrial LAN request failed. Refresh the page to check the current state. If recovery is incomplete, use the management network to inspect the device.');
+	var failure = _('Industrial LAN request failed. Refresh the page to check the current state. If recovery is incomplete, use the access segment or a trusted console to inspect the device.');
 	return fs.exec('/usr/sbin/tr3000-lite-plant', args).catch(function() {
 		throw new Error(failure);
 	}).then(function(result) {
@@ -52,8 +52,14 @@ function invoke(args) {
 			data = JSON.parse(result.stdout);
 			var plant = data && data.plant;
 			message = data && data.checks && checkMessage(data.checks.result);
+			// The industrial segment is inactive until the operator hands the
+			// port over; then it carries no address at all.
+			var plantActive = plant && plant.active === true;
+			var plantAddressValid = plantActive ?
+				(isIPv4(plant.address) && isIPv4(plant.netmask)) :
+				(plant && plant.address === '' && plant.netmask === '');
 			if (!data || data.schema_version !== 2 || !plant ||
-				!isIPv4(plant.address) || !isIPv4(plant.netmask) ||
+				!plantAddressValid ||
 				!(plant.prefix === null || (Number.isInteger(plant.prefix) && plant.prefix >= 0 && plant.prefix <= 32)) ||
 				typeof plant.allow_luci !== 'boolean' || typeof plant.allow_mgmt !== 'boolean' ||
 				plant.dhcp !== 'disabled' || typeof message !== 'string' ||
@@ -71,7 +77,7 @@ function invoke(args) {
 		}
 		if (result.code !== 0) {
 			if (data.rollback === 'degraded')
-				message += ' ' + _('WARNING: Recovery is incomplete. Use the management network or trusted console to inspect the device before retrying.');
+				message += ' ' + _('WARNING: Recovery is incomplete. Use the access segment or a trusted console to inspect the device before retrying.');
 			else if (data.rollback === 'restored')
 				message += ' ' + _('The previous settings were restored.');
 			else
@@ -121,6 +127,8 @@ return view.extend({
 				_('This configuration predates the access segment. Reflash without preserving settings (sysupgrade -n) before using the industrial features.')) : null;
 
 		function currentText(plant) {
+			if (!plant.active)
+				return _('The Industrial LAN segment is not enabled; the LAN port serves the access segment.');
 			return _('Current address: ') + plant.address + '/' + (plant.prefix === null ? '?' : plant.prefix) +
 				' — ' + _('Netmask: ') + plant.netmask;
 		}
