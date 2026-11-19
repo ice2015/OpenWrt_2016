@@ -427,7 +427,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/TR3000-LITE-LAN-ACCESS.md", readme)
         for document in ("docs/LITE-README.md", "docs/TR3000-LITE-PROVISIONING.md",
-                         "docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/SINGBOX-SPLIT-ROUTING.md"):
+                         "docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/HOMEPROXY-SPLIT-ROUTING.md"):
             text = (ROOT / document).read_text(encoding="utf-8")
             self.assertNotIn("192.168.77", text, document + " still documents the retired management segment")
             self.assertNotIn("br-mgmt", text, document + " still documents the retired management bridge")
@@ -495,9 +495,10 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             "docs/FULL-README.md",
             "docs/UBOOT-SAFETY.md",
             "docs/WIREGUARD-VPS-ROUTING.md",
-            "docs/WIREGUARD-SNAT.md",
+            "docs/TUNNEL-ACCESS.md",
             "docs/TAILSCALE.md",
-            "docs/SINGBOX-SPLIT-ROUTING.md",
+            "docs/HOMEPROXY-SPLIT-ROUTING.md",
+            "docs/DDNS-CLOUDFLARE.md",
             "docs/CLOUDFLARED-ACCESS.md",
             "docs/TR3000-LITE-PROVISIONING.md",
             "docs/TR3000-LITE-REMOTE-ACCESS.md",
@@ -635,6 +636,22 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertFalse((ROOT / "files/etc/tr3000-full/examples/sing-box.json.example").exists())
         self.assertFalse((ROOT / "files/etc/config/wireless").exists())
         self.assertFalse((ROOT / "overlays/devices/tr3000-full/files/etc/config/wireless").exists())
+
+    def test_full_documents_describe_the_home_router(self) -> None:
+        readme = (ROOT / "docs/FULL-README.md").read_text(encoding="utf-8")
+        for doc in ("HOMEPROXY-SPLIT-ROUTING.md", "TUNNEL-ACCESS.md", "DDNS-CLOUDFLARE.md"):
+            self.assertTrue((ROOT / "docs" / doc).is_file(), doc)
+            self.assertIn(f"docs/{doc}", readme)
+        for forbidden in ("192.168.77", "br-mgmt", "plant"):
+            self.assertNotIn(forbidden, readme)
+        plan = (ROOT / "docs/TEST-PLAN.md").read_text(encoding="utf-8")
+        for case in range(1, 15):
+            self.assertIn(f"F{case}", plan)
+        self.assertFalse((ROOT / "docs/WIREGUARD-SNAT.md").exists())
+        self.assertFalse((ROOT / "docs/SINGBOX-SPLIT-ROUTING.md").exists())
+        root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("WIREGUARD-SNAT.md", root_readme)
+        self.assertNotIn("SINGBOX-SPLIT-ROUTING.md", root_readme)
 
 
 if __name__ == "__main__":

@@ -15,10 +15,10 @@
 | 检查 | 预期 |
 | --- | --- |
 | Lite workflow 完整构建 | 固定源码/feed revisions 可取，`make defconfig` 通过，Lite 包选择满足 seed，生成目标 profile 的非空 sysupgrade；最终 `build.config` 与 `selected-packages.txt` 含 `luci-app-tr3000-lite=y`、唯一 `wpad-openssl` 提供者；验证本地 LuCI 包实际编译 |
-| Full workflow 完整构建 | 默认 Tailscale/sing-box 存在、cloudflared 不存在；三项开关组合与最终配置/包清单一致，LuCI 本地包可编译，镜像通过 profile/布局/tar/大小门禁 |
+| Full workflow 完整构建 | 默认 sing-box/cloudflared 存在、Tailscale 不存在；三项开关组合与最终配置/包清单一致，LuCI 本地包可编译，镜像通过 profile/布局/tar/大小门禁；编译前断言出厂接入段 overlay 且无工业段/无线配置 |
 | U-Boot workflow | 只生成一个目标 TR3000 2025 BL2 和 multi-layout FIP；不包含 256 MiB 产物 |
-| 工件完整性 | 每个固件/U-Boot 镜像的 SHA256 可在异机复核；配置、完整镜像包/版本清单 `image-packages.manifest` 及包名视图、commit、feed revisions、许可证和日志随 Artifact 上传；Lite 另含最终 `profile.dts` 和无凭据 `lite-runtime-contract.txt`，与 Lite overlay 默认值和已上传配置相符，不能当作设备实测；`target-package-index.txt` 只是仓库索引，不得冒充已安装包清单 |
-| Lite 多上行 | 固定三项 USB 网卡包、Lite 专用 daemon/库/hotplug/status 路径入镜像；UCI 默认顺序10/20/30、失败/成功阈值3/2、15秒最小轮间休眠；只读页面/窄 ACL 编译成功，不改变 Full 的旧 watcher |
+| 工件完整性 | 每个固件/U-Boot 镜像的 SHA256 可在异机复核；配置、完整镜像包/版本清单 `image-packages.manifest` 及包名视图、commit、feed revisions、许可证和日志随 Artifact 上传；Lite/Full 另含最终 `profile.dts` 和无凭据的 `lite-runtime-contract.txt`/`full-runtime-contract.txt`，与各自 overlay 默认值和已上传配置相符，不能当作设备实测；`target-package-index.txt` 只是仓库索引，不得冒充已安装包清单 |
+| Lite 多上行 | 固定三项 USB 网卡包、Lite 专用 daemon/库/hotplug/status 路径入镜像；UCI 默认顺序10/20/30、失败/成功阈值3/2、15秒最小轮间休眠；只读页面/窄 ACL 编译成功；Full 使用同机制的 Full 命名控制器（单 `wg` 重启语义） |
 
 ## 已有证据与后续构建的界限
 
@@ -77,8 +77,27 @@
     - 插入不支持的 USB、两台受支持 USB、快速拔插及重插后旧 remove；确认不抢占无关网卡，双候选失败关闭，移除多余候选后恢复。对照 VID/PID/驱动、实际绑定和 DHCP。
     - 在 plant 网络变更持锁时插 USB 并持续到事件等待超时，释放后确认正常守护轮次重扫恢复，不覆盖 plant network/firewall 事务。注入 UCI/网络重载/ifup 失败并检查配置恢复及诊断。
     - 关闭管理 AP、丢失状态文件、损坏诊断 JSON 或使稳定切换通知失败，只读页应显示明确未知/错误，不泄漏密钥、不修改配置。验证重启/停启服务和断电恢复后的路由拥有日志及 USB 重扫行为。
-13. Full LuCI 使用 Bootstrap；服务页只能控制固定服务，未编译项不可启用，首次启动 WireGuard listener、Tailscale、sing-box、cloudflared 都关闭。
-14. Tailscale 与 WireGuard 共存不抢 plant 路由；sing-box 默认 direct 且不代理 plant/接入段/VPN 端点；cloudflared 仅暴露 Access 保护的测试 Web 服务。
-15. 执行 `singbox-rollback.sh` 后 sing-box 停止，只有 `tr3000_full_singbox_*` 防火墙段被移除，LuCI/SSH 本地管理和其他防火墙规则仍存在。
+13. Full LuCI 默认 Argon 主题（Bootstrap 可切回）；服务页只能控制固定服务（WireGuard/Tailscale/HomeProxy/Cloudflare Tunnel），未编译项不可启用，首次启动 WireGuard listener、Tailscale、homeproxy、sing-box 本体、cloudflared 都关闭。
+14. Tailscale 与 WireGuard 共存不抢路由；HomeProxy 未配节点不启动，配节点后按所选模式分流；cloudflared 仅暴露 Access 保护的测试 Web 服务。
+15. 停用 homeproxy 后其 nft 链/表与 dnsmasq 片段被清理，LuCI/SSH 本地管理和其他防火墙规则仍存在。
+
+## Full 家用路由器真机验收（F1–F14，非 CI）
+
+| # | 用例 | 期望 |
+| --- | --- | --- |
+| F1 | 全新刷机（不保留配置）上电，插网线 | PC 拿到 192.168.10.x，网关 192.168.10.1 |
+| F2 | `ping 192.168.10.1` | 通 |
+| F3 | 浏览器 `https://192.168.10.1` | 进 LuCI（Argon 主题），可设 root 密码 |
+| F4 | 连管理 WiFi | 拿到 192.168.10.x，可 ping，可进 LuCI |
+| F5 | 扫描周围热点 | 看不到开放默认热点；只有 `TR3000-Full-XXXXXX` 且为 WPA2 |
+| F6 | HomeProxy 配好 VLESS+WS+TLS 节点，路由模式切“智能分流” | 国内直连、指定站点走代理；LAN 客户端同样生效 |
+| F7 | 路由模式切“全局” | 全部流量走代理；切“直连”后全部直连 |
+| F8 | `logread \| grep -i mtwifi` | 无 `wait_for network.interface.lan` 超时错误 |
+| F9 | 拔掉 WAN 网线，Wi-Fi 中继接入 | 默认路由切到 wwan，WAN 恢复后切回 |
+| F10 | USB 手机共享接入 | usbwan 起，默认路由切到 usbwan |
+| F11 | LuCI 启停 WireGuard / Cloudflare Tunnel / homeproxy | 状态与实际进程一致 |
+| F12 | LuCI DDNS 用 Cloudflare provider | 域名解析到当前公网 IP |
+| F13 | Argon 主题下切 Bootstrap | 可切换成功，重启后保持 |
+| F14 | 升级本固件（保留旧配置） | 若存在旧工业配置结构，服务页明确提示并要求 `sysupgrade -n`；不自动改写配置 |
 
 任何测试未执行都应保持“未验证”状态。不得在生产 PLC、无人值守现场或未备份设备上进行刷机、断电或程序下载实验。

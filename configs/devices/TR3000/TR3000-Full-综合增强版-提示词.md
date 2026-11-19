@@ -1,5 +1,7 @@
 # Cudy TR3000 128MB — Full 综合增强固件：独立开发提示词
 
+> **已被取代（保留作历史）**：本文是 Full 的工业版规格。自 2026-11-19 起，Full 改为家用路由器定位（去工业段、sing-box/HomeProxy 科学上网、WireGuard/Cloudflare Tunnel/Tailscale 穿透、Cloudflare DDNS、Argon 主题），现行设计见 `docs/superpowers/specs/2026-11-19-tr3000-full-home-router-design.md`，操作说明见 `docs/FULL-README.md`。本文中的工业网段/精准 SNAT 要求不再适用于 Full。
+
 > 将本文全文交给 Codex / Claude Code / 其他编程 Agent。本文为**独立完整任务**，无需依赖另一份 Lite 提示词。
 
 ## 1. 工程目标与硬件

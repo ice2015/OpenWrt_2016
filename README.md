@@ -81,7 +81,7 @@ common → distribution → device → local
 
 工作流仅负责编排，实际逻辑必须保留在 `scripts/` 中，以便本地和 CI 使用同一条路径。当前构建脚本在目标信息完整后仍会以状态码 `4` 提示“构建阶段尚未实现”；这是有意的安全边界。
 
-TR3000 Lite 与 Full 使用独立 workflow，不改变通用设备清单中仍为 `UNRESOLVED` 的原生 profile/revision，也不代表通用构建入口现已可构建。请先阅读 [Lite 操作说明](docs/LITE-README.md)、[Lite 接入段与工业模式](docs/TR3000-LITE-LAN-ACCESS.md)、[Full 操作说明](docs/FULL-README.md)、[U-Boot 安全检查](docs/UBOOT-SAFETY.md)、[WireGuard/VPS 路由](docs/WIREGUARD-VPS-ROUTING.md)、[WireGuard 精准 SNAT](docs/WIREGUARD-SNAT.md) 和[测试计划](docs/TEST-PLAN.md)。首次部署的工业 IP、无线凭据及 VPN 密钥都必须由现场人员安全注入。
+TR3000 Lite 与 Full 使用独立 workflow，不改变通用设备清单中仍为 `UNRESOLVED` 的原生 profile/revision，也不代表通用构建入口现已可构建。请先阅读 [Lite 操作说明](docs/LITE-README.md)、[Lite 接入段与工业模式](docs/TR3000-LITE-LAN-ACCESS.md)、[Full 家用路由器说明](docs/FULL-README.md)、[Full 穿透通道](docs/TUNNEL-ACCESS.md)、[Full DDNS](docs/DDNS-CLOUDFLARE.md)、[U-Boot 安全检查](docs/UBOOT-SAFETY.md)、[WireGuard/VPS 路由](docs/WIREGUARD-VPS-ROUTING.md) 和[测试计划](docs/TEST-PLAN.md)。首次部署的无线凭据及 VPN 密钥都必须由现场人员安全注入。
 
 ## AI 修改项目时
 

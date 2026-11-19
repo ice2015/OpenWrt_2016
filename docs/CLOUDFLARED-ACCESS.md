@@ -1,24 +1,30 @@
-# Cloudflare Tunnel / Access
+# Cloudflare Tunnel / Access（Full）
 
-cloudflared 默认不编译，因为 112 MiB UBI 的容量有限。运行 Full workflow 时显式选择 `include_cloudflared=true` 后，配置合并必须保留该包，最终镜像仍需通过 100 MiB 安全上限；超限就让构建失败，不绕过门禁。
+Full 默认编译 `cloudflared` 与 `luci-app-cloudflared`（构建开关 `include_cloudflared`，默认开）。用途：把家里的 Web 服务（NAS、相册、测试站点）经 Cloudflare Access 身份认证后暴露到公网域名——出站隧道，不需要公网 IP，不开入站端口。
+
+## 体积门禁
+
+cloudflared 二进制较大，最终镜像仍须通过 100 MiB 安全上限；超限就让构建失败，不绕过门禁。若默认组合超限，把 `include_cloudflared` 改回 `false` 并记录取舍（见 spec D4/D6）。
 
 ## 使用边界
 
-- 只发布经过 Cloudflare Access 身份认证的 HMI/NAS Web 应用；
-- 不把 PLC 编程、控制、现场总线或管理端口映射到公共 hostname；
-- 私有网络路由也必须限制用户、设备、目的网段和端口；
+- 只发布经过 Cloudflare Access 认证的 Web 应用；
+- 不把 SSH、路由器管理面或任何控制端口直接映射到公共 hostname；
+- 私有网络路由（如启用）也必须限制用户、设备、目的网段和端口；
 - token 在首次启动后写入 root-only 文件并设为 `0600`，不得进入 Git、固件、命令历史或 CI 日志；
-- 使用包自带的 procd 服务、重启策略和日志限制，不创建后台死循环。
+- 使用包自带的 procd 服务与重启策略，不创建后台死循环。
 
-无凭据示例位于 `/etc/tr3000-full/examples/cloudflared.yml.example`。其中 `example.invalid` 与 `192.0.2.0/24` 都是文档占位符。先确认当前包的配置路径和 token-file 支持方式，再复制、修改和检查。
+无凭据示例位于 `/etc/tr3000-full/examples/cloudflared.yml.example`（占位域名，不可直接使用）。先确认当前包的配置路径和 token-file 支持方式，再复制、修改和检查。
 
-启用前验证 DNS、TLS 时间、出站 TCP 443，以及当前 cloudflared 版本实际需要的 QUIC/HTTP2 出站策略。Cloudflare Access 策略、隧道 ingress 与本机防火墙三层都必须限制访问。
-
-可在 LuCI **服务 → TR3000 Full** 启停，或使用：
+## 启用与验证
 
 ```sh
 /usr/sbin/tr3000-full-service enable cloudflared
 /usr/sbin/tr3000-full-service disable cloudflared
 ```
 
-停用后从外网验证 hostname/私网路由立即失效，同时本地 HMI 服务保持正常。Cloudflare 控制台显示 Healthy 只证明隧道连接，不证明 Access、目标端口或工业安全策略正确。
+或在 LuCI **服务 → Cloudflared** / **服务 → TR3000 Full** 操作。
+
+启用前验证 DNS、TLS 时间、出站 TCP 443，以及当前 cloudflared 版本实际需要的 QUIC/HTTP2 出站策略。Cloudflare Access 策略、隧道 ingress 与本机防火墙三层都必须限制访问。
+
+停用后从外网验证 hostname 立即失效，同时家里本地服务保持正常。Cloudflare 控制台显示 Healthy 只证明隧道连接，不证明 Access 策略或目标端口正确。真机验收见 `docs/TEST-PLAN.md` F11。
