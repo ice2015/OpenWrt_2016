@@ -5,10 +5,10 @@
 
 var controller = '/usr/sbin/tr3000-full-service';
 var services = [
-	{ id: 'wireguard', title: _('WireGuard tunnel'), note: _('Plant access still requires explicit peer, destination and port authorization.') },
-	{ id: 'tailscale', title: _('Tailscale'), note: _('Configure ACLs and approved routes before enabling.') },
-	{ id: 'sing-box', title: _('sing-box'), note: _('Industrial, management and VPN endpoint traffic must remain excluded.') },
-	{ id: 'cloudflared', title: _('Cloudflare Tunnel'), note: _('Expose only Access-protected web applications, never PLC control ports.') }
+	{ id: 'wireguard', title: _('WireGuard tunnel'), note: _('Inbound access to the home LAN. Configure the wg interface and enable the firewall rules first.') },
+	{ id: 'tailscale', title: _('Tailscale'), note: _('Optional backup remote channel. Configure ACLs before enabling.') },
+	{ id: 'homeproxy', title: _('HomeProxy (sing-box)'), note: _('Configure nodes and routing mode in Services → HomeProxy.') },
+	{ id: 'cloudflared', title: _('Cloudflare Tunnel'), note: _('Expose only Access-protected web applications.') }
 ];
 
 function invoke(action, service) {
@@ -50,8 +50,10 @@ return view.extend({
 
 		return E([], [
 			E('h2', {}, _('TR3000 Full remote services')),
+			status.legacy_config_detected ? E('div', { 'class': 'alert-message danger' },
+				_('Legacy industrial configuration detected. Reflash without keeping settings (sysupgrade -n).')) : E([]),
 			E('div', { 'class': 'alert-message warning' },
-				_('All remote services are disabled by default. Enabling a tunnel does not grant access to the plant network.')),
+				_('All remote services are disabled by default. Enabling a tunnel does not open the WAN management plane.')),
 			E('table', { 'class': 'table' }, [
 				E('tr', { 'class': 'tr table-titles' }, [
 					E('th', { 'class': 'th' }, _('Service')),

@@ -1,10 +1,11 @@
 {
   "luci-app-tr3000-full": {
-    "description": "Manage fixed TR3000 Full remote services",
+    "description": "Manage fixed TR3000 Full remote services and inspect uplinks",
     "read": {},
     "write": {
       "file": {
-        "/usr/sbin/tr3000-full-service": [ "exec" ]
+        "/usr/sbin/tr3000-full-service": [ "exec" ],
+        "/usr/sbin/tr3000-full-uplink-status": [ "exec" ]
       },
       "ubus": {
         "file": [ "exec" ]

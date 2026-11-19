@@ -1,8 +1,11 @@
 from pathlib import Path
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 
@@ -517,32 +520,85 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         menu_path = package / "root/usr/share/luci/menu.d/luci-app-tr3000-full.json"
         acl_path = package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json"
         view_path = package / "htdocs/luci-static/resources/view/tr3000-full/services.js"
+        uplinks_path = package / "htdocs/luci-static/resources/view/tr3000-full/uplinks.js"
 
         self.assertTrue((package / "Makefile").is_file())
         self.assertTrue(view_path.is_file())
+        self.assertTrue(uplinks_path.is_file())
         menu = json.loads(menu_path.read_text(encoding="utf-8"))
         acl = json.loads(acl_path.read_text(encoding="utf-8"))
+        self.assertEqual({"admin/services/tr3000-full", "admin/services/tr3000-full/services",
+                          "admin/services/tr3000-full/uplinks"}, set(menu))
         entry = menu["admin/services/tr3000-full"]
         self.assertNotIn("auth", entry)
+        self.assertEqual({"type": "firstchild"}, entry["action"])
         self.assertEqual(["luci-app-tr3000-full"], entry["depends"]["acl"])
+        for child, path in (("services", "tr3000-full/services"), ("uplinks", "tr3000-full/uplinks")):
+            child_entry = menu[f"admin/services/tr3000-full/{child}"]
+            self.assertNotIn("auth", child_entry)
+            self.assertEqual({"type": "view", "path": path}, child_entry["action"])
+            self.assertEqual(["luci-app-tr3000-full"], child_entry["depends"]["acl"])
         self.assertNotIn("file", acl["luci-app-tr3000-full"].get("read", {}))
         write_files = acl["luci-app-tr3000-full"]["write"]["file"]
         self.assertEqual(
-            {"/usr/sbin/tr3000-full-service": ["exec"]},
+            {"/usr/sbin/tr3000-full-service": ["exec"],
+             "/usr/sbin/tr3000-full-uplink-status": ["exec"]},
             write_files,
         )
         view = view_path.read_text(encoding="utf-8")
-        for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
+        for service in ("wireguard", "tailscale", "homeproxy", "cloudflared"):
             self.assertIn(f"'{service}'", view)
+        self.assertIn("legacy_config_detected", view)
+        self.assertIn("sysupgrade -n", view)
         self.assertNotIn("/bin/sh", view)
+        uplinks = uplinks_path.read_text(encoding="utf-8")
+        self.assertIn("/usr/sbin/tr3000-full-uplink-status", uplinks)
+        self.assertNotIn("tr3000-lite", uplinks)
 
     def test_full_first_boot_policy_disables_remote_services(self) -> None:
         defaults = (
             ROOT / "overlays/devices/tr3000-full/files/etc/uci-defaults/95-tr3000-full-services"
         ).read_text(encoding="utf-8")
 
-        for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
+        for service in ("wireguard", "tailscale", "cloudflared", "homeproxy"):
             self.assertIn(f"disable {service}", defaults)
+        # The sing-box package ships its own init; HomeProxy owns the binary.
+        self.assertIn("/etc/init.d/sing-box disable", defaults)
+
+    def test_full_service_status_flags_legacy_industrial_config(self) -> None:
+        fake_uci = (
+            "import json, os, sys\n"
+            "args = [a for a in sys.argv[1:] if a != '-q']\n"
+            "data = json.loads(open(os.environ['LEGACY_CFG']).read())\n"
+            "if args[0] == 'get':\n"
+            "    if args[1] not in data: sys.exit(1)\n"
+            "    print(data[args[1]])\n"
+            "elif args[0] == 'show':\n"
+            "    for k, v in data.items():\n"
+            "        if k.startswith(args[1] + '.'): print(k + '=' + chr(39) + v + chr(39))\n"
+            "else: sys.exit(2)\n"
+        )
+        for config, expected in (({"network.plant": "interface"}, True),
+                                 ({"network.mgmt": "interface"}, True),
+                                 ({"network.lan": "interface"}, False)):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bindir = root / "bin"; bindir.mkdir()
+                (root / "fake_uci.py").write_text(fake_uci, encoding="utf-8")
+                cfg = root / "uci.json"; cfg.write_text(json.dumps(config), encoding="utf-8")
+                uci = bindir / "uci"
+                uci.write_text('#!/bin/sh\nexec "$PYTHON" -S "$LEGACY_ROOT/fake_uci.py" "$@"\n', encoding="utf-8")
+                uci.chmod(0o755)
+                env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}",
+                           PYTHON=sys.executable, LEGACY_ROOT=str(root), LEGACY_CFG=str(cfg))
+                result = subprocess.run(
+                    ["bash", str(ROOT / "scripts/service-toggle.sh"), "status", "--json"],
+                    capture_output=True, text=True, env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                status = json.loads(result.stdout)
+                self.assertIs(expected, status["legacy_config_detected"])
+                for service in ("wireguard", "tailscale", "homeproxy", "cloudflared"):
+                    self.assertIn(service, status)
 
     def test_full_overlay_ships_home_router_network(self) -> None:
         overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
