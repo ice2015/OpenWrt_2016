@@ -100,9 +100,9 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertIn("workflow_dispatch:", workflow)
         defaults = {
-            "include_tailscale": "true",
+            "include_tailscale": "false",
             "include_singbox": "true",
-            "include_cloudflared": "false",
+            "include_cloudflared": "true",
             "release": "false",
         }
         for input_name, default in defaults.items():

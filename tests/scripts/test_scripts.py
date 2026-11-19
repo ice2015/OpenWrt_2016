@@ -174,6 +174,11 @@ def full_base_config() -> str:
         "luci-i18n-base-zh-cn", "luci-proto-wireguard", "luci-ssl-openssl",
         "luci-theme-bootstrap", "openssh-server", "openssh-sftp-server",
         "tcpdump-mini", "ubi-utils", "wireguard-tools",
+        "luci-app-homeproxy", "luci-i18n-homeproxy-zh-cn", "ucode-mod-digest",
+        "luci-app-ddns", "ddns-scripts", "ddns-scripts-cloudflare",
+        "luci-i18n-ddns-zh-cn", "luci-app-cloudflared", "luci-i18n-cloudflared-zh-cn",
+        "luci-theme-argon", "luci-app-argon-config", "luci-i18n-argon-config-zh-cn",
+        "wpad-openssl", "sing-box",
     )
     lines = [
         "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
@@ -556,7 +561,7 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertIn("files/usr/sbin/tr3000-lite-plant", assets)
         self.assertIn("files/usr/lib/tr3000-lite/plant-lib.sh", assets)
 
-    def test_full_config_defaults_include_tailscale_and_singbox_only(self) -> None:
+    def test_full_config_defaults_include_singbox_and_cloudflared_only(self) -> None:
         base = (
             full_base_config()
             + "CONFIG_PACKAGE_tailscale=y\n"
@@ -569,12 +574,49 @@ class ScriptInterfaceTests(unittest.TestCase):
         result, generated_config, _ = run_full_configure(base)
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("CONFIG_PACKAGE_tailscale=y", generated_config)
+        self.assertNotIn("CONFIG_PACKAGE_tailscale=y", generated_config)
         self.assertIn("CONFIG_PACKAGE_sing-box=y", generated_config)
-        self.assertNotIn("CONFIG_PACKAGE_cloudflared=y", generated_config)
+        self.assertIn("CONFIG_PACKAGE_cloudflared=y", generated_config)
         self.assertNotIn("CONFIG_PACKAGE_luci-theme-aurora=y", generated_config)
         self.assertNotIn("CONFIG_PACKAGE_luci-app-openclash=y", generated_config)
         self.assertIn("CONFIG_PACKAGE_luci-theme-bootstrap=y", generated_config)
+        self.assertIn("CONFIG_PACKAGE_luci-theme-argon=y", generated_config)
+
+    def test_full_config_selects_the_home_router_package_set(self) -> None:
+        result, config, _ = run_full_configure(full_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        for package in ("luci-app-homeproxy", "ucode-mod-digest", "ddns-scripts-cloudflare",
+                        "luci-theme-argon", "wpad-openssl", "sing-box"):
+            self.assertIn(f"CONFIG_PACKAGE_{package}=y", config)
+        self.assertNotIn("CONFIG_PACKAGE_luci-theme-aurora=y", config)
+
+    def test_full_config_requires_each_home_router_package_after_defconfig(self) -> None:
+        for package in ("luci-app-homeproxy", "ucode-mod-digest", "ddns-scripts-cloudflare",
+                        "luci-theme-argon", "wpad-openssl"):
+            with self.subTest(package=package):
+                result, _, _ = run_full_configure(
+                    full_base_config().replace(f"CONFIG_PACKAGE_{package}=y\n", ""),
+                    seed_contents="")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"required Full package was not selected: {package}", result.stderr)
+
+    def test_full_tailscale_defaults_off_and_switch_overrides(self) -> None:
+        result, config, _ = run_full_configure(full_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("CONFIG_PACKAGE_tailscale=y", config)
+        result, config, _ = run_full_configure(full_base_config(), include_tailscale="true")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CONFIG_PACKAGE_tailscale=y", config)
+
+    def test_full_cloudflared_defaults_on_and_false_removes_it(self) -> None:
+        result, config, _ = run_full_configure(full_base_config())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("CONFIG_PACKAGE_cloudflared=y", config)
+        result, config, _ = run_full_configure(
+            full_base_config().replace("CONFIG_PACKAGE_cloudflared=y\n", ""),
+            include_cloudflared="false")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertNotIn("CONFIG_PACKAGE_cloudflared=y", config)
 
     def test_full_config_optional_switches_override_hyphenated_packages(self) -> None:
         base = full_base_config() + "CONFIG_PACKAGE_sing-box=y\n"

@@ -7,9 +7,9 @@ SOURCE_DIR=
 UPSTREAM_DIR=
 ARTIFACT_DIR=
 JOBS=4
-INCLUDE_TAILSCALE=true
+INCLUDE_TAILSCALE=false
 INCLUDE_SINGBOX=true
-INCLUDE_CLOUDFLARED=false
+INCLUDE_CLOUDFLARED=true
 
 usage() {
 	printf 'Usage: %s --source-dir DIR --upstream-dir DIR --artifact-dir DIR [--jobs N] [--include-tailscale true|false] [--include-singbox true|false] [--include-cloudflared true|false]\n' "$0"

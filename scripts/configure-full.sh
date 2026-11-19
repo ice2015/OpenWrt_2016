@@ -7,9 +7,9 @@ SOURCE_DIR=
 BASE_CONFIG=
 CCACHE_DIR_OVERRIDE=
 SEED="$REPO_ROOT/configs/full.seed"
-INCLUDE_TAILSCALE=true
+INCLUDE_TAILSCALE=false
 INCLUDE_SINGBOX=true
-INCLUDE_CLOUDFLARED=false
+INCLUDE_CLOUDFLARED=true
 
 usage() {
 	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE] [--ccache-dir DIR] [--include-tailscale true|false] [--include-singbox true|false] [--include-cloudflared true|false]\n' "$0"
@@ -147,7 +147,9 @@ cp "$SEED" "$DYNAMIC_SEED"
 for ENTRY in \
 	"tailscale:$INCLUDE_TAILSCALE" \
 	"sing-box:$INCLUDE_SINGBOX" \
-	"cloudflared:$INCLUDE_CLOUDFLARED"
+	"cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-i18n-cloudflared-zh-cn:$INCLUDE_CLOUDFLARED"
 do
 	PACKAGE=${ENTRY%%:*}
 	VALUE=${ENTRY#*:}
@@ -215,15 +217,24 @@ for PACKAGE in \
 	kmod-usb-net-cdc-ether kmod-usb-net-rndis kmod-wireguard luci \
 	luci-app-tr3000-full luci-i18n-base-zh-cn luci-proto-wireguard \
 	luci-ssl-openssl luci-theme-bootstrap openssh-server openssh-sftp-server \
-	tcpdump-mini ubi-utils wireguard-tools
+	tcpdump-mini ubi-utils wireguard-tools \
+	luci-app-homeproxy luci-i18n-homeproxy-zh-cn ucode-mod-digest \
+	luci-app-ddns ddns-scripts ddns-scripts-cloudflare luci-i18n-ddns-zh-cn \
+	luci-theme-argon luci-app-argon-config luci-i18n-argon-config-zh-cn \
+	wpad-openssl
 do
 	grep -Fq "CONFIG_PACKAGE_$PACKAGE=y" "$SOURCE_DIR/.config" ||
 		fail "required Full package was not selected: $PACKAGE"
 done
+if grep -E '^CONFIG_PACKAGE_wpad-[^=]+=[ym]$' "$SOURCE_DIR/.config" | grep -Fvx 'CONFIG_PACKAGE_wpad-openssl=y' >/dev/null; then
+	fail "conflicting wpad provider selected after defconfig"
+fi
 for ENTRY in \
 	"tailscale:$INCLUDE_TAILSCALE" \
 	"sing-box:$INCLUDE_SINGBOX" \
-	"cloudflared:$INCLUDE_CLOUDFLARED"
+	"cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-i18n-cloudflared-zh-cn:$INCLUDE_CLOUDFLARED"
 do
 	PACKAGE=${ENTRY%%:*}
 	VALUE=${ENTRY#*:}
@@ -237,7 +248,7 @@ done
 for PACKAGE in \
 	adguardhome docker dockerd luci-app-aurora-config luci-app-bandix \
 	luci-app-dockerman luci-app-openclash luci-app-passwall luci-app-upnp \
-	luci-theme-aurora miniupnpd dropbear ruby libruby tcpdump
+	luci-theme-aurora miniupnpd dropbear ruby libruby tcpdump kmod-usb-net-ipheth
 do
 	if grep -Fq "CONFIG_PACKAGE_$PACKAGE=y" "$SOURCE_DIR/.config"; then
 		fail "excluded package remained selected after defconfig: $PACKAGE"
