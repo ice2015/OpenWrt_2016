@@ -28,3 +28,5 @@ __pycache__/
 /.superpowers/
 /.worktrees/
 
+# Local Playwright MCP config
+/.playwright/

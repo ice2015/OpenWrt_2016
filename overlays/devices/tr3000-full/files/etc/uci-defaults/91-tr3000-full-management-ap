@@ -8,6 +8,12 @@ umask 077
 STATE=/etc/tr3000-full
 CONFIG=/etc/config
 RUNTIME=/tmp
+# uci keeps uncommitted changes in a runtime delta and saved changes in a
+# state delta. Both files appear as soon as any process stages a change in
+# the runtime context, so only a delta that actually carries changes may
+# block the management AP.
+UCI_STATE_DELTA=/var/run/uci/wireless
+UCI_RUNTIME_DELTA=/tmp/.uci/wireless
 LOCK="$RUNTIME/tr3000-full-management-ap.lock"
 MARKER="$STATE/management-ap.initialized"
 TMP=
@@ -27,8 +33,19 @@ done
 # /tmp stays volatile with either pinned base-files /var layout.
 [ -d "$RUNTIME" ] && [ ! -L "$RUNTIME" ] || fail unsafe_runtime
 # Do not consume administrator changes or libuci runtime overrides.
-[ ! -e /var/run/uci/wireless ] && [ ! -L /var/run/uci/wireless ] || fail runtime_override
-[ ! -e /tmp/.uci/wireless ] && [ ! -L /tmp/.uci/wireless ] || fail pending_wireless
+# The radio driver leaves an empty runtime delta behind on every boot; an
+# empty delta carries no pending change, and treating it as one would keep
+# the open default access point enabled forever.
+delta_pending() {
+	for delta in "$@"; do
+		[ -e "$delta" ] || continue
+		if [ -L "$delta" ]; then fail unsafe_delta; fi
+		if [ -s "$delta" ]; then return 0; fi
+	done
+	return 1
+}
+if delta_pending "$UCI_STATE_DELTA"; then fail runtime_override; fi
+if delta_pending "$UCI_RUNTIME_DELTA"; then fail pending_wireless; fi
 # Boot sources defaults on the left of &&, where set -e cannot enforce errors.
 mkdir -p "$STATE" || fail state_directory
 chmod 0700 "$STATE" || fail state_permissions
@@ -144,7 +161,18 @@ for section in $managed; do
 	else SSID=$s; KEY=$k; fi
 done
 random_hex() {
-	value=$(od -An -N "$1" -tx1 /dev/urandom | tr -d ' \n')
+	# This firmware ships a busybox without the "od" applet, so the random
+	# bytes are hashed instead of being dumped. sha256sum and md5sum are
+	# always present; hexdump is the last resort.
+	for hasher in sha256sum md5sum; do
+		command -v "$hasher" >/dev/null 2>&1 || continue
+		value=$(head -c "$1" /dev/urandom | "$hasher" 2>/dev/null | cut -c1-"$((2 * $1))")
+		[ "${#value}" -eq "$((2 * $1))" ] || continue
+		case "$value" in *[!0-9a-f]*) continue;; esac
+		printf %s "$value"
+		return 0
+	done
+	value=$(head -c "$1" /dev/urandom | hexdump -v -e '1/1 "%02x"' 2>/dev/null | cut -c1-"$((2 * $1))")
 	[ "${#value}" -eq "$((2 * $1))" ] || return 1
 	case "$value" in *[!0-9a-f]*) return 1;; esac
 	printf %s "$value"

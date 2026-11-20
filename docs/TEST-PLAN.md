@@ -101,3 +101,45 @@
 | F14 | 升级本固件（保留旧配置） | 若存在旧工业配置结构，服务页明确提示并要求 `sysupgrade -n`；不自动改写配置 |
 
 任何测试未执行都应保持“未验证”状态。不得在生产 PLC、无人值守现场或未备份设备上进行刷机、断电或程序下载实验。
+
+## 真机验收的可执行用例（Full）
+
+仓库提供两个可选的真机测试入口，默认全部跳过，不影响 CI：
+
+| 入口 | 命令 | 覆盖 |
+| --- | --- | --- |
+| SSH 设备契约 | `TR3000_FULL_DEVICE=192.168.10.1 python -m unittest tests.device.test_tr3000_full_device -v` | 出厂网络、防火墙默认关闭、远程服务默认停止、Argon 主题、Cloudflare DDNS 模板、受管 WPA2 AP 与凭据权限、无线无超时、上行状态结构、LuCI 包落地 |
+| LuCI 功能 | `TR3000_FULL_DEVICE=192.168.10.1 TR3000_FULL_LUCI_PASS=<root 密码> node tests/device/luci-functional.mjs` | 真实浏览器操作 LuCI：仪表盘与主题、TR3000 Full 服务页与按钮可用性、多上行页、HomeProxy/DDNS/Cloudflared/WireGuard 上游页、无线页受管 AP 与开放默认 AP 状态、防火墙区、主题回退项 |
+
+SSH 入口需要免密（密钥）root 登录；LuCI 入口使用自签证书，因此忽略 HTTPS 错误。每个用例都输出 PASS/FAIL 与证据，失败项必须回到源码修复并补回归用例，不得以“环境问题”结案，除非能给出可复现的证据。
+
+## 2026-11-20 真机验收轮次（Full，设备固件 = 本分支 `edd3c46` 内容）
+
+设备：MT7981 / Cudy TR3000 v1 ubi 112M，`ImmortalWrt 24.10-SNAPSHOT r0+33648-ec9ef10efc`。设备上的 `/usr/sbin/tr3000-full-*`、`/etc/init.d/tr3000-full-*` 与本分支逐字节一致（md5 相同），因此本轮结果对应本分支代码。
+
+**已验证通过（实机）**
+
+- 出厂网络：`lan` = `br-lan`(eth1) = `192.168.10.1/24`，DHCP `100`–`249`；`wan`/`wwan`/`usbwan` metric 10/20/30；无 `plant`、无 `mgmt`。
+- 防火墙：`wg` 区、`wg → lan` 转发存在，`wg → wan` 不存在，三条 WireGuard 规则默认 `enabled 0`。
+- 远程服务默认关闭：homeproxy / sing-box / cloudflared / tailscale 均未运行；HomeProxy 未配节点不启动，且不残留 nft 表、dnsmasq 片段或进程。
+- 主题 Argon 生效（`luci.main.mediaurlbase=/luci-static/argon`），Bootstrap 仍可切回。
+  - F13 实测通过，但 LuCI 24.10 的“系统 → 系统 → 语言和风格”页面只有 **Save**（仅暂存）：切换主题需再点顶栏 “Unsaved Changes: N” → 下拉 **Apply unchecked** 才会提交。已写入 `docs/FULL-README.md`。
+  - 该暂存语义对页面上的普通字段（如主机名）同样成立，属于上游 LuCI 行为，不是本固件的缺陷。
+- DDNS 出厂为禁用的 `cloudflare.com-v4` 模板，无凭据。
+- `logread` 无 `wait_for network.interface.lan` 超时。
+
+**本轮发现并已修复的缺陷（源码级修复 + 回归用例，实机未随固件复验）**
+
+| # | 现象 | 根因 | 修复 | 回归用例 |
+| --- | --- | --- | --- | --- |
+| B1 | 受管 WPA2 AP 从未生成，mt_wifi 开放默认热点 `ImmortalWrt-2.4G/5G` 持续开放（F5/F4 失败） | AP 脚本把 `/tmp/.uci/wireless` 的**存在**当作“管理员未提交改动”，而 mt_wifi 每次启动都会留下 0 字节空 delta，脚本因此永久以 `pending_wireless` 退出 | 只在 delta **非空**（确有未提交改动）时拒绝；delta 路径提为变量便于测试 | `test_empty_uci_runtime_delta_does_not_block_the_management_ap`、`test_pending_uci_runtime_delta_still_blocks_the_management_ap`、`test_pending_uci_state_delta_still_blocks_the_management_ap`、`test_symlinked_uci_delta_is_rejected` |
+| B2 | 同上，脚本改完仍失败 | 脚本用 `od` 生成随机密钥，而本固件 busybox **没有 `od`** applet | 改用 `sha256sum`/`md5sum`/`hexdump` 生成十六进制随机串 | `test_management_ap_does_not_depend_on_the_od_applet` |
+| B3 | TR3000 Full 服务页 HomeProxy / Cloudflare Tunnel 的 “Enable” 按钮点了没反应（F11 失败） | LuCI 的 `E()` 用 `setAttribute` 渲染属性，脚本写的 `'disabled': !state.installed` 变成 `disabled="false"`，HTML 仍按“存在即禁用”处理 | 改为按需写入字符串属性 `attributes.disabled = 'disabled'`（与仓库 Lite 页面写法一致） | `test_full_services_view_keeps_installed_services_actionable`、`test_local_luci_views_never_render_a_boolean_disabled_attribute` |
+
+B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-full-wifi repair` 返回 `ready=true, managed_aps=2, open_aps=0`，受管 AP `TR3000-Full-B515F0`（WPA2 PSK，`network=lan`）上线，开放默认 AP 变为 `disabled 1`，`/etc/config/wireless` 权限从 `0644` 收紧为 `0600`，就绪标记写入。B3 的修复视图已部署到设备验证：已安装服务的按钮 `disabled=false` 且点击后 `homeproxy` 真正变为 `enabled`（未配节点时仍不运行，无残留），随后恢复为禁用状态。
+
+**仍未验证**
+
+- 上述修复尚未进入刷机固件；必须重建镜像、获得刷机授权后重新执行 F1–F14 与本节用例，才能宣称“实机通过”。
+- B1/B2 同时存在于 Lite 变体的同名脚本（漂移守卫要求两份脚本逐字相同），本次按同一改动同步修复，Lite 的真机行为需单独复验。
+- F9/F10（WAN 断开与 USB 共享切换）、F12（真实公网 DDNS）、F14（保留旧配置升级）本轮未执行：实验台没有第二条上行（eth0 无 carrier、无可用 Wi-Fi 中继、无 USB 网卡），也没有 Cloudflare 凭据。

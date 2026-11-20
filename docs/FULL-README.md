@@ -48,6 +48,7 @@ Full 的定位是**自用家用路由器**：出厂插线即可管理，家里�
 ## LuCI 与主题
 
 - 默认主题 **Argon**（首启自动设置），**Bootstrap** 保留备用，可在 系统 → 语言和风格 切回。Aurora 被显式排除。
+  - 切换步骤：系统 → 系统 → “语言和风格” → “Design” 选 `bootstrap` → **Save**（此时仅暂存）→ 点击顶栏 **“Unsaved Changes: N”** → 下拉选 **Apply unchecked** → 刷新后生效。LuCI 24.10 的该页面只有 Save 按钮，不会自动提交。
 - **服务 → TR3000 Full**：远程服务状态/启停页（WireGuard、Tailscale、HomeProxy、Cloudflare Tunnel）与多上行状态页。只控制固定控制器，未编译的服务不可启用。
 - 检测到旧版工业配置结构时，服务页顶部显示红色提示并要求不保留配置重刷；固件不自动改写旧配置。
 
@@ -80,6 +81,17 @@ Artifact 名为 `TR3000-128M-112M-Full`。`full-runtime-contract.txt` 记录的�
 4. 刷入本固件（首次安装或 `sysupgrade -n`），插线进入 `https://192.168.10.1` 设置 root 密码。
 5. 按需配置 HomeProxy 节点、穿透通道与 DDNS；凭据只写设备本机受限文件。
 6. 按 [`TEST-PLAN.md`](TEST-PLAN.md) 的 F1–F14 区分 CI 与真机验收。
+
+### 首启自检（有线登录后）
+
+```sh
+/usr/sbin/tr3000-full-wifi status --json     # 期望 ready=true、managed_aps=2、open_aps=0
+/usr/sbin/tr3000-full-service status --json  # 期望远程服务全部 enabled=false、running=false
+/usr/sbin/tr3000-full-uplink-status --json  # 期望三条上行 base_metric 10/20/30
+```
+
+- `ready=false` 时管理 AP 尚未建立：确认无线页里 mt_wifi 默认热点显示为 “Wireless is disabled”，受管 AP 为 `TR3000-Full-XXXXXX`（WPA2 PSK）。不要手工改写 `/etc/config/wireless`，控制器会在下次启动自愈。
+- 受管 AP 的密钥只在本机 `/etc/config/wireless`（`0600`）。本仓库不提供任何默认密钥。
 
 ## 升级与回滚边界
 

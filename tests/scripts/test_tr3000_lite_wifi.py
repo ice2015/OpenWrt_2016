@@ -142,6 +142,10 @@ class ManagementAPTests(unittest.TestCase):
         (self.root/'bin/fake.py').write_text(FAKE)
         uci=self.root/'bin/uci'
         uci.write_text('#!/bin/sh\nexec "$TEST_PYTHON" -S "$WIFI_FIXTURE/bin/fake.py" "$@"\n',newline='\n'); uci.chmod(0o755)
+        # The firmware image ships a busybox without the "od" applet. A stub
+        # that fails like a missing applet proves the controller never needs it.
+        od=self.root/'bin/od'
+        od.write_text('#!/bin/sh\ntouch "$WIFI_FIXTURE/od-used"\nexit 127\n',newline='\n'); od.chmod(0o755)
         self.state={'wireless.radio0':'wifi-device','wireless.radioOdd':'wifi-device'}
         self.save()
 
@@ -155,7 +159,7 @@ class ManagementAPTests(unittest.TestCase):
         self.assertTrue(SCRIPT.is_file(), 'management AP defaults script is missing')
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
         text=text.replace('RUNTIME=/tmp','RUNTIME="'+self.root.as_posix()+'/tmp"')
-        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/dev/urandom',(self.root/'random').as_posix())):
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/tmp/.uci',self.root.as_posix()+'/tmp/.uci'),('/dev/urandom',(self.root/'random').as_posix())):
             text=text.replace(old,new)
         installed=self.root/'etc/uci-defaults/91-tr3000-lite-management-ap'
         installed.write_text(text,newline='\n')
@@ -222,7 +226,7 @@ file=91-tr3000-lite-management-ap
     def ap_script_text(self):
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
         text=text.replace('RUNTIME=/tmp','RUNTIME="'+self.root.as_posix()+'/tmp"')
-        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/dev/urandom',(self.root/'random').as_posix())):
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/tmp/.uci',self.root.as_posix()+'/tmp/.uci'),('/dev/urandom',(self.root/'random').as_posix())):
             text=text.replace(old,new)
         return text
 
@@ -297,7 +301,7 @@ file=91-tr3000-lite-management-ap
     def test_detected_radios_have_encrypted_shared_identity(self):
         d=self.run_ap(); aps=self.aps(d); self.assertEqual(2,len(aps))
         for ap in aps:
-            for option,value in {'mode':'ap','network':'lan','encryption':'psk2','disabled':'0','ssid':'TR3000-Lite-1234EF','key':'000102030405060708090a0b0c0d0e0f'}.items(): self.assertEqual(value,d[ap+'.'+option])
+            for option,value in {'mode':'ap','network':'lan','encryption':'psk2','disabled':'0','ssid':'TR3000-Lite-1234EF','key':'be45cb2605bf36bebde684841a28f0fd'}.items(): self.assertEqual(value,d[ap+'.'+option])
         self.assertEqual({'radio0','radioOdd'},{d[a+'.device'] for a in aps})
 
     def test_repeat_and_new_radio_preserve_credentials(self):
@@ -339,6 +343,40 @@ file=91-tr3000-lite-management-ap
 
     def test_marker_directory_cannot_complete_initialization(self):
         self.marker().mkdir(parents=True); self.run_ap(False)
+
+    def test_empty_uci_runtime_delta_does_not_block_the_management_ap(self):
+        # The radio driver creates an empty uci runtime delta on every boot.
+        # It carries no pending change, so it must not keep the open default
+        # access point enabled or block the managed AP.
+        delta=self.root/'tmp/.uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        delta.write_text('')
+        d=self.run_ap(state=MTWIFI_STATE)
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertEqual('1',d.get('wireless.default_radio0.disabled'))
+        self.assertEqual('1',d.get('wireless.default_radio1.disabled'))
+        self.assertTrue(self.marker().is_file())
+
+    def test_pending_uci_runtime_delta_still_blocks_the_management_ap(self):
+        # A delta that really carries a staged administrator change must keep
+        # the controller from consuming it.
+        delta=self.root/'tmp/.uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        delta.write_text("package wireless\n")
+        self.run_ap(False)
+        self.assertFalse(self.marker().exists())
+
+    def test_pending_uci_state_delta_still_blocks_the_management_ap(self):
+        delta=self.root/'var/run/uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        delta.write_text("package wireless\n")
+        self.run_ap(False)
+        self.assertFalse(self.marker().exists())
+
+    def test_symlinked_uci_delta_is_rejected(self):
+        delta=self.root/'tmp/.uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        target=self.root/'tmp/.uci/real'
+        target.write_text('')
+        delta.symlink_to(target)
+        self.run_ap(False)
+        self.assertFalse(self.marker().exists())
 
     def test_stale_persistent_lock_cannot_block_boot_retry(self):
         (self.root/'etc/tr3000-lite/ap.lock').mkdir(parents=True)
@@ -456,8 +494,18 @@ file=91-tr3000-lite-management-ap
     def test_random_fallback_suffix_is_persisted(self):
         # Without a usable radio address the suffix is random but persisted.
         (self.root/'sys/class/net/ra0/address').write_text('00:00:00:00:00:00')
-        d=self.run_ap(); self.assertEqual({'TR3000-Lite-000102'},{d[a+'.ssid'] for a in self.aps(d)})
+        d=self.run_ap(); self.assertEqual({'TR3000-Lite-AE4B32'},{d[a+'.ssid'] for a in self.aps(d)})
         self.assertEqual(d,self.run_ap())
+
+    def test_management_ap_does_not_depend_on_the_od_applet(self):
+        # The image has no "od"; the controller must derive its entropy from
+        # the hash utilities instead of dumping the random bytes.
+        d=self.run_ap(state=MTWIFI_STATE)
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertFalse((self.root/'od-used').exists(),'the controller called od')
+        for ap in self.aps(d):
+            self.assertEqual(32,len(d[ap+'.key']))
+            self.assertTrue(all(c in '0123456789abcdef' for c in d[ap+'.key']))
 
     def test_ap_creation_does_not_mutate_plant_policy(self):
         firewall=ROOT/'overlays/devices/tr3000-lite/files/etc/config/firewall'

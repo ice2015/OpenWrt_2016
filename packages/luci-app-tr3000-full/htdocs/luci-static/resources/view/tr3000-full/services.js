@@ -37,14 +37,19 @@ return view.extend({
 				? _('Not included in this build')
 				: (state.running ? _('Running') : _('Stopped'));
 			var action = state.enabled || state.running ? 'disable' : 'enable';
+			// LuCI renders every attribute through setAttribute, so a boolean
+			// "disabled: false" would still emit the HTML disabled attribute
+			// and leave the button inert. Only omit or set the attribute.
+			var attributes = {
+				'class': action === 'enable' ? 'cbi-button cbi-button-apply' : 'cbi-button cbi-button-reset',
+				'click': ui.createHandlerFn(this, invoke, action, service.id)
+			};
+			if (!state.installed) attributes.disabled = 'disabled';
 			return E('tr', {}, [
 				E('td', { 'class': 'td left' }, [ E('strong', {}, service.title), E('br'), E('small', {}, service.note) ]),
 				E('td', { 'class': 'td' }, label),
-				E('td', { 'class': 'td right' }, E('button', {
-					'class': action === 'enable' ? 'cbi-button cbi-button-apply' : 'cbi-button cbi-button-reset',
-					'disabled': !state.installed,
-					'click': ui.createHandlerFn(this, invoke, action, service.id)
-				}, action === 'enable' ? _('Enable') : _('Disable')))
+				E('td', { 'class': 'td right' }, E('button', attributes,
+					action === 'enable' ? _('Enable') : _('Disable')))
 			]);
 		}, this);
 

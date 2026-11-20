@@ -556,6 +556,37 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertIn("/usr/sbin/tr3000-full-uplink-status", uplinks)
         self.assertNotIn("tr3000-lite", uplinks)
 
+    def test_full_services_view_keeps_installed_services_actionable(self) -> None:
+        view = (
+            ROOT / "packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js"
+        ).read_text(encoding="utf-8")
+        # LuCI forwards every element attribute to setAttribute, so a boolean
+        # value becomes disabled="false" and the HTML attribute still disables
+        # the button: the Enable action of an installed service would be inert.
+        self.assertNotIn("'disabled': !state.installed", view)
+        self.assertNotIn('"disabled": !state.installed', view)
+        self.assertIn("attributes.disabled = 'disabled'", view)
+        # The attribute is only ever set to the presence-based string value.
+        code = "\n".join(
+            line for line in view.splitlines() if not line.lstrip().startswith("//")
+        )
+        for match in re.finditer(r"disabled\s*=\s*([^;\n]+)", code):
+            value = match.group(1).strip()
+            with self.subTest(value=value):
+                self.assertIn(value, ("'disabled'", '"disabled"'))
+
+    def test_local_luci_views_never_render_a_boolean_disabled_attribute(self) -> None:
+        # A boolean false in an element attribute map still disables the
+        # element in HTML; only the DOM property assignment may use booleans.
+        offenders = []
+        for path in sorted((ROOT / "packages").rglob("*.js")):
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"['\"]disabled['\"]\s*:\s*([^,}\n]+)", text):
+                value = match.group(1).strip()
+                if value == "false" or value.startswith("!"):
+                    offenders.append(f"{path.relative_to(ROOT)}: {match.group(0)}")
+        self.assertEqual([], offenders)
+
     def test_full_first_boot_policy_disables_remote_services(self) -> None:
         defaults = (
             ROOT / "overlays/devices/tr3000-full/files/etc/uci-defaults/95-tr3000-full-services"
