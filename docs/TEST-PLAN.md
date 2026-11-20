@@ -138,6 +138,20 @@ SSH 入口需要免密（密钥）root 登录；LuCI 入口使用自签证书，
 
 B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-full-wifi repair` 返回 `ready=true, managed_aps=2, open_aps=0`，受管 AP `TR3000-Full-B515F0`（WPA2 PSK，`network=lan`）上线，开放默认 AP 变为 `disabled 1`，`/etc/config/wireless` 权限从 `0644` 收紧为 `0600`，就绪标记写入。B3 的修复视图已部署到设备验证：已安装服务的按钮 `disabled=false` 且点击后 `homeproxy` 真正变为 `enabled`（未配节点时仍不运行，无残留），随后恢复为禁用状态。
 
+**修复后的编译验证（本地，非 Actions）**
+
+在同一 worktree 用 `scripts/build-full.sh`（与 `build-full.yml` 相同的源/feed 固定版本、`--include-tailscale false --include-singbox true --include-cloudflared true`）完成一次完整编译：
+
+| 项 | 结果 |
+| --- | --- |
+| 产物 | `TR3000-128M-112M-Full-immortalwrt-mediatek-filogic-cudy_tr3000-v1-ubootmod-squashfs-sysupgrade.bin` |
+| 大小 | 39,557,957 字节（37.73 MiB，低于 100 MiB 门禁） |
+| SHA-256 | `7218a91dea626cdd65eb1b1cf659e97c1a54260fa00c7947d0c764bdbfec94bf` |
+| 校验 | profile `cudy_tr3000-v1-ubootmod`、112 MiB DTS、sysupgrade tar 的 `CONTROL`、包清单与 `full-runtime-contract.txt` 均通过 |
+| 镜像内容抽查 | `/usr/sbin/tr3000-full-wifi-ap` 含新 delta 判定与 `sha256sum` 随机源（无 `od`）；`services.js` 含 `attributes.disabled`（无布尔 `disabled`）；`/etc/config/network` 无 plant/mgmt；镜像内无 `/etc/config/wireless` |
+
+本地 WSL2 编译注意：Windows 继承的 `PATH` 里若有 `/mnt/c/Program Files (x86)/...` 这类带空格与括号的路径，U-Boot 包把未加引号的 `PATH` 拼进 `bash -c` 会报语法错误；编译前需清洗 `PATH`（GitHub Actions 无此问题）。
+
 **仍未验证**
 
 - 上述修复尚未进入刷机固件；必须重建镜像、获得刷机授权后重新执行 F1–F14 与本节用例，才能宣称“实机通过”。
