@@ -152,6 +152,8 @@ B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-fu
 
 结论：在本机不要反复尝试 `sysupgrade`；改用该机型文档化的 **U-Boot 网页恢复**（按住 Reset 上电 → U-Boot Web → 选 112M 布局 → 上传 ubootmod 固件包）。仓库只记录已核实的现象与命令，不提供猜测性的写入命令（见 `docs/UBOOT-SAFETY.md`）。
 
+**Actions 重建受阻（2026-11-22）**：含 B4 修复的 `bf51604` 已推送；新触发的 run `44989416511`（含 rerun 的 attempt 2）均在 0 个 step 内失败，annotation 为账户计费问题（“recent account payments have failed or your spending limit needs to be increased”），与代码无关。需在 GitHub **Settings → Billing & plans** 处理后重新触发；或改用本地构建产物（包集合/契约/profile 与官方产物已验证一致）。
+
 在同一 worktree 用 `scripts/build-full.sh`（与 `build-full.yml` 相同的源/feed 固定版本、`--include-tailscale false --include-singbox true --include-cloudflared true`）完成一次完整编译：
 
 | 项 | 结果 |
