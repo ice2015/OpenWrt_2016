@@ -134,11 +134,23 @@ SSH 入口需要免密（密钥）root 登录；LuCI 入口使用自签证书，
 | --- | --- | --- | --- | --- |
 | B1 | 受管 WPA2 AP 从未生成，mt_wifi 开放默认热点 `ImmortalWrt-2.4G/5G` 持续开放（F5/F4 失败） | AP 脚本把 `/tmp/.uci/wireless` 的**存在**当作“管理员未提交改动”，而 mt_wifi 每次启动都会留下 0 字节空 delta，脚本因此永久以 `pending_wireless` 退出 | 只在 delta **非空**（确有未提交改动）时拒绝；delta 路径提为变量便于测试 | `test_empty_uci_runtime_delta_does_not_block_the_management_ap`、`test_pending_uci_runtime_delta_still_blocks_the_management_ap`、`test_pending_uci_state_delta_still_blocks_the_management_ap`、`test_symlinked_uci_delta_is_rejected` |
 | B2 | 同上，脚本改完仍失败 | 脚本用 `od` 生成随机密钥，而本固件 busybox **没有 `od`** applet | 改用 `sha256sum`/`md5sum`/`hexdump` 生成十六进制随机串 | `test_management_ap_does_not_depend_on_the_od_applet` |
-| B3 | TR3000 Full 服务页 HomeProxy / Cloudflare Tunnel 的 “Enable” 按钮点了没反应（F11 失败） | LuCI 的 `E()` 用 `setAttribute` 渲染属性，脚本写的 `'disabled': !state.installed` 变成 `disabled="false"`，HTML 仍按“存在即禁用”处理 | 改为按需写入字符串属性 `attributes.disabled = 'disabled'`（与仓库 Lite 页面写法一致） | `test_full_services_view_keeps_installed_services_actionable`、`test_local_luci_views_never_render_a_boolean_disabled_attribute` |
+| B3 | TR3000 Full 服务页 HomeProxy / Cloudflare Tunnel 的 “Enable” 按钮点了没反应（F11 失败） | LuCI 的 `E()` 用 `setAttribute` 渲染属性，脚本写的 `'disabled': !state.installed` 变成 `disabled="false"`，HTML 仍按“存在即禁用”处理 | 改为按需写入字符串属性 `attributes.disabled = 'disabled'`（与仓库 Lite 页面写法一致） | `test_full_services_view_keets_installed_services_actionable`、`test_local_luci_views_never_render_a_boolean_disabled_attribute` |
+| B4 | 全新刷机时受管 AP 仍未生成（开放默认热点依旧开放） | `91-…-management-ap` 与 init 服务都假设 `/etc/config/wireless` 已存在；而 mt_wifi 驱动是在启动过程中异步创建该文件的，首启时两者竞争 → 控制器以 `missing_wireless` 退出，init 服务也只尝试一次 | 控制器首启最多等待 45 s 等待无线配置出现；init 服务改为最多重试 12 次（间隔 10 s），覆盖驱动较慢的情况 | `test_ap_creation_waits_for_the_radio_driver_configuration`、`test_repair_service_retries_until_the_radio_configuration_exists` |
+
+B4 在 2026-11-22 的全新配置首启中被实测触发（控制器报 `missing_wireless`，而 `/etc/config/wireless` 在启动后数十秒才由 mt_wifi 驱动生成）。B1–B4 均位于 Lite/Full 共有脚本，按漂移守卫要求两份同步修改。
 
 B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-full-wifi repair` 返回 `ready=true, managed_aps=2, open_aps=0`，受管 AP `TR3000-Full-B515F0`（WPA2 PSK，`network=lan`）上线，开放默认 AP 变为 `disabled 1`，`/etc/config/wireless` 权限从 `0644` 收紧为 `0600`，就绪标记写入。B3 的修复视图已部署到设备验证：已安装服务的按钮 `disabled=false` 且点击后 `homeproxy` 真正变为 `enabled`（未配节点时仍不运行，无残留），随后恢复为禁用状态。
 
-**修复后的编译验证（本地，非 Actions）**
+**设备刷写路径的阻塞项（2026-11-22 实测）**
+
+本仓库的 `sysupgrade` 在这台设备上**不能完成刷写**，失败发生在上游平台脚本（`/lib/upgrade/nand.sh`），与本仓库代码无关：
+
+- `sysupgrade -T` 通过、stage1 正常交接，但设备重启后仍是**旧固件**。
+- 手动复现平台步骤得到明确错误：`ubimkvol: error 28 (No space left on device)` 与 `ubirmvol /ubiupdatevol: error 16 (Resource busy)`。
+- 原因：本机 UBI 容量已被占满（`Amount of available logical eraseblocks: 0`，`rootfs_data` 占 560 LEB），而 `rootfs` 卷挂在 `/rom`、`rootfs_data` 被 overlay 引用，平台脚本的“删卷重建”在运行中的系统里必然失败。只有在 initramfs（无任何挂载）里才可能成功，而上游脚本并未把数据卷从占用状态释放。
+- 另外，`/proc/mtd` 的 `u-boot-env` 分区 CRC 校验不通过（`fw_printenv` 报 `Bad CRC, using default environment`）；该状态在**刷写前**的备份里已存在，不是本次操作造成。U-Boot 仍能按 112M 布局启动，但恢复界面的地址可能落到默认 env 的 `192.0.2.1`。
+
+结论：在本机不要反复尝试 `sysupgrade`；改用该机型文档化的 **U-Boot 网页恢复**（按住 Reset 上电 → U-Boot Web → 选 112M 布局 → 上传 ubootmod 固件包）。仓库只记录已核实的现象与命令，不提供猜测性的写入命令（见 `docs/UBOOT-SAFETY.md`）。
 
 在同一 worktree 用 `scripts/build-full.sh`（与 `build-full.yml` 相同的源/feed 固定版本、`--include-tailscale false --include-singbox true --include-cloudflared true`）完成一次完整编译：
 
@@ -152,8 +164,33 @@ B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-fu
 
 本地 WSL2 编译注意：Windows 继承的 `PATH` 里若有 `/mnt/c/Program Files (x86)/...` 这类带空格与括号的路径，U-Boot 包把未加引号的 `PATH` 拼进 `bash -c` 会报语法错误；编译前需清洗 `PATH`（GitHub Actions 无此问题）。
 
+**修复后的编译验证（本地 + Actions）**
+
+Actions 产物（run `44867957843`，head `199f7885`，结论 success）：
+
+| 项 | 结果 |
+| --- | --- |
+| 产物 | `TR3000-128M-112M-Full-immortalwrt-mediatek-filogic-cudy_tr3000-v1-ubootmod-squashfs-sysupgrade.bin` |
+| 大小 | 39,557,957 字节（37.73 MiB，低于 100 MiB 门禁） |
+| SHA-256 | `f420ceb82385bf8a5eba222c674dbb1138dc17e50b201b74d1024e109ce12428` |
+| 校验 | profile `cudy_tr3000-v1-ubootmod`、112 MiB DTS、sysupgrade tar 的 `CONTROL`、包清单与 `full-runtime-contract.txt` 均通过 |
+| 镜像内容抽查 | `/usr/sbin/tr3000-full-wifi-ap` 含新 delta 判定与 `sha256sum` 随机源（无 `od`）；`services.js` 含 `attributes.disabled`（无布尔 `disabled`）；`/etc/config/network` 无 plant/mgmt；镜像内无 `/etc/config/wireless` |
+| 与本地构建对比 | 包清单、`full-runtime-contract.txt`、`profile.dts` 与本地编译**完全一致** |
+
+本地编译（同参数，同一 worktree）也成功：产物 37.73 MiB，包清单/`full-runtime-contract.txt`/`profile.dts` 与 Actions 完全一致（镜像二进制 SHA-256 因构建时间戳不同而不同，属预期）。
+
+本地 WSL2 编译注意：Windows 继承的 `PATH` 里若有 `/mnt/c/Program Files (x86)/...` 这类带空格与括号的路径，U-Boot 包把未加引号的 `PATH` 拼进 `bash -c` 会报语法错误；编译前需清洗 `PATH`（GitHub Actions 无此问题）。
+
 **仍未验证**
 
-- 上述修复尚未进入刷机固件；必须重建镜像、获得刷机授权后重新执行 F1–F14 与本节用例，才能宣称“实机通过”。
-- B1/B2 同时存在于 Lite 变体的同名脚本（漂移守卫要求两份脚本逐字相同），本次按同一改动同步修复，Lite 的真机行为需单独复验。
+- B1–B4 的修复已进入 Actions 产物（run `44867957843`），但**尚未成功刷入设备**（sysupgrade 路径在本机被上游 UBI 占用问题阻断，见上）。在镜像真正启动并通过 F1–F14 重测之前，不得宣称实机验证通过。
+- B1–B4 同时存在于 Lite 变体的同名脚本（漂移守卫要求两份脚本逐字相同），本次按同一改动同步修复，Lite 的真机行为需单独复验。
 - F9/F10（WAN 断开与 USB 共享切换）、F12（真实公网 DDNS）、F14（保留旧配置升级）本轮未执行：实验台没有第二条上行（eth0 无 carrier、无可用 Wi-Fi 中继、无 USB 网卡），也没有 Cloudflare 凭据。
+
+**2026-11-22 设备当前状态（重要）**
+
+排查刷写失败过程中，设备处于以下状态（运行中的旧固件不受影响，但管理面部分受损）：
+
+- 系统仍在运行旧固件，内核/rootfs 卷未被破坏（所有写入尝试均因 busy/no-space 失败，`ubinfo` 确认卷结构完整）。
+- 但为测试曾执行 `pivot_root` 到 tmpfs，旧根挂载已不可逆释放：LuCI 返回 404、ttyd/SSH 登录均失败（宿主密钥/密码库在已卸载的根上）。设备需要**断电重启**才能恢复管理面（uboot 会重新挂载 rootfs）。
+- 重启前的备份已全部取回本地并校验 SHA-256：`local/backup-20261122-1247-preflash/`（kernel.bak / rootfs.bak / 新镜像）与 `local/backup-20261121-1246/`（factory/fip/bl2/uboot-env/config）。

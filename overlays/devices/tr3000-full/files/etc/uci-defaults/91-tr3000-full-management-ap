@@ -29,7 +29,15 @@ for path in /etc "$STATE" "$CONFIG" "$CONFIG/wireless" "$MARKER"; do
 	[ ! -L "$path" ] || fail unsafe_path
 done
 [ ! -e "$MARKER" ] || [ -f "$MARKER" ] || fail unsafe_marker
-[ -f "$CONFIG/wireless" ] || fail missing_wireless
+# The radio driver creates the wireless configuration asynchronously while the
+# system boots. Waiting for it keeps the first-boot identity intact instead of
+# failing before the radios have published their configuration.
+waited=0
+while [ ! -f "$CONFIG/wireless" ]; do
+	[ "$waited" -ge 45 ] && fail missing_wireless
+	sleep 3
+	waited=$((waited+3))
+done
 # /tmp stays volatile with either pinned base-files /var layout.
 [ -d "$RUNTIME" ] && [ ! -L "$RUNTIME" ] || fail unsafe_runtime
 # Do not consume administrator changes or libuci runtime overrides.

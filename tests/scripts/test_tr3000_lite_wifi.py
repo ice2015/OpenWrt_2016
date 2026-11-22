@@ -341,6 +341,60 @@ file=91-tr3000-lite-management-ap
         self.assertEqual('0',d['wireless.secure.disabled'])
         self.assertEqual('sae',d['wireless.secure.encryption'])
 
+    def test_ap_creation_waits_for_the_radio_driver_configuration(self):
+        # The radio driver publishes /etc/config/wireless a few seconds into
+        # the boot. The controller must wait for it instead of failing the
+        # first-boot identity before the radios are configured.
+        (self.root/'etc/config/wireless').unlink(missing_ok=True)
+        import threading
+        def publish():
+            import time
+            time.sleep(4)
+            (self.root/'etc/config/wireless').write_text(json.dumps(MTWIFI_STATE))
+        publisher = threading.Thread(target=publish); publisher.start()
+        d = self.run_ap(state=None)
+        publisher.join()
+        self.assertEqual(2, len(self.aps(d)))
+        self.assertEqual('1', d.get('wireless.default_radio0.disabled'))
+
+    def test_repair_service_retries_until_the_radio_configuration_exists(self):
+        # The init service runs before the radio driver has published its
+        # configuration, so it has to retry instead of giving up for the boot.
+        self.install_ap_script(); self.install_fake_wifi()
+        (self.root/'etc/config/wireless').unlink(missing_ok=True)
+        init=ROOT/'overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-wifi'
+        self.assertTrue(init.is_file(),'the wireless init service is missing')
+        text=init.read_text().replace('#!/bin/sh /etc/rc.common','#!/bin/sh')
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),
+                        ('/usr/sbin/tr3000-lite-wifi',(self.root/'bin/tr3000-lite-wifi').as_posix()),
+                        ('/sbin/wifi',(self.root/'bin/wifi').as_posix())):
+            text=text.replace(old,new)
+        # The controller and the fake wifi helper have to exist for the service.
+        shutil_src=self.root/'bin/tr3000-lite-wifi'
+        shutil_src.write_text((ROOT/'scripts/tr3000-lite-wifi.sh').read_text()
+                              .replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd \"$WIFI_FIXTURE/bin\" && pwd):/usr/bin:/bin"')
+                              .replace('/etc/',self.root.as_posix()+'/etc/')
+                              .replace('/usr/sbin/tr3000-lite-wifi-ap',(self.root/'usr/sbin/tr3000-lite-wifi-ap').as_posix())
+                              .replace('/sbin/wifi',(self.root/'bin/wifi').as_posix()),newline='\n')
+        shutil_src.chmod(0o755)
+        (self.root/'bin/logger').write_text('#!/bin/sh\nexit 0\n',newline='\n'); (self.root/'bin/logger').chmod(0o755)
+        target=self.root/'bin/tr3000-lite-wifi-init'
+        target.write_text(text,newline='\n'); target.chmod(0o755)
+        import threading
+        def publish():
+            import time
+            time.sleep(4)
+            (self.root/'etc/config/wireless').write_text(json.dumps(MTWIFI_STATE))
+        publisher=threading.Thread(target=publish); publisher.start()
+        result=subprocess.run([bash_executable(),'-c','. "%s"; start' % target],
+                              capture_output=True,text=True,timeout=180,
+                              env=dict(os.environ,WIFI_FIXTURE=self.root.as_posix(),TEST_PYTHON=Path(sys.executable).as_posix()))
+        publisher.join()
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        d=self.load()
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertTrue(self.marker().is_file())
+
     def test_marker_directory_cannot_complete_initialization(self):
         self.marker().mkdir(parents=True); self.run_ap(False)
 

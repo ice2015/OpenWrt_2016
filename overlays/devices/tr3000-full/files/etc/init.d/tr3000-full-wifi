@@ -5,6 +5,15 @@ START=20
 STOP=10
 
 start() {
-	/usr/sbin/tr3000-full-wifi repair ||
-		logger -t tr3000-full-wifi "management AP repair pending"
+	# The radio driver publishes /etc/config/wireless a few seconds into the
+	# boot, so a repair that runs too early is retried for a while before the
+	# next boot takes over.
+	attempt=1
+	while [ "$attempt" -le 12 ]; do
+		/usr/sbin/tr3000-full-wifi repair && return 0
+		logger -t tr3000-full-wifi "management AP repair pending (attempt $attempt)"
+		attempt=$((attempt+1))
+		sleep 10
+	done
+	return 0
 }
