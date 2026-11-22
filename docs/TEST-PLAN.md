@@ -152,7 +152,7 @@ B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-fu
 
 结论：在本机不要反复尝试 `sysupgrade`；改用该机型文档化的 **U-Boot 网页恢复**（按住 Reset 上电 → U-Boot Web → 选 112M 布局 → 上传 ubootmod 固件包）。仓库只记录已核实的现象与命令，不提供猜测性的写入命令（见 `docs/UBOOT-SAFETY.md`）。
 
-**Actions 重建受阻（2026-11-22）**：含 B4 修复的 `bf51604` 已推送；新触发的 run `44989416511`（含 rerun 的 attempt 2）均在 0 个 step 内失败，annotation 为账户计费问题（“recent account payments have failed or your spending limit needs to be increased”），与代码无关。需在 GitHub **Settings → Billing & plans** 处理后重新触发；或改用本地构建产物（包集合/契约/profile 与官方产物已验证一致）。
+**Actions 重建曾受阻（2026-11-22，已解决）**：含 B4 修复的 `bf51604` 推送后，run `44989416511`（含 rerun）与 `44991385258` 均在 0 个 step 内失败，annotation 为账户计费问题，与代码无关。账户侧处理后重新触发的 run **`44998662801`** 构建成功，产物已核验并刷入设备（见下节实机验收）。
 
 在同一 worktree 用 `scripts/build-full.sh`（与 `build-full.yml` 相同的源/feed 固定版本、`--include-tailscale false --include-singbox true --include-cloudflared true`）完成一次完整编译：
 
@@ -183,16 +183,30 @@ Actions 产物（run `44867957843`，head `199f7885`，结论 success）：
 
 本地 WSL2 编译注意：Windows 继承的 `PATH` 里若有 `/mnt/c/Program Files (x86)/...` 这类带空格与括号的路径，U-Boot 包把未加引号的 `PATH` 拼进 `bash -c` 会报语法错误；编译前需清洗 `PATH`（GitHub Actions 无此问题）。
 
-**仍未验证**
+**2026-11-22 官方 Artifact 实机验收（全部修复刷入后，结果：通过）**
 
-- B1–B4 的修复已进入 Actions 产物（run `44867957843`），但**尚未成功刷入设备**（sysupgrade 路径在本机被上游 UBI 占用问题阻断，见上）。在镜像真正启动并通过 F1–F14 重测之前，不得宣称实机验证通过。
+刷写路径：`sysupgrade` 在本机结构性不可用（见上节），改用 **U-Boot 网页恢复**（Reset+上电 → multi-layout 页 → 112M 布局 → 上传镜像），由现场人员执行成功。
+
+镜像：官方 Actions run **`44998662801`**（`bf51604`，含 B1–B4 全部修复），SHA-256 `60cecb043e0903c420665fa69bacca8c99dd66508449a965886a383b52f8d86c`，39,557,957 字节；包清单与前次官方产物一致。设备上 `/usr/sbin/tr3000-full-wifi-ap`、`services.js`、`/etc/init.d/tr3000-full-wifi` 与 Artifact 内同名文件 **md5 逐一相同**，确认设备运行的就是官方产物。
+
+| 验收项 | 结果 | 证据 |
+| --- | --- | --- |
+| 首启受管 AP（B1+B2+B4 综合） | **通过** | 首启日志 0 次 `pending_wireless/missing_wireless/entropy`；`status --json` → `ready=true, managed_aps=2, open_aps=0`；就绪标记与 `ap-suffix` 已写入 |
+| 开放默认热点禁用（F5） | **通过** | `ra0/rax0` 接口 DOWN；`iwinfo ra1/rax1` 实测 ESSID `TR3000-Full-C2AC7B`、`WPA2 PSK (CCMP)` 双频广播 |
+| 凭据隐私 | **通过** | `/etc/config/wireless` 0600；SSID 后缀来自随机 `ap-suffix`（本机无线 MAC 不可用时回退），密钥不落日志 |
+| LuCI 服务页按钮（B3/F11） | **通过** | 浏览器实测：已安装服务 `disabled=false` 可点；点击 Enable 后设备 `homeproxy enabled=true`、rc.d 创建、**未配节点不启动**（0 进程、无 nft/dnsmasq 残留）；点击 Disable 后完全恢复出厂态 |
+| SSH 设备契约套件 | **12/12 通过** | `tests/device/test_tr3000_full_device.py`（网络契约/防火墙默认关/服务默认停/主题/DDNS 模板/受管 AP/凭据权限/无 mtwifi 超时/上行状态结构/LuCI 包落地） |
+| LuCI 浏览器功能套件 | **35/35 通过** | `tests/device/luci-functional.mjs`（含 T10.4/T10.5 主题 Bootstrap↔Argon 往返切换并恢复，即 F13 主路径） |
+| F8 mtwifi 无超时 | **通过** | `logread` 中 `wait_for network.interface.lan` 计数为 0 |
+| F1 DHCP | **部分** | 配置/dnsmasq 运行正确；但测试台工作站为静态地址（.33，不在池内），本次启动无真实 DHCP 客户端证据，租约文件为空 |
+| F13 重启后保持 | **未验** | 主题往返已验；“重启后保持”需一次设备重启（低风险，待安排） |
+| F4 无线接入 / F6 / F7 / F9 / F10 / F12 / F14 | **未验** | F4 需无线客户端实连（需现场人工/无线网卡）；F6/F7 需真实 VLESS 节点凭据；F9/F10 需第二上行硬件；F12 需 Cloudflare 凭据与公网域名；F14 需保留旧配置升级场景（与 D12 “一律不保留配置”策略冲突，仅验证提示逻辑） |
+
+刷写前备份（factory/fip/bl2/uboot-env/config + 旧固件卷镜像）均在 `local/backup-20261121-1246/`、`local/backup-20261122-1247-preflash/` 并经 SHA-256 核验；官方 Artifact 归档于 `output/actions-artifact-44998662801/`。
+
+历史备注：在确认 `sysupgrade` 不可用之前的排查中，设备曾因诊断性 `pivot_root` 短暂丢失管理面（所有闪存写入均安全失败、卷完整）；后续直接经 U-Boot 恢复模式刷新固件，该状态已随刷写消失。
+
+**仍未验证（需要额外条件，不属于代码缺陷）**
+
 - B1–B4 同时存在于 Lite 变体的同名脚本（漂移守卫要求两份脚本逐字相同），本次按同一改动同步修复，Lite 的真机行为需单独复验。
-- F9/F10（WAN 断开与 USB 共享切换）、F12（真实公网 DDNS）、F14（保留旧配置升级）本轮未执行：实验台没有第二条上行（eth0 无 carrier、无可用 Wi-Fi 中继、无 USB 网卡），也没有 Cloudflare 凭据。
-
-**2026-11-22 设备当前状态（重要）**
-
-排查刷写失败过程中，设备处于以下状态（运行中的旧固件不受影响，但管理面部分受损）：
-
-- 系统仍在运行旧固件，内核/rootfs 卷未被破坏（所有写入尝试均因 busy/no-space 失败，`ubinfo` 确认卷结构完整）。
-- 但为测试曾执行 `pivot_root` 到 tmpfs，旧根挂载已不可逆释放：LuCI 返回 404、ttyd/SSH 登录均失败（宿主密钥/密码库在已卸载的根上）。设备需要**断电重启**才能恢复管理面（uboot 会重新挂载 rootfs）。
-- 重启前的备份已全部取回本地并校验 SHA-256：`local/backup-20261122-1247-preflash/`（kernel.bak / rootfs.bak / 新镜像）与 `local/backup-20261121-1246/`（factory/fip/bl2/uboot-env/config）。
+- F1 的完整 DHCP 发现证据（需一个处于 DHCP 模式的客户端接入 LAN）；F4 无线实连；F6/F7 真实代理节点；F9/F10 第二上行硬件；F12 真实 Cloudflare 凭据；F13 的重启持久性；F14 旧配置提示场景。
