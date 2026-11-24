@@ -329,10 +329,14 @@ prepare_candidate() {
 	fi
 	# Refuse both packages before any UCI candidate edits. Changing confdir
 	# alone does not isolate the default saved deltas or runtime overrides.
+	# A conf2dir file shadows the package even when empty, so its mere
+	# presence blocks the transaction. A libuci delta file is only a pending
+	# change when it carries content: uci commit leaves a zero-length
+	# /tmp/.uci/<package> behind on every boot.
 	for package in network firewall; do
-		for file in "$ROOT/var/run/uci/$package" "$ROOT/tmp/.uci/$package"; do
-			[ ! -e "$file" ] && [ ! -L "$file" ] || fail 3 pending_firewall_state
-		done
+		[ ! -e "$ROOT/var/run/uci/$package" ] && [ ! -L "$ROOT/var/run/uci/$package" ] ||
+			fail 3 pending_firewall_state
+		[ ! -s "$ROOT/tmp/.uci/$package" ] || fail 3 pending_firewall_state
 	done
 }
 

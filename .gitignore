@@ -28,5 +28,6 @@ __pycache__/
 /.superpowers/
 /.worktrees/
 
-# Local Playwright MCP config
+# Browser automation scratch space
+/.playwright-cli/
 /.playwright/

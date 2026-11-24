@@ -189,7 +189,7 @@ class PlantControllerTests(unittest.TestCase):
         (self.root/'tmp').mkdir()
         config = self.root / 'etc/config'
         config.mkdir(parents=True)
-        for name in ('network', 'firewall', 'dhcp', 'tr3000-lite'):
+        for name in ('network', 'firewall', 'dhcp'):
             shutil.copyfile(ROOT / 'overlays/devices/tr3000-lite/files/etc/config' / name, config/name)
         # Canonical fixture text: the fake UCI writes sections the same way.
         for name in ('network', 'firewall'):

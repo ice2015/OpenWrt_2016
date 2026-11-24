@@ -63,6 +63,13 @@ class LiteBuildEvidenceTests(unittest.TestCase):
             target_index=image.parent / "packages/Packages.manifest"
             target_index.parent.mkdir()
             target_index.write_text("Package: kmod-usb-net\nVersion: 1.0\n", encoding="utf-8")
+            # The artifact must also carry this build's own package repository
+            # and its signing key; the fixture provides both.
+            (source / "key-build.pub").write_text("fixture-build-public-key\n", encoding="utf-8")
+            for feed in ("base", "packages", "luci", "routing", "telephony"):
+                feed_dir = source / "bin/packages/aarch64_cortex-a53" / feed
+                feed_dir.mkdir(parents=True, exist_ok=True)
+                (feed_dir / "Packages.gz").write_bytes(b"fixture-feed-index")
             # Runtime private configuration must never be copied into evidence.
             wireless = source / "files/etc/config/wireless"
             wireless.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +116,6 @@ else echo offline-commit; fi
         self.assertEqual("expected-defaults-not-live-state", contract["evidence_kind"])
         configs = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
         network = {s[".name"]: s for s in uci_sections((configs / "network").read_text())}
-        policy = uci_sections((configs / "tr3000-lite").read_text())[0]
         self.assertEqual("lan", contract["lan_interface"])
         self.assertEqual(network["lan"]["device"], contract["lan_device"])
         self.assertEqual(str(ipaddress.IPv4Interface(network["lan"]["ipaddr"] + "/" + network["lan"]["netmask"])), contract["lan_cidr"])
@@ -138,8 +144,14 @@ else echo offline-commit; fi
             self.assertEqual("SNAT", snat["target"])
         self.assertEqual(contract["allow_luci"], firewall["tr3000_lite_plant_luci"]["enabled"])
         self.assertEqual(contract["plant_https_port"], firewall["tr3000_lite_plant_luci"]["dest_port"])
-        for flag in ("allow_luci", "allow_mgmt", "allow_wireguard"):
-            self.assertEqual(policy[flag], contract[flag])
+        # The retired /etc/config/tr3000-lite policy file is gone: the
+        # firewall sections are the only source of the shipped policy.
+        self.assertFalse((configs / "tr3000-lite").exists())
+        self.assertEqual(contract["allow_mgmt"], firewall["tr3000_lite_lan_plant_tcp"]["enabled"])
+        self.assertEqual("0", contract["allow_wireguard"])
+        listener = [s for s in uci_sections((configs / "firewall").read_text())
+                    if s.get("dest_port") == "51820"]
+        self.assertTrue(listener and all(s["enabled"] == "0" for s in listener))
         self.assertEqual("luci-app-tr3000-lite", contract["luci_package"])
         self.assertEqual("icmp-echo,tcp", contract["lan_to_plant_protocols"])
         self.assertEqual("plant-address", contract["lan_to_plant_snat"])
@@ -147,6 +159,10 @@ else echo offline-commit; fi
         self.assertEqual("root-password-and-explicit-enable", contract["plant_https_gate"])
         self.assertNotIn("SENSITIVE-FIXTURE", "\n".join(evidence.values()))
         self.assertIn("firmware/SHA256SUMS", evidence)
+        # The artifact must carry this build's own repository and signing key.
+        self.assertIn("key-build.pub", evidence)
+        self.assertIn("package-repo/arch/base/Packages.gz", evidence)
+        self.assertIn("package-repo/target/Packages.manifest", evidence)
 
     def test_image_manifest_and_verified_profile_are_archived_not_just_target_index(self):
         result, evidence=self.run_build()

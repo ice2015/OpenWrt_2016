@@ -118,6 +118,13 @@ for access_token in "config interface 'lan'" "option ipaddr '192.168.10.1'" \
 done
 grep -Fq "config dhcp 'lan'" "$ACCESS_DHCP" ||
 	fail "Lite overlay access segment has no DHCP configuration"
+# The router's own resolver points at 127.0.0.1. Without a loopback interface
+# dnsmasq cannot bind there, every name lookup of the device fails, NTP never
+# synchronises the clock and TLS downloads break: the package manager dies.
+grep -Fq "config interface 'loopback'" "$ACCESS_NETWORK" ||
+	fail "Lite overlay has no loopback interface: the device cannot resolve names"
+grep -Fq "option ipaddr '127.0.0.1'" "$ACCESS_NETWORK" ||
+	fail "Lite overlay loopback interface has no loopback address"
 [ ! -e "$REPO_ROOT/overlays/devices/tr3000-lite/files/etc/config/wireless" ] ||
 	fail "Lite overlay must not ship a wireless configuration"
 
@@ -190,6 +197,27 @@ EXPECTED_USB_PACKAGES=$(printf '%s\n' kmod-usb-net kmod-usb-net-cdc-ether kmod-u
 cp "$IMAGE_MANIFESTS" "$ARTIFACT_DIR/image-packages.manifest"
 awk 'NF { print $1 }' "$IMAGE_MANIFESTS" | sort -u > "$ARTIFACT_DIR/packages-manifest.txt"
 cp "$SOURCE_DIR/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts" "$ARTIFACT_DIR/profile.dts"
+
+# The public 24.10-SNAPSHOT feeds are a moving target: they are pruned by the
+# mirrors and they no longer match the revisions this image was built from.
+# Ship the repository this build produced together with its signing key so an
+# operator can mirror it and install packages that match the pinned feeds.
+PACKAGES_ARCH=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES="\(.*\)"$/\1/p' "$SOURCE_DIR/.config")
+[ -n "$PACKAGES_ARCH" ] || fail "final config does not name the package architecture"
+[ -f "$SOURCE_DIR/key-build.pub" ] || fail "build signing key not found: key-build.pub"
+PACKAGE_REPO="$SOURCE_DIR/bin/packages/$PACKAGES_ARCH"
+[ -d "$PACKAGE_REPO" ] || fail "build package repository not found: $PACKAGE_REPO"
+for feed in base packages luci routing telephony; do
+	[ -f "$PACKAGE_REPO/$feed/Packages.gz" ] ||
+		fail "build package repository is missing the $feed feed index"
+done
+mkdir -p "$ARTIFACT_DIR/package-repo"
+cp -R "$PACKAGE_REPO" "$ARTIFACT_DIR/package-repo/arch"
+TARGET_PACKAGES="$SOURCE_DIR/bin/targets/mediatek/filogic/packages"
+if [ -d "$TARGET_PACKAGES" ]; then
+	cp -R "$TARGET_PACKAGES" "$ARTIFACT_DIR/package-repo/target"
+fi
+cp "$SOURCE_DIR/key-build.pub" "$ARTIFACT_DIR/key-build.pub"
 
 : > "$ARTIFACT_DIR/firmware/SHA256SUMS"
 IMAGE_COUNT=0
@@ -276,6 +304,7 @@ Images in firmware/ are sysupgrade images, not universal factory/U-Boot flashing
 lite-runtime-contract.txt records public expected defaults, not live hardware verification.
 image-packages.manifest is the complete profile image package/version list; packages-manifest.txt is its name-only view.
 target-package-index.txt, if present, is only the target-specific package repository index.
+package-repo/arch/<feed> and package-repo/target hold this build's own opkg repository; key-build.pub is its signing key.
 profile.dts is the final verified 112 MiB profile source; actual writable overlay capacity still requires hardware checks.
 Source SHA: ${SOURCE_SHA:-not-supplied}
 Wrapper/config SHA: $(git -C "$UPSTREAM_DIR" rev-parse HEAD)

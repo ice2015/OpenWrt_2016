@@ -69,7 +69,7 @@ def run_script(name: str, *arguments: str, cwd: Path | None = None) -> subproces
 
 def lite_base_config() -> str:
     required_packages = (
-        "ca-bundle", "curl", "ip-full", "iputils-arping", "kmod-usb-net",
+        "ca-bundle", "coreutils-stat", "curl", "ip-full", "iputils-arping", "kmod-usb-net",
         "kmod-usb-net-cdc-ether", "kmod-usb-net-rndis", "kmod-wireguard",
         "luci", "luci-app-tr3000-lite", "luci-i18n-base-zh-cn", "luci-proto-wireguard",
         "luci-ssl-openssl", "openssh-server", "openssh-sftp-server",
@@ -78,6 +78,7 @@ def lite_base_config() -> str:
     )
     lines = [
         "CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y",
+        'CONFIG_TARGET_ARCH_PACKAGES="aarch64_cortex-a53"',
         'CONFIG_CCACHE_DIR="/workdir/.ccache"',
         "CONFIG_BUSYBOX_CUSTOM=y",
         "CONFIG_BUSYBOX_CONFIG_TIMEOUT=y",
@@ -489,10 +490,8 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertEqual("100", dhcp["lan"]["start"])
         self.assertEqual("150", dhcp["lan"]["limit"])
         self.assertNotIn("mgmt", dhcp)
-        policy = uci_sections(assets["files/etc/config/tr3000-lite"])[0]
-        self.assertEqual("plant", policy[".name"])
-        for option, value in (("allow_luci", "0"), ("allow_mgmt", "1"), ("allow_wireguard", "0")):
-            self.assertEqual(value, policy[option])
+        # The retired policy file is gone; the firewall sections carry the policy.
+        self.assertNotIn("files/etc/config/tr3000-lite", assets)
         firewall = uci_sections(assets["files/etc/config/firewall"])
         sections = {s[".name"]: s for s in firewall if s[".name"]}
         luci = sections["tr3000_lite_plant_luci"]
@@ -510,7 +509,14 @@ class ScriptInterfaceTests(unittest.TestCase):
             [s for s in firewall if s[".type"] == "rule" and s.get("src") == "plant"
              and s.get("target") == "ACCEPT" and s.get("enabled", "1") != "0"],
         )
-        self.assertIn("files/root/scripts/plant-profile.sh", assets)
+        # The Full-era single-tunnel helpers bypass the paired transaction and
+        # must not reach the Lite image; only the read-only preflight ships.
+        self.assertNotIn("files/root/scripts/plant-profile.sh", assets)
+        self.assertNotIn("files/root/scripts/plant-access.sh", assets)
+        self.assertNotIn("files/etc/uci-defaults/95-tr3000-full-services", assets)
+        self.assertIn("files/root/scripts/preflight.sh", assets)
+        self.assertIn("files/etc/ssh/sshd_config.d/99-tr3000-lite.conf", assets)
+        self.assertNotIn("files/etc/config/tr3000-lite", assets)
         self.assertEqual((ROOT / "files/etc/config/ubihealthd").read_text(encoding="utf-8"), assets["files/etc/config/ubihealthd"])
 
         full_result, _, full_assets = run_full_configure(full_base_config())

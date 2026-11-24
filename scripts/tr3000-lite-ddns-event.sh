@@ -198,7 +198,9 @@ elif [ "$result" = 0 ]; then DD_ATTEMPTS=0; DD_DUE=$((DD_NOW+600)); DD_ERROR=
 else
 	DD_ATTEMPTS=$((DD_ATTEMPTS+1)); delay=$((60 << (DD_ATTEMPTS-1)))
 	[ "$delay" -le 3600 ] || delay=3600
-	jitter=$(od -An -N1 -tu1 /dev/urandom 2>/dev/null | tr -d ' ')
+	# od is not part of the Lite image; busybox provides head and sha256sum.
+	jitter=$(head -c 4 /dev/urandom 2>/dev/null | sha256sum | cut -c1-2)
+	jitter=$((0x${jitter:-0}))
 	ddns_uint "$jitter" || jitter=0
 	DD_DUE=$((DD_NOW+delay+jitter%16)); DD_ERROR=update_failed
 	[ "$result" != 124 ] && [ "$result" != 137 ] || DD_ERROR=update_timeout

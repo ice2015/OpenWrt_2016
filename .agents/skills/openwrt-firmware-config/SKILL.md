@@ -155,6 +155,43 @@ common → distribution → device → local
 - **修复**：在 seed 中显式添加 `# CONFIG_PACKAGE_tcpdump is not set` 排除完整版，并在配置脚本的排除列表中检查 `tcpdump`。
 - **验证**：检查合并生成的 `build.config` 中不含 `CONFIG_PACKAGE_tcpdump=y`，仅保留 `CONFIG_PACKAGE_tcpdump-mini=y`。
 
+### TR3000 Lite 真机：`opkg update` 全部失败（wget returned 4）——overlay 缺 loopback 接口
+
+- **症状**：LuCI 软件包管理器对每个 feed 报 `Failed to download ... wget returned 4`；设备上 `ping 1.1.1.1` 通、`nslookup 域名 192.168.x.1`（显式指定服务器）也通，但 `wget`/`opkg`/`nslookup 域名`（走系统解析器）全部失败。
+- **已确认根因（2026-11-24 真机）**：Lite overlay 的 `/etc/config/network` 整体覆盖上游默认时**丢掉了 `loopback` 接口段** → `lo` 处于 DOWN 且无地址 → dnsmasq 无法绑定 `127.0.0.1:53`，而 `/etc/resolv.conf` 指向 `nameserver 127.0.0.1` → 路由器自身解析全灭。连锁反应：NTP 无法解析服务器 → 时钟停在构建日期 → 即使手动修好 DNS，TLS 下载仍报 `Issued certificate not yet valid`。这不是网络/镜像站问题。
+- **修复**：overlay `network` 补回 `config interface 'loopback'`（`device 'lo'`、`proto 'static'`、`ipaddr '127.0.0.1'`、`netmask '255.0.0.0'`）；`scripts/build-lite.sh` 在编译前断言该段存在。Full overlay 一直有这段，Lite 重写时遗漏。
+- **验证**：真机 `ip addr show lo` 应有 `127.0.0.1/8` 且 UP；`netstat -lnp | grep 127.0.0.1:53` 有 dnsmasq；`nslookup mirrors.vsean.net`（不指定服务器）成功；NTP 同步后 `date` 为当前时间；`opkg update` 六个 feed 全部 `Signature check passed`。修复后实测可从 feed 安装 `coreutils-stat`。
+- **教训**：整体覆盖上游 `/etc/config/network` 时，必须逐段核对上游默认（loopback 是最容易丢的一段）；静态契约测试只查 `lan` 段时看不见这个缺口。
+
+### TR3000 Lite 真机：控制器调用的 `stat`/`od` 不在镜像里
+
+- **症状**：`tr3000-lite-plant` 报 `stat: not found` 后返回 `backup_owner`；管理 AP 首启脚本报 `od: not found` 后 `fail entropy`，AP 永远建不起来。
+- **已确认根因（2026-11-24 真机）**：OpenWrt 的 busybox 默认**不含 `stat` 和 `od` applet**；Lite 镜像只装了 `coreutils`/`coreutils-base64`/`coreutils-nohup`。而 27 处控制器代码用 `stat -c` 做属主/权限门禁，AP 脚本与 DDNS 用 `od` 取随机数。开发机（完整 coreutils）上测试全绿，真机全灭。
+- **修复**：`configs/lite.seed` 增加 `CONFIG_PACKAGE_coreutils-stat=y`（feed 中存在该子包）；`od` 无对应子包，改用 busybox 自带的 `head -c N /dev/urandom | sha256sum | cut -c1-2N` 取随机 hex。新增 `tests/structure/test_lite_device_readiness.py` + `lite-image-commands.txt`（从已验证镜像导出的命令清单）审计所有随镜像脚本的工具调用。
+- **验证**：真机 `command -v stat od`；`opkg install coreutils-stat` 后 `stat -c %u` 正常；修补后的 AP 脚本退出 0 并生成受管 AP。审计测试对旧脚本红（检出 od/stat）、对新脚本绿。
+- **教训**：shell 脚本的工具依赖必须对照**目标镜像**的命令清单验证，不能以开发机 PATH 为准；`tests/structure/lite-image-commands.txt` 是唯一事实源，换 busybox 配置或增删包后要重新导出。
+
+### TR3000 Lite 真机：空 libuci delta 被误判为“待提交修改”
+
+- **症状**：首启 AP 脚本 `fail pending_wireless`；plant 控制器任何事务返回 `pending_firewall_state`。但 `uci changes` 为空。
+- **已确认根因（2026-11-24 真机）**：`uci commit` 之后 libuci 会留下 **0 字节**的 `/tmp/.uci/<package>` 文件（dhcp/fstab/luci/system/wireless 等每次启动都有）。旧代码用 `[ ! -e ... ]` 判断“存在即拒绝”，把空文件当成待提交修改，导致管理 AP 与工业模式切换在真机上**从未成功过**。
+- **修复**：改用 `[ ! -s ... ]`（只有非空 delta 才拒绝）；`/var/run/uci/<package>`（conf2dir 运行时覆盖）仍按存在即拒绝，因为空文件也会遮蔽配置。
+- **验证**：真机分别放置空/非空 `/tmp/.uci/network` 后跑 `enable-plant`：空文件应走到地址校验（如 `management_overlap`），非空文件仍返回 `pending_firewall_state`，且配置不被改动。
+
+### TR3000 Lite 真机：openssh-server 拒绝 root 密码登录，LuCI SSH 页面被隐藏
+
+- **症状**：LuCI 里设置了 root 密码，SSH 密码登录仍 `Permission denied`；LuCI「系统 → 管理权」里看不到 SSH-Keys/SSH Access 页面。
+- **已确认根因（2026-11-24 真机）**：Lite 排除 dropbear、装的是 `openssh-server`。OpenSSH 默认 `PermitRootLogin prohibit-password`，镜像未覆盖 → root 密码登录被拒。LuCI 的 SSH 页面依赖 `/usr/sbin/dropbear` 可执行（menu depends fs 检查），dropbear 不存在时页面 `satisfied:false` 直接隐藏；其 ACL 写的也是 `/etc/dropbear/authorized_keys`，与 OpenSSH 的 `/root/.ssh/authorized_keys` 无关。
+- **修复**：overlay 增加 `/etc/ssh/sshd_config.d/99-tr3000-lite.conf`（`PermitRootLogin yes` + `PasswordAuthentication yes`；sshd_config 已 Include 该目录）；`configure-lite.sh` 断言该文件存在。root 密码本就是 Lite 的强制门禁（plant HTTPS/远程访问都要求非空），允许密码登录不引入新的弱口令面。
+- **验证**：真机放置 drop-in 并 `/etc/init.d/sshd restart` 后，密码 SSH 登录成功。LuCI 的 dropbear 专属页面仍隐藏属上游行为，OpenSSH 密钥管理需另行设计（记录为后续项，不要假装修好）。
+
+### TR3000 Lite：公共 snapshot feed 不可依赖，产物必须自带软件仓库
+
+- **症状**：`opkg update` 时好时坏；镜像站对 `24.10-SNAPSHOT` 路径 404/302，或 feed 里的包版本与固定 revision 构建的镜像不匹配（内核模块 ABI 风险）。
+- **已确认根因**：snapshot 是移动目标，会被镜像站定期清理；固定 commit 的固件不能以活的 snapshot 源为包事实源（与 Full 分支 `docs/FULL-README.md` 的结论一致）。
+- **修复**：`scripts/build-lite.sh` 把本次构建的 `bin/packages/<arch>/{base,packages,luci,routing,telephony}` 与 `bin/targets/.../packages` 连同 `key-build.pub` 一起放进 artifact 的 `package-repo/`；架构名从最终 `.config` 的 `CONFIG_TARGET_ARCH_PACKAGES` 读取，不硬编码。
+- **验证**：artifact 含 `package-repo/arch/*/Packages.gz` 与 `key-build.pub`；启用方式与 Full 相同：内网 HTTP 提供仓库 → 改写 `/etc/opkg/distfeeds.conf` → 公钥按 usign 约定（base64 解码后 bytes[2:10] 的 hex）放入 `/etc/opkg/keys/<keyid>` → `opkg update`，`check_signature` 保持开启。
+
 ## 完整示例：TR3000 Lite 软件包变更
 
 用户要求：“给 TR3000 Lite 加 OpenClash，并顺手放进 common。”
@@ -187,6 +224,10 @@ common → distribution → device → local
 | 通用构建状态码 3 | 核实 manifest；不要绕过 `UNRESOLVED` 门禁 |
 | No space left on device | 深度清理 Runner 磁盘（Android/hostedtoolcache 等），并限制 ccache 大小 |
 | Rust 编译或 Actions 6h 超时 | 检查上游是否残留 `ruby`，在 seed 中显式排除 `ruby` / `libruby` |
+| opkg update 全失败但 ping 通 | 先查 `lo` 是否 UP、dnsmasq 是否绑 127.0.0.1:53，再查时钟/NTP |
+| 控制器报 stat/od not found | 对照 `tests/structure/lite-image-commands.txt`；补 `coreutils-stat` 或改用 busybox 工具 |
+| pending_wireless/pending_firewall_state 但 uci changes 为空 | 检查 `/tmp/.uci/<pkg>` 是否为 0 字节；用 `-s` 不用 `-e` |
+| root 密码 SSH 被拒 | 查 openssh `PermitRootLogin` 默认值与 sshd_config.d drop-in |
 
 ## 常见错误
 
@@ -199,3 +240,7 @@ common → distribution → device → local
 - 在 Windows 原生环境尝试完整固件编译并把环境失败误判为源码失败。
 - 为通过 CI 猜 revision、profile 或 artifact pattern。
 - 把未经真机验证的系统固件描述为通用刷写镜像。
+- 整体覆盖上游 `/etc/config/network` 时丢掉 `loopback` 段，导致设备自身 DNS/NTP/TLS 全灭。
+- 以开发机 PATH 为准假设 `stat`/`od` 等工具存在，不对照目标镜像命令清单。
+- 用 `[ -e /tmp/.uci/<pkg> ]` 判断待提交修改，把 commit 后留下的 0 字节 delta 当成冲突。
+- 排除 dropbear 换 openssh-server 后不配置 `PermitRootLogin`，也不检查 LuCI SSH 页面的 dropbear 依赖。

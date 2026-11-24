@@ -223,7 +223,7 @@ def render_device(data: dict, device_id: str, output_dir: Path) -> None:
     if target.get("vps_remote_peers") and target["vps_remote_peers"][0].get("allowed_ips"):
         vps_peer_ip = target["vps_remote_peers"][0]["allowed_ips"][0]
 
-    plant_cidr = target.get("plant_cidr", "192.168.10.0/24")
+    plant_cidr = target.get("plant_cidr", "192.168.20.0/24")
 
     direct_tmpl = [
         f"# exclusive_group={device_id}",
