@@ -566,6 +566,10 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertNotIn("'disabled': !state.installed", view)
         self.assertNotIn('"disabled": !state.installed', view)
         self.assertIn("attributes.disabled = 'disabled'", view)
+        # WireGuard is always compiled; an unconfigured wg interface must not
+        # be reported as a missing package.
+        self.assertIn("service.id === 'wireguard'", view)
+        self.assertIn("wg interface not configured", view)
         # The attribute is only ever set to the presence-based string value.
         code = "\n".join(
             line for line in view.splitlines() if not line.lstrip().startswith("//")

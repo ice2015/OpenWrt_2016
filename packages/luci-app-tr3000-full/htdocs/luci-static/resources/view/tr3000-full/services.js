@@ -33,9 +33,14 @@ return view.extend({
 	render: function(status) {
 		var rows = services.map(function(service) {
 			var state = status[service.id] || { installed: false, enabled: false, running: false };
-			var label = !state.installed
-				? _('Not included in this build')
-				: (state.running ? _('Running') : _('Stopped'));
+			// WireGuard ships in every build; its controller reports "installed"
+			// only once a wg interface exists, so the label must not claim the
+			// package is missing.
+			var label = state.installed
+				? (state.running ? _('Running') : _('Stopped'))
+				: (service.id === 'wireguard'
+					? _('wg interface not configured (Network → Interfaces)')
+					: _('Not included in this build'));
 			var action = state.enabled || state.running ? 'disable' : 'enable';
 			// LuCI renders every attribute through setAttribute, so a boolean
 			// "disabled: false" would still emit the HTML disabled attribute
