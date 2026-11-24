@@ -636,6 +636,16 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
                 for service in ("wireguard", "tailscale", "homeproxy", "cloudflared"):
                     self.assertIn(service, status)
 
+    def test_overlay_networks_keep_the_loopback_interface(self) -> None:
+        # Without a loopback interface the device resolver (which points at
+        # 127.0.0.1), local daemons and NTP by name all stop working.
+        for variant in ("tr3000-full", "tr3000-lite"):
+            network = (ROOT / "overlays/devices" / variant / "files/etc/config/network").read_text(encoding="utf-8")
+            with self.subTest(variant=variant):
+                self.assertIn("config interface 'loopback'", network)
+                self.assertIn("option device 'lo'", network)
+                self.assertIn("option ipaddr '127.0.0.1'", network)
+
     def test_full_overlay_ships_home_router_network(self) -> None:
         overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
         network = (overlay / "network").read_text(encoding="utf-8")
