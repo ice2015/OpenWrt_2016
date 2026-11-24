@@ -10,7 +10,7 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable
 
-SCRIPT = ROOT / "scripts/tr3000-lite-enroll.sh"
+SCRIPT = ROOT / "devices/tr3000/lite/runtime/tr3000-lite-enroll.sh"
 
 FAKE_TOOLS = r'''
 import base64, hashlib, json, os, pathlib, sys

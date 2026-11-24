@@ -25,3 +25,5 @@ python -m unittest discover -s tests -v
 
 GitHub Actions is the primary build environment. Local firmware compilation is supported only from Linux or WSL2, not native Windows.
 
+
+Device-specific TR3000 files live under `devices/tr3000/`; shared and variant directories are both device-layer inputs. Root `scripts/` keeps compatible command entry points.

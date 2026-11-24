@@ -11,7 +11,7 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable, uci_sections, lite_base_config, run_lite_configure
 
-SCRIPT=ROOT/'scripts/tr3000-lite-remote.sh'
+SCRIPT=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-remote.sh'
 PREFIX='tr3000_lite_remote_'
 FAKE=r'''
 import base64,json,os,pathlib,shlex,signal,sys
@@ -147,7 +147,7 @@ class RemoteControllerTests(unittest.TestCase):
         for p in ('etc/config','etc/tr3000-lite/keys','var/run/uci','var/lock','tmp/.uci','bin'):
             (self.root/p).mkdir(parents=True)
         for name in ('network','firewall'):
-            shutil.copyfile(ROOT/'overlays/devices/tr3000-lite/files/etc/config'/name,self.root/'etc/config'/name)
+            shutil.copyfile(ROOT/'devices/tr3000/lite/files/etc/config'/name,self.root/'etc/config'/name)
         self.private=[key(1),key(71)]
         network=self.root/'etc/config/network'
         with network.open('a') as f:
@@ -209,7 +209,7 @@ class RemoteControllerTests(unittest.TestCase):
         text=text.replace('OWNER_UID=0','OWNER_UID='+str(os.getuid()))
         for name,filename in (('remote-lib.sh','tr3000-lite-remote-lib.sh'),('plant-lib.sh','tr3000-lite-plant-lib.sh')):
             text=text.replace('/usr/lib/tr3000-lite/'+name,str(ROOT/'scripts'/filename))
-        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
+        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
         for prefix in ('/etc/config','/etc/tr3000-lite','/etc/shadow','/var/run','/var/lock','/tmp/.uci'):
             text=text.replace(prefix,str(self.root)+prefix)
         script=self.root/'remote.sh'; script.write_text(text)
@@ -282,14 +282,14 @@ class RemoteControllerTests(unittest.TestCase):
                 self.set_option('firewall',None,option,'0')
 
     def test_boot_barrier_closes_persisted_grants_without_touching_credentials(self):
-        script=ROOT/'scripts/tr3000-lite-remote-boot-close.sh'
+        script=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-remote-boot-close.sh'
         self.assertTrue(script.is_file(),'boot barrier is missing')
         self.run_controller('sync')
         before=(self.root/'etc/tr3000-lite/keys/direct.key').read_bytes()
         text=script.read_text().replace('OWNER_UID=0','OWNER_UID='+str(os.getuid()))
         text=text.replace('/etc/tr3000-lite',str(self.root/'etc/tr3000-lite'))
-        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
-        text=text.replace('/usr/lib/tr3000-lite/remote-lib.sh',str(ROOT/'scripts/tr3000-lite-remote-lib.sh'))
+        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
+        text=text.replace('/usr/lib/tr3000-lite/remote-lib.sh',str(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-remote-lib.sh'))
         target=self.root/'boot-close.sh'; target.write_text(text)
         result=subprocess.run([bash_executable(),str(target)],capture_output=True,text=True)
         self.assertEqual(0,result.returncode,result.stderr)

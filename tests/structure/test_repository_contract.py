@@ -13,8 +13,33 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class RepositoryContractTests(unittest.TestCase):
+    def test_new_device_directories_do_not_claim_build_support(self):
+        for device in ("a6s", "nx30pro"):
+            text = (ROOT / "devices" / device / "README.md").read_text(encoding="utf-8")
+            self.assertIn("待适配", text)
+            self.assertIn("UNRESOLVED", text)
+            self.assertNotIn("112 MiB", text)
+            self.assertFalse((ROOT / "manifests/devices" / (device + ".json")).exists())
+
+    def test_device_index_documents_existing_variants(self):
+        index = (ROOT / "devices/README.md").read_text(encoding="utf-8")
+        for device in ("tr3000", "a6s", "nx30pro"):
+            self.assertIn(device, index)
+        tr3000 = (ROOT / "devices/tr3000/README.md").read_text(encoding="utf-8")
+        for variant in ("lite", "full", "uboot"):
+            self.assertIn(variant, tr3000)
+
+    def test_tr3000_inputs_live_under_device_directory(self):
+        for variant in ("lite", "full"):
+            base = ROOT / "devices/tr3000" / variant
+            for relative in ("config.seed", "feeds.lock", "files/etc/config/network",
+                             "packages/luci-app-tr3000-" + variant + "/Makefile"):
+                self.assertTrue((base / relative).is_file(), str(base / relative))
+        self.assertFalse((ROOT / "configs/lite.seed").exists())
+        self.assertFalse((ROOT / "files").exists())
+
     def test_lite_luci_package_is_admin_only_and_uses_fixed_controller(self) -> None:
-        package = ROOT / "packages/luci-app-tr3000-lite"
+        package = ROOT / "devices/tr3000/lite/packages/luci-app-tr3000-lite"
         self.assertTrue((package / "Makefile").is_file(), "missing Lite LuCI package")
         menu = json.loads((package / "root/usr/share/luci/menu.d/luci-app-tr3000-lite.json").read_text(encoding="utf-8"))
         acl = json.loads((package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-lite.json").read_text(encoding="utf-8"))
@@ -50,7 +75,7 @@ class RepositoryContractTests(unittest.TestCase):
         self.assertNotRegex(view, r"(?:require uci|fs\.(?:read|write)|['\"]uci['\"])")
 
     def test_lite_luci_view_validates_current_input_and_handles_controller_errors(self) -> None:
-        view = ROOT / "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js"
+        view = ROOT / "devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js"
         self.assertTrue(view.is_file(), "missing Industrial LAN view")
         node = shutil.which("node")
         if node is None:
@@ -186,7 +211,7 @@ const text = item => typeof item === 'string' ? item : !item ? '' :
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_lite_uplink_view_is_read_only(self) -> None:
-        package = ROOT / 'packages/luci-app-tr3000-lite'
+        package = ROOT / 'devices/tr3000/lite/packages/luci-app-tr3000-lite'
         view = package / 'htdocs/luci-static/resources/view/tr3000-lite/uplinks.js'
         self.assertTrue(view.is_file(), 'missing read-only uplink view')
         menu = json.loads((package / 'root/usr/share/luci/menu.d/luci-app-tr3000-lite.json').read_text())
@@ -252,7 +277,7 @@ const ok = data => ({code:0,stdout:JSON.stringify(data),stderr:''});
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_lite_remote_access_view_contract(self) -> None:
-        package = ROOT / "packages/luci-app-tr3000-lite"
+        package = ROOT / "devices/tr3000/lite/packages/luci-app-tr3000-lite"
         view = package / "htdocs/luci-static/resources/view/tr3000-lite/remote-access.js"
         self.assertTrue(view.is_file(), "missing remote-access view")
         node = shutil.which("node")
@@ -333,15 +358,15 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_tr3000_lite_overlay_is_device_scoped(self) -> None:
-        overlay = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
+        overlay = ROOT / "devices/tr3000/lite/files/etc/config"
         for config in ("network", "dhcp", "firewall"):
             self.assertTrue((overlay / config).is_file(), f"missing Lite overlay: {config}")
-        self.assertFalse((ROOT / "files/etc/config/tr3000-lite").exists())
+        self.assertFalse((ROOT / "devices/tr3000/shared/files/etc/config/tr3000-lite").exists())
         for manifest in (ROOT / "manifests/devices").glob("*.json"):
             self.assertNotIn("tr3000-lite", manifest.read_text(encoding="utf-8"))
 
     def test_lite_overlay_ships_reachable_access_segment(self) -> None:
-        network = (ROOT / "overlays/devices/tr3000-lite/files/etc/config/network").read_text(encoding="utf-8")
+        network = (ROOT / "devices/tr3000/lite/files/etc/config/network").read_text(encoding="utf-8")
         self.assertIn("config interface 'lan'", network)
         self.assertIn("option device 'br-lan'", network)
         self.assertIn("option ipaddr '192.168.10.1'", network)
@@ -356,14 +381,14 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertIn("option proto 'none'", plant)
 
     def test_lite_overlay_ships_no_wireless_configuration(self) -> None:
-        overlay = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
+        overlay = ROOT / "devices/tr3000/lite/files/etc/config"
         self.assertFalse((overlay / "wireless").exists(),
                          "the Lite overlay must not ship a wireless configuration or credentials")
-        self.assertFalse((ROOT / "files/etc/config/wireless").exists(),
+        self.assertFalse((ROOT / "devices/tr3000/shared/files/etc/config/wireless").exists(),
                          "the shared rootfs must not ship a wireless configuration")
 
     def test_lite_overlay_serves_dhcp_on_the_access_segment(self) -> None:
-        dhcp = (ROOT / "overlays/devices/tr3000-lite/files/etc/config/dhcp").read_text(encoding="utf-8")
+        dhcp = (ROOT / "devices/tr3000/lite/files/etc/config/dhcp").read_text(encoding="utf-8")
         self.assertIn("config dhcp 'lan'", dhcp)
         self.assertIn("option interface 'lan'", dhcp)
         self.assertIn("option start '100'", dhcp)
@@ -373,7 +398,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_lite_firewall_allows_management_from_the_access_segment(self) -> None:
         from tests.scripts.test_scripts import uci_sections
-        firewall = uci_sections((ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8"))
+        firewall = uci_sections((ROOT / "devices/tr3000/lite/files/etc/config/firewall").read_text(encoding="utf-8"))
         sections = {s[".name"]: s for s in firewall if s[".name"]}
         zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
         self.assertIn("lan", zones)
@@ -397,7 +422,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         # namespaces; its constants must follow the shipped plant default.
         from tests.scripts.test_scripts import uci_sections
         native = (ROOT / "tests/scripts/native_remote_nft.py").read_text(encoding="utf-8")
-        firewall = {s[".name"]: s for s in uci_sections((ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8")) if s[".name"]}
+        firewall = {s[".name"]: s for s in uci_sections((ROOT / "devices/tr3000/lite/files/etc/config/firewall").read_text(encoding="utf-8")) if s[".name"]}
         plant_cidr = firewall["tr3000_lite_lan_plant_tcp"]["dest_ip"]
         plant_address = firewall["tr3000_lite_lan_plant_snat_tcp"]["snat_ip"]
         self.assertIn("ip daddr " + plant_cidr + " meta l4proto tcp accept", native)
@@ -407,7 +432,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertNotIn("192.168.10.0/24' via", native)
 
     def test_lite_luci_view_exposes_the_access_segment_and_mode_switch(self) -> None:
-        view = (ROOT / "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js").read_text(encoding="utf-8")
+        view = (ROOT / "devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js").read_text(encoding="utf-8")
         self.assertIn("enable-plant", view)
         self.assertIn("disable-plant", view)
         self.assertIn("legacy_config_detected", view)
@@ -417,17 +442,17 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         # The retired management segment must be gone from the view.
         self.assertNotIn("192.168.77", view)
         self.assertNotIn("br-mgmt", view)
-        uplinks = (ROOT / "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/uplinks.js").read_text(encoding="utf-8")
+        uplinks = (ROOT / "devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/uplinks.js").read_text(encoding="utf-8")
         self.assertNotIn("192.168.77", uplinks)
         self.assertNotIn("'mgmt'", uplinks)
 
     def test_lite_documents_describe_the_access_segment(self) -> None:
-        handbook = ROOT / "docs/TR3000-LITE-LAN-ACCESS.md"
+        handbook = ROOT / "devices/tr3000/docs/TR3000-LITE-LAN-ACCESS.md"
         self.assertTrue(handbook.is_file(), "missing the Lite access segment handbook")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("docs/TR3000-LITE-LAN-ACCESS.md", readme)
-        for document in ("docs/LITE-README.md", "docs/TR3000-LITE-PROVISIONING.md",
-                         "docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/HOMEPROXY-SPLIT-ROUTING.md"):
+        self.assertIn("devices/tr3000/docs/TR3000-LITE-LAN-ACCESS.md", readme)
+        for document in ("devices/tr3000/lite/README.md", "devices/tr3000/docs/TR3000-LITE-PROVISIONING.md",
+                         "devices/tr3000/docs/TR3000-LITE-REMOTE-ACCESS.md", "devices/tr3000/docs/HOMEPROXY-SPLIT-ROUTING.md"):
             text = (ROOT / document).read_text(encoding="utf-8")
             self.assertNotIn("192.168.77", text, document + " still documents the retired management segment")
             self.assertNotIn("br-mgmt", text, document + " still documents the retired management bridge")
@@ -438,7 +463,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         # guard follows the firmware instead of a duplicated constant.
         from tests.scripts.test_scripts import uci_sections
         firewall = {s[".name"]: s for s in uci_sections(
-            (ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8")) if s[".name"]}
+            (ROOT / "devices/tr3000/lite/files/etc/config/firewall").read_text(encoding="utf-8")) if s[".name"]}
         plant_cidr = firewall["tr3000_lite_lan_plant_tcp"]["dest_ip"]
         plant_address = firewall["tr3000_lite_lan_plant_snat_tcp"]["snat_ip"]
         access_cidr = firewall["tr3000_lite_lan_plant_tcp"]["src_ip"]
@@ -448,8 +473,8 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         access_prefix = access_network.rsplit(".", 1)[0]
         stale_plant_address = f"{access_prefix}.254"
         stale_plant_host = f"{access_prefix}.100"
-        for document in ("docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/TR3000-LITE-PROVISIONING.md",
-                         "docs/WIREGUARD-VPS-ROUTING.md"):
+        for document in ("devices/tr3000/docs/TR3000-LITE-REMOTE-ACCESS.md", "devices/tr3000/docs/TR3000-LITE-PROVISIONING.md",
+                         "devices/tr3000/docs/WIREGUARD-VPS-ROUTING.md"):
             text = (ROOT / document).read_text(encoding="utf-8")
             # The access segment must never be published as the industrial network.
             self.assertNotIn(f"--plant-cidr {access_cidr}", text,
@@ -481,7 +506,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             "configs/common/packages.config",
             "configs/distributions/openwrt.config",
             "configs/distributions/immortalwrt.config",
-            "configs/devices/tr3000.config",
+            "devices/tr3000/config.config",
             "configs/devices/x86-64.config",
             "configs/devices/raspberry-pi.config",
             "feeds/common.conf",
@@ -530,18 +555,18 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             "docs/architecture.md",
             "docs/configuration-layers.md",
             "docs/adding-a-device.md",
-            "docs/LITE-README.md",
-            "docs/FULL-README.md",
-            "docs/UBOOT-SAFETY.md",
-            "docs/WIREGUARD-VPS-ROUTING.md",
-            "docs/TUNNEL-ACCESS.md",
-            "docs/TAILSCALE.md",
-            "docs/HOMEPROXY-SPLIT-ROUTING.md",
-            "docs/DDNS-CLOUDFLARE.md",
-            "docs/CLOUDFLARED-ACCESS.md",
-            "docs/TR3000-LITE-PROVISIONING.md",
-            "docs/TR3000-LITE-REMOTE-ACCESS.md",
-            "docs/TEST-PLAN.md",
+            "devices/tr3000/lite/README.md",
+            "devices/tr3000/full/README.md",
+            "devices/tr3000/uboot/README.md",
+            "devices/tr3000/docs/WIREGUARD-VPS-ROUTING.md",
+            "devices/tr3000/docs/TUNNEL-ACCESS.md",
+            "devices/tr3000/docs/TAILSCALE.md",
+            "devices/tr3000/docs/HOMEPROXY-SPLIT-ROUTING.md",
+            "devices/tr3000/docs/DDNS-CLOUDFLARE.md",
+            "devices/tr3000/docs/CLOUDFLARED-ACCESS.md",
+            "devices/tr3000/docs/TR3000-LITE-PROVISIONING.md",
+            "devices/tr3000/docs/TR3000-LITE-REMOTE-ACCESS.md",
+            "devices/tr3000/docs/TEST-PLAN.md",
         ]
 
         self.assertEqual([], [path for path in documents if not (ROOT / path).is_file()])
@@ -556,7 +581,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         self.assertEqual([], missing)
 
     def test_full_luci_package_is_admin_only_and_uses_fixed_controller(self) -> None:
-        package = ROOT / "packages/luci-app-tr3000-full"
+        package = ROOT / "devices/tr3000/full/packages/luci-app-tr3000-full"
         menu_path = package / "root/usr/share/luci/menu.d/luci-app-tr3000-full.json"
         acl_path = package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json"
         view_path = package / "htdocs/luci-static/resources/view/tr3000-full/services.js"
@@ -597,7 +622,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_full_services_view_keeps_installed_services_actionable(self) -> None:
         view = (
-            ROOT / "packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js"
+            ROOT / "devices/tr3000/full/packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js"
         ).read_text(encoding="utf-8")
         # LuCI forwards every element attribute to setAttribute, so a boolean
         # value becomes disabled="false" and the HTML attribute still disables
@@ -632,7 +657,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_full_first_boot_policy_disables_remote_services(self) -> None:
         defaults = (
-            ROOT / "overlays/devices/tr3000-full/files/etc/uci-defaults/95-tr3000-full-services"
+            ROOT / "devices/tr3000/full/files/etc/uci-defaults/95-tr3000-full-services"
         ).read_text(encoding="utf-8")
 
         for service in ("wireguard", "tailscale", "cloudflared", "homeproxy"):
@@ -667,7 +692,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
                 env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}",
                            PYTHON=sys.executable, LEGACY_ROOT=str(root), LEGACY_CFG=str(cfg))
                 result = subprocess.run(
-                    ["bash", str(ROOT / "scripts/service-toggle.sh"), "status", "--json"],
+                    ["bash", str(ROOT / "devices/tr3000/shared/runtime/service-toggle.sh"), "status", "--json"],
                     capture_output=True, text=True, env=env)
                 self.assertEqual(0, result.returncode, result.stderr)
                 status = json.loads(result.stdout)
@@ -679,14 +704,14 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         # Without a loopback interface the device resolver (which points at
         # 127.0.0.1), local daemons and NTP by name all stop working.
         for variant in ("tr3000-full", "tr3000-lite"):
-            network = (ROOT / "overlays/devices" / variant / "files/etc/config/network").read_text(encoding="utf-8")
+            network = (ROOT / "devices/tr3000" / variant.removeprefix("tr3000-") / "files/etc/config/network").read_text(encoding="utf-8")
             with self.subTest(variant=variant):
                 self.assertIn("config interface 'loopback'", network)
                 self.assertIn("option device 'lo'", network)
                 self.assertIn("option ipaddr '127.0.0.1'", network)
 
     def test_full_overlay_ships_home_router_network(self) -> None:
-        overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+        overlay = ROOT / "devices/tr3000/full/files/etc/config"
         network = (overlay / "network").read_text(encoding="utf-8")
         self.assertIn("config interface 'lan'", network)
         self.assertIn("option ipaddr '192.168.10.1'", network)
@@ -701,7 +726,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_full_firewall_keeps_tunnels_closed_by_default(self) -> None:
         from tests.scripts.test_scripts import uci_sections
-        overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+        overlay = ROOT / "devices/tr3000/full/files/etc/config"
         firewall = uci_sections((overlay / "firewall").read_text(encoding="utf-8"))
         sections = {s[".name"]: s for s in firewall if s[".name"]}
         zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
@@ -716,19 +741,19 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_full_only_assets_left_the_shared_rootfs(self) -> None:
         for name in ("network", "dhcp", "firewall"):
-            self.assertFalse((ROOT / "files/etc/config" / name).exists())
-        self.assertFalse((ROOT / "files/etc/tr3000-full/examples/sing-box.json.example").exists())
-        self.assertFalse((ROOT / "files/etc/config/wireless").exists())
-        self.assertFalse((ROOT / "overlays/devices/tr3000-full/files/etc/config/wireless").exists())
+            self.assertFalse((ROOT / "devices/tr3000/shared/files/etc/config" / name).exists())
+        self.assertFalse((ROOT / "devices/tr3000/shared/files/etc/tr3000-full/examples/sing-box.json.example").exists())
+        self.assertFalse((ROOT / "devices/tr3000/shared/files/etc/config/wireless").exists())
+        self.assertFalse((ROOT / "devices/tr3000/full/files/etc/config/wireless").exists())
 
     def test_full_documents_describe_the_home_router(self) -> None:
-        readme = (ROOT / "docs/FULL-README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "devices/tr3000/full/README.md").read_text(encoding="utf-8")
         for doc in ("HOMEPROXY-SPLIT-ROUTING.md", "TUNNEL-ACCESS.md", "DDNS-CLOUDFLARE.md"):
             self.assertTrue((ROOT / "docs" / doc).is_file(), doc)
             self.assertIn(f"docs/{doc}", readme)
         for forbidden in ("192.168.77", "br-mgmt", "plant"):
             self.assertNotIn(forbidden, readme)
-        plan = (ROOT / "docs/TEST-PLAN.md").read_text(encoding="utf-8")
+        plan = (ROOT / "devices/tr3000/docs/TEST-PLAN.md").read_text(encoding="utf-8")
         for case in range(1, 15):
             self.assertIn(f"F{case}", plan)
         self.assertFalse((ROOT / "docs/WIREGUARD-SNAT.md").exists())

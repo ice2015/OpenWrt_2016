@@ -6,7 +6,7 @@
   "target": "UNRESOLVED",
   "subtarget": "UNRESOLVED",
   "profile": "UNRESOLVED",
-  "config_layers": ["configs/devices/tr3000.config"],
+  "config_layers": ["devices/tr3000/config.config"],
   "feed_layers": [],
   "patch_layers": [],
   "overlay_layers": [],

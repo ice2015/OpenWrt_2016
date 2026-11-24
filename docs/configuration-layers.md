@@ -30,7 +30,7 @@ common → distribution → device → local
 ## Rootfs overlays
 
 - 公共文件：`overlays/common/files/`
-- 设备文件：`overlays/devices/<device-id>/files/`
+- 设备文件：`devices/<device-id>/files/`；变体使用 `devices/<device-id>/<variant>/files/`，型号内部共享使用 `shared/files/`。尚未迁移设备的 `overlays/devices/` 路径仍有效。
 - 私有文件：`local/` 下的未跟踪 overlay
 
 不要提交密码、SSH 私钥、Wi-Fi 凭据或个人公网配置。需要模板时提交无敏感值的示例，并让部署阶段注入真实值。
@@ -39,7 +39,7 @@ common → distribution → device → local
 
 - 公共补丁：`patches/common/`
 - 发行版补丁：`patches/distributions/<distribution-id>/`
-- 设备补丁：`patches/devices/<device-id>/`
+- 设备补丁：`devices/<device-id>/patches/` 或 `devices/<device-id>/<variant>/patches/`；尚未迁移设备的 `patches/devices/<device-id>/` 仍有效。
 
 补丁文件使用数字前缀表达顺序，例如 `010-fix-device-tree.patch`。说明补丁适用的上游 revision 范围和是否已提交上游；源码升级后必须重新验证。
 
@@ -47,3 +47,9 @@ common → distribution → device → local
 
 `local/` 中除 README 外全部被忽略。它适合个人配置，但不能作为 GitHub Actions 默认构建的隐式依赖。CI 需要的敏感数据必须通过明确的 Secrets 输入，并禁止传入来自 fork 的 Pull Request。
 
+
+## 设备目录
+
+设备专属文件逐步集中到 `devices/<device-id>/`。TR3000 的 `shared/` 与 `lite/`、`full/` 都属于 device 层：先应用 shared，再应用选定变体。shared 不代表跨型号公共层。尚未迁移的设备路径继续有效。
+
+新型号须核实硬件与上游定义后才能注册 manifest；仅创建说明目录不增加可构建目标。

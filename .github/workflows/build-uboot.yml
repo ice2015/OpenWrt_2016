@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          sh scripts/build-uboot.sh \
+          sh devices/tr3000/build/build-uboot.sh \
             --source-dir "$RUNNER_TEMP/tr3000-uboot/source" \
             --artifact-dir "$GITHUB_WORKSPACE/uboot-artifact"
 

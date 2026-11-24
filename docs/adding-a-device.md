@@ -16,7 +16,7 @@
 
 ## 2. 创建设备清单
 
-复制最接近的 `manifests/devices/*.json` 为 `manifests/devices/new-router.json`，至少修改：
+硬件与目标发行版支持核实之前，先建立 `devices/new-router/README.md` 的待适配说明，不新增可构建目标，也不猜测 `supported_distributions` 来通过校验。核实后创建 `manifests/devices/new-router.json`，参考现有 schema，至少填写：
 
 - `id` 与 `display_name`；
 - `supported_distributions`；
@@ -24,16 +24,17 @@
 - 配置层和产物模式；
 - `notes` 中的刷写、版本或硬件警告。
 
-清单中的路径必须是仓库内相对路径，禁止 `..` 或绝对路径。
+清单中的路径必须是仓库内相对路径，禁止 `..` 或绝对路径，也不能引用其他设备目录；所有未知硬件字段继续保持 `UNRESOLVED`。
 
 ## 3. 添加设备层
 
 按实际需要创建：
 
 ```text
-configs/devices/new-router.config
-overlays/devices/new-router/files/
-patches/devices/new-router/
+devices/new-router/config.config
+devices/new-router/files/
+devices/new-router/patches/
+devices/new-router/build/
 ```
 
 只需配置片段时不要创建空补丁或 overlay。任何新增路径都必须在设备清单中显式引用。

@@ -20,8 +20,8 @@ sys.path.insert(0, str(ROOT / "tests/structure"))
 from shell_tools import invocations  # noqa: E402
 
 
-LITE = ROOT / "overlays/devices/tr3000-lite/files"
-SEED = ROOT / "configs/lite.seed"
+LITE = ROOT / "devices/tr3000/lite/files"
+SEED = ROOT / "devices/tr3000/lite/config.seed"
 
 # Every command the shipped image provides, derived from the verified baseline
 # image. "stat" is added by the coreutils-stat package the seed now selects.
@@ -50,13 +50,13 @@ NON_BUSYBOX_TOOLS = {
 
 def shipped_scripts():
     """Every shell script that ends up on the device."""
-    scripts = sorted((ROOT / "scripts").glob("tr3000-lite-*.sh"))
-    scripts += [ROOT / "scripts/lite-common.sh", ROOT / "scripts/lite-uplink-watch.sh"]
+    scripts = sorted((ROOT / "devices/tr3000/lite/runtime").glob("tr3000-lite-*.sh"))
+    scripts += [ROOT / "devices/tr3000/shared/runtime/lite-common.sh", ROOT / "devices/tr3000/shared/runtime/lite-uplink-watch.sh"]
     scripts += [LITE / "etc/uci-defaults/91-tr3000-lite-management-ap"]
     scripts += sorted((LITE / "etc/init.d").glob("*"))
     scripts += sorted((LITE / "etc/hotplug.d").rglob("*"))
-    scripts += [ROOT / "files/etc/init.d/lite-uplink-watch",
-                ROOT / "files/etc/uci-defaults/90-lite-uplink-watch"]
+    scripts += [ROOT / "devices/tr3000/shared/files/etc/init.d/lite-uplink-watch",
+                ROOT / "devices/tr3000/shared/files/etc/uci-defaults/90-lite-uplink-watch"]
     return [script for script in scripts if script.is_file()]
 
 
@@ -112,7 +112,7 @@ class LiteDeviceReadinessTests(unittest.TestCase):
         self.assertIn("option device 'lo'", network)
         self.assertIn("option ipaddr '127.0.0.1'", network)
         self.assertIn("option netmask '255.0.0.0'", network)
-        build = (ROOT / "scripts/build-lite.sh").read_text(encoding="utf-8")
+        build = (ROOT / "devices/tr3000/build/build-lite.sh").read_text(encoding="utf-8")
         self.assertIn("config interface 'loopback'", build,
                       "the build must fail before compiling when the loopback interface is missing")
 
@@ -121,7 +121,7 @@ class LiteDeviceReadinessTests(unittest.TestCase):
         # boot. Treating its mere presence as a pending change aborted the
         # management AP initialization and every plant transaction.
         for script in (LITE / "etc/uci-defaults/91-tr3000-lite-management-ap",
-                       ROOT / "scripts/tr3000-lite-plant.sh"):
+                       ROOT / "devices/tr3000/lite/runtime/tr3000-lite-plant.sh"):
             text = script.read_text(encoding="utf-8")
             # A delta only blocks when it carries content.
             self.assertIn("-s ", text,
@@ -140,12 +140,12 @@ class LiteDeviceReadinessTests(unittest.TestCase):
         text = dropin.read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^PermitRootLogin\s+yes\s*$")
         self.assertRegex(text, r"(?m)^PasswordAuthentication\s+yes\s*$")
-        configure = (ROOT / "scripts/configure-lite.sh").read_text(encoding="utf-8")
+        configure = (ROOT / "devices/tr3000/build/configure-lite.sh").read_text(encoding="utf-8")
         self.assertIn("99-tr3000-lite.conf", configure,
                       "the configure step must fail when the SSH drop-in is missing")
 
     def test_lite_image_ships_no_full_era_helpers(self) -> None:
-        configure = (ROOT / "scripts/configure-lite.sh").read_text(encoding="utf-8")
+        configure = (ROOT / "devices/tr3000/build/configure-lite.sh").read_text(encoding="utf-8")
         for legacy in ("plant-profile.sh", "plant-access.sh"):
             self.assertNotRegex(configure, r"install[^\n]*" + legacy.replace(".", r"\."),
                                 legacy + " must not be installed into the Lite image")
@@ -153,12 +153,12 @@ class LiteDeviceReadinessTests(unittest.TestCase):
                          "the configure step must drop the Full variant first-boot defaults")
         self.assertFalse((LITE / "etc/config/tr3000-lite").exists(),
                          "the retired /etc/config/tr3000-lite policy file is dead configuration")
-        for script in sorted((ROOT / "scripts").glob("tr3000-lite-*.sh")):
+        for script in sorted((ROOT / "devices/tr3000/lite/runtime").glob("tr3000-lite-*.sh")):
             self.assertNotIn("config/tr3000-lite\"", script.read_text(encoding="utf-8"),
                              script.name + " must not read the retired policy file")
 
     def test_lite_artifact_ships_its_own_package_repository(self) -> None:
-        build = (ROOT / "scripts/build-lite.sh").read_text(encoding="utf-8")
+        build = (ROOT / "devices/tr3000/build/build-lite.sh").read_text(encoding="utf-8")
         self.assertIn("key-build.pub", build,
                       "the artifact must ship the build signing key")
         self.assertIn("package-repo", build,

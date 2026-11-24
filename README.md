@@ -30,6 +30,7 @@ python -m unittest discover -s tests -v
 
 | 目录 | 用途 |
 | --- | --- |
+| [`devices/`](devices/README.md) | 按型号集中设备文件；TR3000 含 Lite/Full/U-Boot，A6S/NX30Pro 待适配 |
 | `manifests/` | 源码仓库、版本和设备构建元数据 |
 | `configs/` | 原生 OpenWrt `.config` 片段 |
 | `feeds/` | 公共及发行版专属 feed 片段 |
@@ -57,7 +58,7 @@ common → distribution → device → local
 - [架构与数据流](docs/architecture.md)
 - [配置分层规则](docs/configuration-layers.md)
 - [新增设备指南](docs/adding-a-device.md)
-- [Lite 接入段与工业模式](docs/TR3000-LITE-LAN-ACCESS.md)
+- [Lite 接入段与工业模式](devices/tr3000/docs/TR3000-LITE-LAN-ACCESS.md)
 - [本地私有配置说明](local/README.md)
 - [AI 协作约定](AGENTS.md)
 
@@ -79,9 +80,9 @@ common → distribution → device → local
 - `build-full.yml`：TR3000-Full 独立手动工作流，默认编译 Tailscale/sing-box、可选 cloudflared，使用标准 LuCI Bootstrap，并在归档/可选 prerelease 前执行 profile、112 MiB DTS、sysupgrade tar 和容量门禁。
 - `build-uboot.yml`：TR3000 DHCP U-Boot 独立手动工作流；只编译 128 MiB multi-layout，绝不由系统固件工作流自动刷写。
 
-工作流仅负责编排，实际逻辑必须保留在 `scripts/` 中，以便本地和 CI 使用同一条路径。当前构建脚本在目标信息完整后仍会以状态码 `4` 提示“构建阶段尚未实现”；这是有意的安全边界。
+工作流仅负责编排；TR3000 实际逻辑位于 `devices/tr3000/build/`，公共工具和旧命令兼容入口位于 `scripts/`，本地与 CI 共用真实实现。当前构建脚本在目标信息完整后仍会以状态码 `4` 提示“构建阶段尚未实现”；这是有意的安全边界。
 
-TR3000 Lite 与 Full 使用独立 workflow，不改变通用设备清单中仍为 `UNRESOLVED` 的原生 profile/revision，也不代表通用构建入口现已可构建。请先阅读 [Lite 操作说明](docs/LITE-README.md)、[Lite 接入段与工业模式](docs/TR3000-LITE-LAN-ACCESS.md)、[Full 家用路由器说明](docs/FULL-README.md)、[Full 穿透通道](docs/TUNNEL-ACCESS.md)、[Full DDNS](docs/DDNS-CLOUDFLARE.md)、[U-Boot 安全检查](docs/UBOOT-SAFETY.md)、[WireGuard/VPS 路由](docs/WIREGUARD-VPS-ROUTING.md) 和[测试计划](docs/TEST-PLAN.md)。首次部署的无线凭据及 VPN 密钥都必须由现场人员安全注入。
+TR3000 Lite 与 Full 使用独立 workflow，不改变通用设备清单中仍为 `UNRESOLVED` 的原生 profile/revision，也不代表通用构建入口现已可构建。请先阅读 [Lite 操作说明](devices/tr3000/lite/README.md)、[Lite 接入段与工业模式](devices/tr3000/docs/TR3000-LITE-LAN-ACCESS.md)、[Full 家用路由器说明](devices/tr3000/full/README.md)、[Full 穿透通道](devices/tr3000/docs/TUNNEL-ACCESS.md)、[Full DDNS](devices/tr3000/docs/DDNS-CLOUDFLARE.md)、[U-Boot 安全检查](devices/tr3000/uboot/README.md)、[WireGuard/VPS 路由](devices/tr3000/docs/WIREGUARD-VPS-ROUTING.md) 和[测试计划](devices/tr3000/docs/TEST-PLAN.md)。首次部署的无线凭据及 VPN 密钥都必须由现场人员安全注入。
 
 ## AI 修改项目时
 

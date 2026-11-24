@@ -20,13 +20,13 @@ class LiteBuildEvidenceTests(unittest.TestCase):
             root = Path(directory)
             repo, source, upstream, artifacts, fake_bin = [root / name for name in
                 ("repo", "source", "upstream", "artifacts", "bin")]
-            for path in (repo / "scripts", repo / "feeds/devices", source / "scripts",
+            for path in (repo / "devices/tr3000/build", repo / "devices/tr3000/lite", source / "scripts",
                          upstream / "config", fake_bin):
                 path.mkdir(parents=True)
-            shutil.copyfile(ROOT / "scripts/build-lite.sh", repo / "scripts/build-lite.sh")
-            shutil.copyfile(ROOT / "scripts/verify-image.sh", repo / "scripts/verify-image.sh")
-            lock = ROOT / "feeds/devices/tr3000-lite.lock"
-            (repo / "feeds/devices/tr3000-lite.lock").write_bytes(lock.read_text().encode("utf-8"))
+            shutil.copyfile(ROOT / "devices/tr3000/build/build-lite.sh", repo / "devices/tr3000/build/build-lite.sh")
+            shutil.copyfile(ROOT / "devices/tr3000/build/verify-image.sh", repo / "devices/tr3000/build/verify-image.sh")
+            lock = ROOT / "devices/tr3000/lite/feeds.lock"
+            (repo / "devices/tr3000/lite/feeds.lock").write_bytes(lock.read_text().encode("utf-8"))
             (source / ".config").write_text(lite_base_config(), encoding="utf-8")
             (upstream / "config/128muboot.config").write_text("fixture\n", encoding="utf-8")
             (upstream / "LICENSE").write_text("fixture license\n", encoding="utf-8")
@@ -48,7 +48,7 @@ class LiteBuildEvidenceTests(unittest.TestCase):
             access = source / "files/etc/config"
             access.mkdir(parents=True, exist_ok=True)
             for name in ("network", "dhcp"):
-                content = (ROOT / "overlays/devices/tr3000-lite/files/etc/config" / name).read_text(encoding="utf-8")
+                content = (ROOT / "devices/tr3000/lite/files/etc/config" / name).read_text(encoding="utf-8")
                 if overlay and name in overlay: content = overlay[name]
                 (access / name).write_text(content, encoding="utf-8")
             image_packages=["luci-app-tr3000-lite", "wpad-openssl", "kmod-usb-net",
@@ -75,7 +75,7 @@ class LiteBuildEvidenceTests(unittest.TestCase):
             wireless.parent.mkdir(parents=True, exist_ok=True)
             wireless.write_text("option key 'SENSITIVE-FIXTURE-DO-NOT-EXPORT'\n", encoding="utf-8")
             scripts = {
-                repo / "scripts/configure-lite.sh": "exit 0\n",
+                repo / "devices/tr3000/build/configure-lite.sh": "exit 0\n",
                 source / "scripts/feeds": "exit 0\n",
                 fake_bin / "make": (
                     "sed '/^CONFIG_PACKAGE_luci-app-tr3000-lite=y$/d' .config > .next && mv .next .config\n"
@@ -99,7 +99,7 @@ else echo offline-commit; fi
             env["FIXTURE_BIN"] = prefix
             result = subprocess.run([bash_executable(), "-c",
                 'export PATH="$FIXTURE_BIN:$PATH"; exec sh "$@"', "fixture",
-                (repo / "scripts/build-lite.sh").as_posix(), "--source-dir", source.as_posix(),
+                (repo / "devices/tr3000/build/build-lite.sh").as_posix(), "--source-dir", source.as_posix(),
                 "--upstream-dir", upstream.as_posix(), "--artifact-dir", artifacts.as_posix()],
                 env=env, cwd=ROOT, capture_output=True, text=True)
             evidence = {p.relative_to(artifacts).as_posix(): p.read_text(encoding="utf-8")
@@ -114,7 +114,7 @@ else echo offline-commit; fi
         contract = dict(line.split("=", 1) for line in evidence["lite-runtime-contract.txt"].splitlines())
         self.assertEqual("2", contract["schema_version"])
         self.assertEqual("expected-defaults-not-live-state", contract["evidence_kind"])
-        configs = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
+        configs = ROOT / "devices/tr3000/lite/files/etc/config"
         network = {s[".name"]: s for s in uci_sections((configs / "network").read_text())}
         self.assertEqual("lan", contract["lan_interface"])
         self.assertEqual(network["lan"]["device"], contract["lan_device"])
@@ -176,7 +176,7 @@ else echo offline-commit; fi
         self.assertEqual("wan,wwan,usbwan",contract["uplink_order"])
         self.assertEqual("10,20,30",contract["uplink_metrics"])
         self.assertEqual("rndis_host,cdc_ether",contract["usb_drivers"])
-        settings={s[".name"]:s for s in uci_sections((ROOT / "overlays/devices/tr3000-lite/files/etc/config/lite-uplink-watch").read_text())}
+        settings={s[".name"]:s for s in uci_sections((ROOT / "devices/tr3000/lite/files/etc/config/lite-uplink-watch").read_text())}
         for option,key in (("interval","uplink_interval_seconds"),("failures","uplink_fail_rounds"),("successes","uplink_recover_rounds")):
             self.assertEqual(settings["globals"][option],contract[key])
         self.assertEqual("/usr/sbin/tr3000-lite-uplink-status",contract["uplink_status"])

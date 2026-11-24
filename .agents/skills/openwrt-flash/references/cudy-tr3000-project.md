@@ -9,7 +9,7 @@
 | Lite 系统固件 | [`TR3000 Lite firmware`](../../../../.github/workflows/build-lite.yml) | `tr3000-lite-128m-ubootmod-112m` | Cudy TR3000 v1、128 MiB NAND、`cudy_tr3000-v1-ubootmod`、112 MiB UBI | `firmware/` 中匹配 profile 的非空 `sysupgrade.bin`、`SHA256SUMS`、构建配置、包清单、源码与 feed 记录、日志 |
 | DHCP U-Boot | [`TR3000 DHCP U-Boot`](../../../../.github/workflows/build-uboot.yml) | `tr3000-dhcp-uboot-128m-multilayout` | Cudy TR3000 v1、MT7981、128 MiB multi-layout | `images/` 中各一个 BL2 与 multi-layout FIP、`SHA256SUMS`、`uboot-commit.txt`、`FLASH-TARGETS.txt`、许可证状态和日志 |
 
-以仓库文件为事实源：[Lite 说明](../../../../docs/LITE-README.md)、[U-Boot 安全说明](../../../../docs/UBOOT-SAFETY.md)、[`build-lite.sh`](../../../../scripts/build-lite.sh) 和 [`build-uboot.sh`](../../../../scripts/build-uboot.sh)。工作流或脚本改变后重新读取，不能只依赖本页的旧副本。
+以仓库文件为事实源：[Lite 说明](../../../../devices/tr3000/lite/README.md)、[U-Boot 安全说明](../../../../devices/tr3000/uboot/README.md)、[`build-lite.sh`](../../../../devices/tr3000/build/build-lite.sh) 和 [`build-uboot.sh`](../../../../devices/tr3000/build/build-uboot.sh)。工作流或脚本改变后重新读取，不能只依赖本页的旧副本。
 
 以下目标当前**不可从上述产物推导**：
 

@@ -17,7 +17,7 @@ FIXTURE_RANDOM = bytes(range(16)) * 4
 FIXTURE_KEY = hashlib.sha256(FIXTURE_RANDOM[:16]).hexdigest()[:32]
 FIXTURE_SUFFIX = hashlib.sha256(FIXTURE_RANDOM[:3]).hexdigest()[:6].upper()
 
-SCRIPT = ROOT/'overlays/devices/tr3000-lite/files/etc/uci-defaults/91-tr3000-lite-management-ap'
+SCRIPT = ROOT/'devices/tr3000/lite/files/etc/uci-defaults/91-tr3000-lite-management-ap'
 FAKE = r'''
 import hashlib, json, os, pathlib, sys
 # Mirror Linux UCI bytes even when this command double runs on Windows.
@@ -249,7 +249,7 @@ file=91-tr3000-lite-management-ap
         return target
 
     def run_service(self, *args, success=True, **extra):
-        service=ROOT/'scripts/tr3000-lite-wifi.sh'
+        service=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-wifi.sh'
         self.assertTrue(service.is_file(),'wireless self-healing controller is missing')
         text=service.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
         for old,new in (('/etc/',self.root.as_posix()+'/etc/'),
@@ -369,7 +369,7 @@ file=91-tr3000-lite-management-ap
         # configuration, so it has to retry instead of giving up for the boot.
         self.install_ap_script(); self.install_fake_wifi()
         (self.root/'etc/config/wireless').unlink(missing_ok=True)
-        init=ROOT/'overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-wifi'
+        init=ROOT/'devices/tr3000/lite/files/etc/init.d/tr3000-lite-wifi'
         self.assertTrue(init.is_file(),'the wireless init service is missing')
         text=init.read_text().replace('#!/bin/sh /etc/rc.common','#!/bin/sh')
         for old,new in (('/etc/',self.root.as_posix()+'/etc/'),
@@ -378,7 +378,7 @@ file=91-tr3000-lite-management-ap
             text=text.replace(old,new)
         # The controller and the fake wifi helper have to exist for the service.
         shutil_src=self.root/'bin/tr3000-lite-wifi'
-        shutil_src.write_text((ROOT/'scripts/tr3000-lite-wifi.sh').read_text()
+        shutil_src.write_text((ROOT/'devices/tr3000/lite/runtime/tr3000-lite-wifi.sh').read_text()
                               .replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd \"$WIFI_FIXTURE/bin\" && pwd):/usr/bin:/bin"')
                               .replace('/etc/',self.root.as_posix()+'/etc/')
                               .replace('/usr/sbin/tr3000-lite-wifi-ap',(self.root/'usr/sbin/tr3000-lite-wifi-ap').as_posix())
@@ -569,7 +569,7 @@ file=91-tr3000-lite-management-ap
             self.assertTrue(all(c in '0123456789abcdef' for c in d[ap+'.key']))
 
     def test_ap_creation_does_not_mutate_plant_policy(self):
-        firewall=ROOT/'overlays/devices/tr3000-lite/files/etc/config/firewall'
+        firewall=ROOT/'devices/tr3000/lite/files/etc/config/firewall'
         (self.root/'etc/config'/firewall.name).write_bytes(firewall.read_bytes())
         self.run_ap()
         self.assertEqual(firewall.read_bytes(),(self.root/'etc/config'/firewall.name).read_bytes())

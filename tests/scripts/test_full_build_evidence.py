@@ -5,8 +5,8 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, uci_sections
 
-BUILD = ROOT / "scripts/build-full.sh"
-OVERLAY = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+BUILD = ROOT / "devices/tr3000/build/build-full.sh"
+OVERLAY = ROOT / "devices/tr3000/full/files/etc/config"
 
 
 def contract_fields() -> dict:
@@ -75,7 +75,7 @@ class FullBuildEvidenceTests(unittest.TestCase):
         self.assertEqual("0", ddns["cloudflare_v4"]["enabled"])
 
     def test_image_size_gate_is_unchanged(self) -> None:
-        text = (ROOT / "scripts/verify-image.sh").read_text(encoding="utf-8")
+        text = (ROOT / "devices/tr3000/build/verify-image.sh").read_text(encoding="utf-8")
         self.assertIn("MAX_BYTES=104857600", text)
         self.assertIn("verify-image.sh", BUILD.read_text(encoding="utf-8"))
 

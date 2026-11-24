@@ -9,6 +9,12 @@ SKILL_FILE = SKILL_DIR / "SKILL.md"
 
 
 class OpenWrtFirmwareConfigSkillTests(unittest.TestCase):
+    def test_skill_uses_current_device_input_paths(self):
+        text = SKILL_FILE.read_text(encoding="utf-8")
+        self.assertIn("devices/tr3000/lite/config.seed", text)
+        self.assertIn("devices/tr3000/build/configure-lite.sh", text)
+        self.assertNotIn("`configs/lite.seed`", text)
+
     def test_frontmatter_parser_rejects_ambiguous_colon_scalars(self):
         malformed = (
             "name: openwrt-firmware-config\n"

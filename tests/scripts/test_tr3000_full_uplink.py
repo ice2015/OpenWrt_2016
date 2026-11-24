@@ -12,12 +12,12 @@ from tests.scripts.test_tr3000_full_drift import rename
 from tests.scripts.test_tr3000_lite_uplink import FAKE as LITE_UPLINK_FAKE, lease, route
 from tests.scripts.test_tr3000_lite_usbwan import FAKE as USB_FAKE
 
-SCRIPT = ROOT/'scripts/tr3000-full-uplink-watch.sh'
-LIB = ROOT/'scripts/tr3000-full-uplink-lib.sh'
-STATUS = ROOT/'scripts/tr3000-full-uplink-status.sh'
-CHANGED = ROOT/'scripts/tr3000-full-uplink-changed.sh'
-USBWAN_LIB = ROOT/'scripts/tr3000-full-usbwan-lib.sh'
-USB_HOOK = ROOT/'overlays/devices/tr3000-full/files/etc/hotplug.d/net/90-tr3000-full-usbwan'
+SCRIPT = ROOT/'devices/tr3000/full/runtime/tr3000-full-uplink-watch.sh'
+LIB = ROOT/'devices/tr3000/full/runtime/tr3000-full-uplink-lib.sh'
+STATUS = ROOT/'devices/tr3000/full/runtime/tr3000-full-uplink-status.sh'
+CHANGED = ROOT/'devices/tr3000/full/runtime/tr3000-full-uplink-changed.sh'
+USBWAN_LIB = ROOT/'devices/tr3000/full/runtime/tr3000-full-usbwan-lib.sh'
+USB_HOOK = ROOT/'devices/tr3000/full/files/etc/hotplug.d/net/90-tr3000-full-usbwan'
 
 # Same controlled boundaries as Lite, with the Full event name and the single
 # standard wg interface instead of the two industrial WG roles.
@@ -66,7 +66,7 @@ class FullUplinkTests(unittest.TestCase):
         text = SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin',
                                           'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text = text.replace('/usr/lib/tr3000-full/uplink-lib.sh', str(LIB))
-        text = text.replace('/usr/sbin/lite-common.sh', str(ROOT/'scripts/lite-common.sh'))
+        text = text.replace('/usr/sbin/lite-common.sh', str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
         for prefix in ('/var/run', '/etc/config', '/usr/lib/tr3000-full/uplink-changed',
                        '/etc/hotplug.d/net', '/usr/sbin/tr3000-full-remote'):
             text = text.replace(prefix, str(self.root)+prefix)
@@ -147,7 +147,7 @@ class FullUplinkTests(unittest.TestCase):
         self.run_watch(); self.assertEqual(3, len(self.events()))
 
     def test_usbwan_lib_is_a_pure_rename_of_lite(self):
-        expected = rename((ROOT/'scripts/tr3000-lite-usbwan-lib.sh').read_text(encoding='utf-8'))
+        expected = rename((ROOT/'devices/tr3000/lite/runtime/tr3000-lite-usbwan-lib.sh').read_text(encoding='utf-8'))
         self.assertEqual(expected, USBWAN_LIB.read_text(encoding='utf-8'))
 
 

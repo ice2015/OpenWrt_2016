@@ -190,7 +190,7 @@ class PlantControllerTests(unittest.TestCase):
         config = self.root / 'etc/config'
         config.mkdir(parents=True)
         for name in ('network', 'firewall', 'dhcp'):
-            shutil.copyfile(ROOT / 'overlays/devices/tr3000-lite/files/etc/config' / name, config/name)
+            shutil.copyfile(ROOT / 'devices/tr3000/lite/files/etc/config' / name, config/name)
         # Canonical fixture text: the fake UCI writes sections the same way.
         for name in ('network', 'firewall'):
             (config/name).write_text(self.render_sections(uci_sections((config/name).read_text())))
@@ -210,7 +210,7 @@ class PlantControllerTests(unittest.TestCase):
         self.env['PATH'] = bindir.as_posix()+os.pathsep+os.environ['PATH']
 
     def run_controller(self, *args, code=0, **environment):
-        result = subprocess.run([bash_executable(), '-c', 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; PLANT_TEST_PATH=$PATH; export PATH PLANT_TEST_PATH; exec sh "$@"', 'sh', (ROOT/'scripts/tr3000-lite-plant.sh').as_posix(), *args], env=dict(self.env, **environment), text=True, capture_output=True)
+        result = subprocess.run([bash_executable(), '-c', 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; PLANT_TEST_PATH=$PATH; export PATH PLANT_TEST_PATH; exec sh "$@"', 'sh', (ROOT/'devices/tr3000/lite/runtime/tr3000-lite-plant.sh').as_posix(), *args], env=dict(self.env, **environment), text=True, capture_output=True)
         self.assertEqual(code, result.returncode, result.stdout+result.stderr)
         data = json.loads(result.stdout)
         self.assertEqual({'schema_version','mode','lan','plant','ap_ready','legacy_config_detected','checks','backup_id','rollback'}, set(data))
@@ -232,7 +232,7 @@ class PlantControllerTests(unittest.TestCase):
         # Run actual startup and location selection under a chosen shell $0.
         # The harness supplies the source library because Windows cannot mount
         # this fixture at the real /usr/sbin and /usr/lib installation paths.
-        source = (ROOT/'scripts/tr3000-lite-plant.sh').read_text()
+        source = (ROOT/'devices/tr3000/lite/runtime/tr3000-lite-plant.sh').read_text()
         bootstrap = source.split('SCRIPT_DIR=',1)[0]
         locations = source[source.index('ROOT='):source.index('CHECKS=')]
         program = 'PATH="$(cd "$PLANT_ROOT/bin" && pwd):$PATH"; export PATH\n' + bootstrap + '''
@@ -241,7 +241,7 @@ dirname "$0" >/dev/null
 ''' + locations + '''
 printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
 '''
-        result = subprocess.run([bash_executable(),'-c',program,identity,(ROOT/'scripts/tr3000-lite-plant-lib.sh').as_posix()],env=dict(self.env,**environment),text=True,capture_output=True)
+        result = subprocess.run([bash_executable(),'-c',program,identity,(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-plant-lib.sh').as_posix()],env=dict(self.env,**environment),text=True,capture_output=True)
         self.assertEqual(0,result.returncode,result.stdout+result.stderr)
         return result.stdout.splitlines()
 
@@ -261,7 +261,7 @@ printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
         self.assertEqual(['','/etc/config','/etc/tr3000-lite/backups','/var/lock/tr3000-lite-plant'],data[1:])
 
     def test_source_identity_requires_explicit_test_mode(self):
-        identity = (ROOT/'scripts/tr3000-lite-plant.sh').as_posix()
+        identity = (ROOT/'devices/tr3000/lite/runtime/tr3000-lite-plant.sh').as_posix()
         for mode in ('','0'):
             with self.subTest(mode=mode):
                 data = self.startup_probe(identity,PLANT_TEST_MODE=mode,PLANT_TEST_PATH='/attacker')
@@ -274,7 +274,7 @@ printf '%s\n' "$PATH" "$ROOT" "$CONFIG" "$BACKUPS" "$LOCK"
     def test_test_mode_predicate_is_bound_to_source_identity(self):
         for identity, mode, expected in (('/usr/sbin/tr3000-lite-plant','1','disabled'),('/tmp/tr3000-lite-plant','1','disabled'),('/repo/scripts/tr3000-lite-plant.sh','0','disabled'),('/repo/scripts/tr3000-lite-plant.sh','1','enabled')):
             with self.subTest(identity=identity,mode=mode):
-                result = subprocess.run([bash_executable(),'-c','. "$1"; if plant_test_mode_allowed "$0" "$2"; then printf enabled; else printf disabled; fi',identity,(ROOT/'scripts/tr3000-lite-plant-lib.sh').as_posix(),mode],text=True,capture_output=True)
+                result = subprocess.run([bash_executable(),'-c','. "$1"; if plant_test_mode_allowed "$0" "$2"; then printf enabled; else printf disabled; fi',identity,(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-plant-lib.sh').as_posix(),mode],text=True,capture_output=True)
                 self.assertEqual(0,result.returncode,result.stderr)
                 self.assertEqual(expected,result.stdout)
 

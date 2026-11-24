@@ -127,14 +127,14 @@ def run_lite_configure(
         fake_make = fake_bin / "make"
         fake_make.write_text("#!/bin/sh\n" + (
             "test -f package/luci-app-tr3000-lite/Makefile || exit 19\n"
-            if (repo_root / "packages/luci-app-tr3000-lite").is_dir() else ""
+            if (repo_root / "devices/tr3000/lite/packages/luci-app-tr3000-lite").is_dir() else ""
         ) + "exit 0\n", encoding="utf-8")
         fake_make.chmod(0o755)
         environment = dict(os.environ)
         environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
         arguments = [
             bash_executable(),
-            (repo_root / "scripts/configure-lite.sh").as_posix(),
+            (repo_root / "devices/tr3000/build/configure-lite.sh").as_posix(),
             "--source-dir", source.as_posix(),
             "--base-config", base_config.as_posix(),
         ]
@@ -160,7 +160,7 @@ def run_lite_configure(
             else ""
         )
         installed_assets = {
-            path.relative_to(source).as_posix(): path.read_text(encoding="utf-8")
+            path.relative_to(source).as_posix(): (os.readlink(path) if path.is_symlink() else path.read_text(encoding="utf-8"))
             for path in source.rglob("*")
             if path.is_file() and path.relative_to(source).parts[0] in ("files", "package")
         }
@@ -200,6 +200,7 @@ def run_full_configure(
     include_singbox: str | None = None,
     include_cloudflared: str | None = None,
     dts_contents: str = "reg = <0x5c0000 0x7000000>;\n",
+    repo_root: Path = ROOT,
 ) -> tuple[subprocess.CompletedProcess[str], str, dict[str, str]]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -219,7 +220,7 @@ def run_full_configure(
         environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
         arguments = [
             bash_executable(),
-            (ROOT / "scripts/configure-full.sh").as_posix(),
+            (repo_root / "devices/tr3000/build/configure-full.sh").as_posix(),
             "--source-dir", source.as_posix(),
             "--base-config", base_config.as_posix(),
         ]
@@ -251,7 +252,7 @@ def run_full_configure(
             else ""
         )
         installed_assets = {
-            path.relative_to(source).as_posix(): path.read_text(encoding="utf-8")
+            path.relative_to(source).as_posix(): (os.readlink(path) if path.is_symlink() else path.read_text(encoding="utf-8"))
             for path in source.rglob("*")
             if path.is_file()
         }
@@ -324,11 +325,11 @@ class ScriptInterfaceTests(unittest.TestCase):
             "tr3000-lite-remote-boot-close.sh",
             "tr3000-lite-ddns-status.sh",
             "tr3000-lite-ddns-lib.sh",
-            "../overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-remote",
-            "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync",
-            "../overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
-            "../overlays/devices/tr3000-lite/files/etc/init.d/lite-uplink-watch",
-            "../overlays/devices/tr3000-lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
+            "../devices/tr3000/lite/files/etc/init.d/tr3000-lite-remote",
+            "../devices/tr3000/lite/files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync",
+            "../devices/tr3000/lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
+            "../devices/tr3000/lite/files/etc/init.d/lite-uplink-watch",
+            "../devices/tr3000/lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
         )
         for name in scripts:
             with self.subTest(script=name):
@@ -517,12 +518,12 @@ class ScriptInterfaceTests(unittest.TestCase):
         self.assertIn("files/root/scripts/preflight.sh", assets)
         self.assertIn("files/etc/ssh/sshd_config.d/99-tr3000-lite.conf", assets)
         self.assertNotIn("files/etc/config/tr3000-lite", assets)
-        self.assertEqual((ROOT / "files/etc/config/ubihealthd").read_text(encoding="utf-8"), assets["files/etc/config/ubihealthd"])
+        self.assertEqual((ROOT / "devices/tr3000/shared/files/etc/config/ubihealthd").read_text(encoding="utf-8"), assets["files/etc/config/ubihealthd"])
 
         full_result, _, full_assets = run_full_configure(full_base_config())
         self.assertEqual(0, full_result.returncode, full_result.stderr)
         for config in ("network", "dhcp", "firewall"):
-            self.assertEqual((ROOT / f"overlays/devices/tr3000-full/files/etc/config/{config}").read_text(encoding="utf-8"), full_assets[f"files/etc/config/{config}"])
+            self.assertEqual((ROOT / f"devices/tr3000/full/files/etc/config/{config}").read_text(encoding="utf-8"), full_assets[f"files/etc/config/{config}"])
         self.assertNotIn("files/etc/config/tr3000-lite", full_assets)
         self.assertFalse(any("tr3000-lite" in path for path in full_assets))
         for retired in ("plant-profile.sh", "plant-access.sh", "singbox-rollback.sh"):
@@ -545,8 +546,9 @@ class ScriptInterfaceTests(unittest.TestCase):
     def test_lite_config_rejects_missing_device_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
-            for subdir in ("scripts", "configs", "files"):
+            for subdir in ("scripts", "devices"):
                 shutil.copytree(ROOT / subdir, repo / subdir)
+            shutil.rmtree(repo / "devices/tr3000/lite/files")
             result, _, assets = run_lite_configure(lite_base_config(), repo_root=repo)
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Lite overlay not found", result.stderr)

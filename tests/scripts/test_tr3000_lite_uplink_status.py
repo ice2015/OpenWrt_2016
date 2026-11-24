@@ -10,7 +10,7 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, run_lite_configure
 
-SCRIPT=ROOT/'scripts/tr3000-lite-uplink-status.sh'
+SCRIPT=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-uplink-status.sh'
 SECRET='PRIVATE-key-token-and-hotspot-password'
 FAKE=r'''
 import json, os, pathlib, re, sys
@@ -93,9 +93,9 @@ class UplinkStatusTests(unittest.TestCase):
         self.assertTrue(SCRIPT.is_file(),'fixed read-only uplink status controller is missing')
         source=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin',
                                          'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
-        source=source.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
-        source=source.replace('/usr/lib/tr3000-lite/uplink-lib.sh',str(ROOT/'scripts/tr3000-lite-uplink-lib.sh'))
-        source=source.replace('/usr/lib/tr3000-lite/plant-lib.sh',str(ROOT/'scripts/tr3000-lite-plant-lib.sh'))
+        source=source.replace('/usr/sbin/lite-common.sh',str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
+        source=source.replace('/usr/lib/tr3000-lite/uplink-lib.sh',str(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-uplink-lib.sh'))
+        source=source.replace('/usr/lib/tr3000-lite/plant-lib.sh',str(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-plant-lib.sh'))
         source=source.replace('/var/run',str(self.root/'var/run'))
         script=self.root/'status.sh'; script.write_text(source)
         result=subprocess.run([bash_executable(),str(script),*(args or ('--json',))],capture_output=True,text=True,

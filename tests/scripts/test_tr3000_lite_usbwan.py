@@ -11,8 +11,8 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, run_lite_configure
 
-LIB = ROOT/'scripts/tr3000-lite-usbwan-lib.sh'
-HOOK = ROOT/'overlays/devices/tr3000-lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan'
+LIB = ROOT/'devices/tr3000/lite/runtime/tr3000-lite-usbwan-lib.sh'
+HOOK = ROOT/'devices/tr3000/lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan'
 FAKE = r'''
 import json, os, pathlib, sys, time
 root=pathlib.Path(os.environ['USB_FIXTURE']); command=sys.argv[1]; args=sys.argv[2:]

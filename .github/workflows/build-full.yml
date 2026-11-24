@@ -73,7 +73,7 @@ jobs:
           path: |
             ${{ runner.temp }}/tr3000-full/ccache
             ${{ runner.temp }}/tr3000-full/dl
-          key: tr3000-full-${{ runner.os }}-${{ env.SOURCE_SHA }}-${{ hashFiles('feeds/devices/tr3000-full.lock', 'configs/full.seed') }}
+          key: tr3000-full-${{ runner.os }}-${{ env.SOURCE_SHA }}-${{ hashFiles('devices/tr3000/full/feeds.lock', 'devices/tr3000/full/config.seed') }}
 
       - name: Clone pinned upstream project and firmware source
         shell: bash
@@ -96,7 +96,7 @@ jobs:
           set -Eeuo pipefail
           jobs="$(nproc)"
           (( jobs > 4 )) && jobs=4
-          sh scripts/build-full.sh \
+          sh devices/tr3000/build/build-full.sh \
             --source-dir "$RUNNER_TEMP/tr3000-full/source" \
             --upstream-dir "$RUNNER_TEMP/tr3000-full/project" \
             --artifact-dir "$GITHUB_WORKSPACE/full-artifact" \

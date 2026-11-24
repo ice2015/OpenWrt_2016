@@ -10,8 +10,8 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, full_base_config, run_lite_configure, run_full_configure
 
-SCRIPT = ROOT/'scripts/tr3000-lite-uplink-watch.sh'
-LIB = ROOT/'scripts/tr3000-lite-uplink-lib.sh'
+SCRIPT = ROOT/'devices/tr3000/lite/runtime/tr3000-lite-uplink-watch.sh'
+LIB = ROOT/'devices/tr3000/lite/runtime/tr3000-lite-uplink-lib.sh'
 FAKE = r'''
 import json, os, pathlib, re, signal, sys
 root=pathlib.Path(os.environ['UPLINK_FIXTURE']); command=sys.argv[1]; args=sys.argv[2:]
@@ -141,7 +141,7 @@ class UplinkTests(unittest.TestCase):
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin',
                                       'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text=text.replace('/usr/lib/tr3000-lite/uplink-lib.sh',str(LIB))
-        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
+        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
         for prefix in ('/var/run','/etc/config','/usr/lib/tr3000-lite/uplink-changed','/etc/hotplug.d/net','/usr/sbin/tr3000-lite-remote'):
             text=text.replace(prefix,str(self.root)+prefix)
         path=self.root/'watch.sh'; path.write_text(text)
@@ -383,7 +383,7 @@ esac
         remote.chmod(0o755)
         self.data['config'].update({'network.wg_direct.proto':'wireguard','network.wg_direct.auto':'1',
                                     'network.wg_vps.proto':'wireguard','network.wg_vps.auto':'0'}); self.save()
-        text=(ROOT/'scripts/tr3000-lite-uplink-changed.sh').read_text().replace(
+        text=(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-uplink-changed.sh').read_text().replace(
             'PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text=text.replace('/usr/sbin/tr3000-lite-remote',str(remote))
         script=self.root/'event.sh'; script.write_text(text)
@@ -398,7 +398,7 @@ esac
         self.assertEqual(2,len(self.load().get('wg_actions',[])),'failed sync must not restart any WG role')
 
     def test_event_hook_emits_only_validated_public_transition(self):
-        hook=ROOT/'scripts/tr3000-lite-uplink-changed.sh'
+        hook=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-uplink-changed.sh'
         self.assertTrue(hook.is_file(), 'missing public uplink event hook')
         text=hook.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin',
                                      'PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
@@ -425,8 +425,8 @@ esac
         self.assertEqual(LIB.read_text(),assets['files/usr/lib/tr3000-lite/uplink-lib.sh'])
         result,_,assets=run_full_configure(full_base_config())
         self.assertEqual(0,result.returncode,result.stderr)
-        self.assertEqual((ROOT/'scripts/tr3000-full-uplink-watch.sh').read_text(),assets['files/usr/sbin/tr3000-full-uplink-watch'])
-        self.assertEqual((ROOT/'scripts/tr3000-full-uplink-lib.sh').read_text(),assets['files/usr/lib/tr3000-full/uplink-lib.sh'])
+        self.assertEqual((ROOT/'devices/tr3000/full/runtime/tr3000-full-uplink-watch.sh').read_text(),assets['files/usr/sbin/tr3000-full-uplink-watch'])
+        self.assertEqual((ROOT/'devices/tr3000/full/runtime/tr3000-full-uplink-lib.sh').read_text(),assets['files/usr/lib/tr3000-full/uplink-lib.sh'])
         self.assertNotIn('files/usr/sbin/lite-uplink-watch',assets)
         self.assertNotIn('files/etc/init.d/lite-uplink-watch',assets)
         self.assertNotIn('files/etc/config/lite-uplink-watch',assets)

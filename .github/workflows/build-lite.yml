@@ -61,7 +61,7 @@ jobs:
           path: |
             ${{ runner.temp }}/tr3000-lite/ccache
             ${{ runner.temp }}/tr3000-lite/dl
-          key: tr3000-lite-${{ runner.os }}-${{ env.SOURCE_SHA }}-${{ hashFiles('feeds/devices/tr3000-lite.lock', 'configs/lite.seed') }}
+          key: tr3000-lite-${{ runner.os }}-${{ env.SOURCE_SHA }}-${{ hashFiles('devices/tr3000/lite/feeds.lock', 'devices/tr3000/lite/config.seed') }}
 
       - name: Clone pinned upstream project and firmware source
         shell: bash
@@ -84,7 +84,7 @@ jobs:
           set -Eeuo pipefail
           jobs="$(nproc)"
           (( jobs > 4 )) && jobs=4
-          sh scripts/build-lite.sh \
+          sh devices/tr3000/build/build-lite.sh \
             --source-dir "$RUNNER_TEMP/tr3000-lite/source" \
             --upstream-dir "$RUNNER_TEMP/tr3000-lite/project" \
             --artifact-dir "$GITHUB_WORKSPACE/lite-artifact" \

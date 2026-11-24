@@ -71,7 +71,7 @@ class WifiClientTests(unittest.TestCase):
         node = shutil.which('node')
         if node is None:
             self.skipTest('Node.js is required for the LuCI behavior test')
-        view = ROOT/'packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js'
+        view = ROOT/'devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js'
         harness = r'''
 const assert = require('node:assert/strict');
 const source = require('node:fs').readFileSync(process.argv[1], 'utf8');

@@ -35,7 +35,7 @@ common → distribution → device → local
 |---|---|---|
 | common | 所有设备和 OpenWrt/ImmortalWrt 都需要 | `configs/common/`、`feeds/common.conf`、`patches/common/`、`overlays/common/files/` |
 | distribution | 只属于 OpenWrt 或 ImmortalWrt | 对应发行版 config/feed/patch 目录 |
-| device | 只属于一个硬件或固件变体 | `configs/devices/`、`feeds/devices/`、`patches/devices/`、`overlays/devices/` |
+| device | 只属于一个硬件或固件变体 | `devices/<id>/`；TR3000 先 shared 再 lite/full；尚未迁移设备沿用旧 device 层目录 |
 | local | 个人实验、网络和秘密 | 被忽略的 `local/`；不能成为 CI 隐式依赖 |
 
 公共层改动必须列出全部受影响目标。需求只提到一台设备时，默认从 device 层开始论证；“以后可能复用”不足以把它上移到 common。
@@ -43,16 +43,16 @@ common → distribution → device → local
 按类型选择文件：
 
 - 目标、源码版本、层引用、产物匹配：`manifests/`。
-- 原生 Kconfig：`configs/`，保留 `CONFIG_...` 语法。
+- 原生 Kconfig：公共/发行版用 `configs/`，设备用 `devices/<id>/`，保留 `CONFIG_...` 语法。
 - 附加软件源：`feeds/`，固定可复现 revision。
 - 源码差异：`patches/`，说明适用 revision。
-- rootfs 文件：`overlays/` 或项目已有 `files/` 路径。
-- 稳定构建逻辑：`scripts/`；工作流只传入数据和调用脚本。
+- rootfs 文件：公共层用 `overlays/`，TR3000 用 `devices/tr3000/shared/files/` 与选定变体的 `files/`。
+- 稳定构建逻辑：公共工具用 `scripts/`，TR3000 真实实现用 `devices/tr3000/build/`；根 scripts 保留兼容入口，工作流调用真实实现。
 
 ## 设备与固件变体重点
 
 - **TR3000 通用入口**：manifest 的目标字段仍可能是 `UNRESOLVED`。先核实制造商、硬件修订和上游 revision，不能复制 Lite 值。
-- **TR3000 Lite**：独立的固定源码/feeds、`128muboot.config`、U-Boot Mod profile 与 112 MiB UBI 路径。以 `configs/lite.seed`、`scripts/configure-lite.sh`、`scripts/build-lite.sh` 和 Lite 工作流为准。
+- **TR3000 Lite**：独立的固定源码/feeds、`128muboot.config`、U-Boot Mod profile 与 112 MiB UBI 路径。以 `devices/tr3000/lite/config.seed`、`devices/tr3000/build/configure-lite.sh`、`devices/tr3000/build/build-lite.sh` 和 Lite 工作流为准。
 - **TR3000 U-Boot**：与系统固件分离；不要把 bootloader 构建当成普通软件包配置，也不要把系统固件产物当成通用刷机镜像。
 - **x86_64**：先确定镜像类型、启动方式、分区和文件系统策略，再解析 target/profile 与产物规则。
 - **Raspberry Pi**：先确定精确型号及修订。不能用笼统的 “Raspberry Pi” 猜 `subtarget` 或 `profile`。
@@ -108,7 +108,7 @@ common → distribution → device → local
 
 - **症状**：`tools/m4` configure 无法计算目标文件后缀，并行和串行重试都失败。
 - **已确认根因**：上游基础配置中的 `CONFIG_CCACHE_DIR="/workdir/.ccache"` 覆盖 GitHub Runner 实际的临时 ccache 目录。链接探测可通过，而真正的 `-c` 编译需要写缓存临时文件时失败。
-- **修复**：`scripts/build-lite.sh` 把实际 `CCACHE_DIR` 传给 `scripts/configure-lite.sh`，合并配置时覆盖固定路径。
+- **修复**：`devices/tr3000/build/build-lite.sh` 把实际 `CCACHE_DIR` 传给 `devices/tr3000/build/configure-lite.sh`，合并配置时覆盖固定路径。
 - **验证**：先检查 artifact 中最终 `build.config` 的 `CONFIG_CCACHE_DIR`，再检查 `build_dir/host/m4*/config.log` 的底层编译错误。若 Actions 显示 cache miss，删除旧缓存不能修复路径不一致；不要把清缓存作为默认答案。
 
 ### 带连字符的软件包配置被错误保留
@@ -145,7 +145,7 @@ common → distribution → device → local
 
 - **症状**：GitHub Actions 构建执行满 6 小时后提示 `The job has exceeded the maximum execution time of 6h0m0s` 并被取消；查看 `build.log` 发现数万行在编译 `rustc-1.94.0-src`。
 - **已确认根因**：上游基线配置默认开启 `CONFIG_PACKAGE_ruby=y`，新版 packages 源中的 `ruby` 依赖 host 端 Rust 自举编译。在 2 核 Runner 上从源码编译整个 `rustc` 需要数小时。
-- **修复**：在设备 seed（如 `configs/lite.seed` 与 `configs/full.seed`）中显式加入 `# CONFIG_PACKAGE_ruby is not set` 与 `# CONFIG_PACKAGE_libruby is not set`，并在配置脚本中加入排除检查。
+- **修复**：在设备 seed（如 `devices/tr3000/lite/config.seed` 与 `devices/tr3000/full/config.seed`）中显式加入 `# CONFIG_PACKAGE_ruby is not set` 与 `# CONFIG_PACKAGE_libruby is not set`，并在配置脚本中加入排除检查。
 - **验证**：检查合并后的 `build.config` 中不含 `CONFIG_PACKAGE_ruby=y`；构建跳过 Rust 工具链编译，总耗时控制在 1 小时内。
 
 ### `tcpdump-mini` 与上游 `tcpdump` 在 rootfs 组装时文件冲突
@@ -159,7 +159,7 @@ common → distribution → device → local
 
 - **症状**：LuCI 软件包管理器对每个 feed 报 `Failed to download ... wget returned 4`；设备上 `ping 1.1.1.1` 通、`nslookup 域名 192.168.x.1`（显式指定服务器）也通，但 `wget`/`opkg`/`nslookup 域名`（走系统解析器）全部失败。
 - **已确认根因（2026-11-24 真机）**：Lite overlay 的 `/etc/config/network` 整体覆盖上游默认时**丢掉了 `loopback` 接口段** → `lo` 处于 DOWN 且无地址 → dnsmasq 无法绑定 `127.0.0.1:53`，而 `/etc/resolv.conf` 指向 `nameserver 127.0.0.1` → 路由器自身解析全灭。连锁反应：NTP 无法解析服务器 → 时钟停在构建日期 → 即使手动修好 DNS，TLS 下载仍报 `Issued certificate not yet valid`。这不是网络/镜像站问题。
-- **修复**：overlay `network` 补回 `config interface 'loopback'`（`device 'lo'`、`proto 'static'`、`ipaddr '127.0.0.1'`、`netmask '255.0.0.0'`）；`scripts/build-lite.sh` 在编译前断言该段存在。Full overlay 一直有这段，Lite 重写时遗漏。
+- **修复**：overlay `network` 补回 `config interface 'loopback'`（`device 'lo'`、`proto 'static'`、`ipaddr '127.0.0.1'`、`netmask '255.0.0.0'`）；`devices/tr3000/build/build-lite.sh` 在编译前断言该段存在。Full overlay 一直有这段，Lite 重写时遗漏。
 - **验证**：真机 `ip addr show lo` 应有 `127.0.0.1/8` 且 UP；`netstat -lnp | grep 127.0.0.1:53` 有 dnsmasq；`nslookup mirrors.vsean.net`（不指定服务器）成功；NTP 同步后 `date` 为当前时间；`opkg update` 六个 feed 全部 `Signature check passed`。修复后实测可从 feed 安装 `coreutils-stat`。
 - **教训**：整体覆盖上游 `/etc/config/network` 时，必须逐段核对上游默认（loopback 是最容易丢的一段）；静态契约测试只查 `lan` 段时看不见这个缺口。
 
@@ -167,7 +167,7 @@ common → distribution → device → local
 
 - **症状**：`tr3000-lite-plant` 报 `stat: not found` 后返回 `backup_owner`；管理 AP 首启脚本报 `od: not found` 后 `fail entropy`，AP 永远建不起来。
 - **已确认根因（2026-11-24 真机）**：OpenWrt 的 busybox 默认**不含 `stat` 和 `od` applet**；Lite 镜像只装了 `coreutils`/`coreutils-base64`/`coreutils-nohup`。而 27 处控制器代码用 `stat -c` 做属主/权限门禁，AP 脚本与 DDNS 用 `od` 取随机数。开发机（完整 coreutils）上测试全绿，真机全灭。
-- **修复**：`configs/lite.seed` 增加 `CONFIG_PACKAGE_coreutils-stat=y`（feed 中存在该子包）；`od` 无对应子包，改用 busybox 自带的 `head -c N /dev/urandom | sha256sum | cut -c1-2N` 取随机 hex。新增 `tests/structure/test_lite_device_readiness.py` + `lite-image-commands.txt`（从已验证镜像导出的命令清单）审计所有随镜像脚本的工具调用。
+- **修复**：`devices/tr3000/lite/config.seed` 增加 `CONFIG_PACKAGE_coreutils-stat=y`（feed 中存在该子包）；`od` 无对应子包，改用 busybox 自带的 `head -c N /dev/urandom | sha256sum | cut -c1-2N` 取随机 hex。新增 `tests/structure/test_lite_device_readiness.py` + `lite-image-commands.txt`（从已验证镜像导出的命令清单）审计所有随镜像脚本的工具调用。
 - **验证**：真机 `command -v stat od`；`opkg install coreutils-stat` 后 `stat -c %u` 正常；修补后的 AP 脚本退出 0 并生成受管 AP。审计测试对旧脚本红（检出 od/stat）、对新脚本绿。
 - **教训**：shell 脚本的工具依赖必须对照**目标镜像**的命令清单验证，不能以开发机 PATH 为准；`tests/structure/lite-image-commands.txt` 是唯一事实源，换 busybox 配置或增删包后要重新导出。
 
@@ -188,15 +188,15 @@ common → distribution → device → local
 ### TR3000 Lite：公共 snapshot feed 不可依赖，产物必须自带软件仓库
 
 - **症状**：`opkg update` 时好时坏；镜像站对 `24.10-SNAPSHOT` 路径 404/302，或 feed 里的包版本与固定 revision 构建的镜像不匹配（内核模块 ABI 风险）。
-- **已确认根因**：snapshot 是移动目标，会被镜像站定期清理；固定 commit 的固件不能以活的 snapshot 源为包事实源（与 Full 分支 `docs/FULL-README.md` 的结论一致）。
-- **修复**：`scripts/build-lite.sh` 把本次构建的 `bin/packages/<arch>/{base,packages,luci,routing,telephony}` 与 `bin/targets/.../packages` 连同 `key-build.pub` 一起放进 artifact 的 `package-repo/`；架构名从最终 `.config` 的 `CONFIG_TARGET_ARCH_PACKAGES` 读取，不硬编码。
+- **已确认根因**：snapshot 是移动目标，会被镜像站定期清理；固定 commit 的固件不能以活的 snapshot 源为包事实源（与 Full 分支 `devices/tr3000/full/README.md` 的结论一致）。
+- **修复**：`devices/tr3000/build/build-lite.sh` 把本次构建的 `bin/packages/<arch>/{base,packages,luci,routing,telephony}` 与 `bin/targets/.../packages` 连同 `key-build.pub` 一起放进 artifact 的 `package-repo/`；架构名从最终 `.config` 的 `CONFIG_TARGET_ARCH_PACKAGES` 读取，不硬编码。
 - **验证**：artifact 含 `package-repo/arch/*/Packages.gz` 与 `key-build.pub`；启用方式与 Full 相同：内网 HTTP 提供仓库 → 改写 `/etc/opkg/distfeeds.conf` → 公钥按 usign 约定（base64 解码后 bytes[2:10] 的 hex）放入 `/etc/opkg/keys/<keyid>` → `opkg update`，`check_signature` 保持开启。
 
 ## 完整示例：TR3000 Lite 软件包变更
 
 用户要求：“给 TR3000 Lite 加 OpenClash，并顺手放进 common。”
 
-1. 读取 `configs/lite.seed`，确认 `luci-app-openclash` 当前被显式排除；读取 `scripts/configure-lite.sh`，确认它还在排除包验证中。
+1. 读取 `devices/tr3000/lite/config.seed`，确认 `luci-app-openclash` 当前被显式排除；读取 `devices/tr3000/build/configure-lite.sh`，确认它还在排除包验证中。
 2. 拒绝直接放进 common：请求只针对 Lite，且 112 MiB UBI 的容量、feed 与运行依赖尚未验证。不要创建仓库不存在的新配置层来绕开规则。
 3. 先核实 OpenClash feed 的兼容源码和完整 revision、依赖核心的获取方式、最终镜像大小及可写空间。缺失事实保持未实现，不猜 revision。
 4. 若用户确认改变 Lite 定位，则只在 Lite 设备路径中同步更新 seed、排除/必需包验证、固定 feed、文档和测试。

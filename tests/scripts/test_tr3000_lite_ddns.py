@@ -10,7 +10,7 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable, lite_base_config, run_lite_configure
 
-SCRIPT=ROOT/'scripts/tr3000-lite-ddns-status.sh'
+SCRIPT=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-ddns-status.sh'
 FAKE=r'''
 import json,os,pathlib,re,shlex,sys
 root=pathlib.Path(os.environ['DDNS_FIXTURE']); command=sys.argv[1]; args=sys.argv[2:]
@@ -97,8 +97,8 @@ class DdnsStatusTests(unittest.TestCase):
         self.assertTrue(SCRIPT.is_file(),'sanitized DDNS status controller is missing')
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text=text.replace('OWNER_UID=0','OWNER_UID='+str(os.getuid()))
-        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
-        text=text.replace('/usr/lib/tr3000-lite/ddns-lib.sh',str(ROOT/'scripts/tr3000-lite-ddns-lib.sh'))
+        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
+        text=text.replace('/usr/lib/tr3000-lite/ddns-lib.sh',str(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-ddns-lib.sh'))
         for name in ('tr3000-lite-uplink-status','tr3000-lite-remote'):
             text=text.replace('/usr/sbin/'+name,str(self.root/'bin'/name))
         for prefix in ('/etc/config','/var/run','/proc/uptime'):
@@ -113,14 +113,14 @@ class DdnsStatusTests(unittest.TestCase):
         return json.loads(result.stdout)
 
     def run_event(self,*args,code=0):
-        source=ROOT/'scripts/tr3000-lite-ddns-event.sh'
+        source=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-ddns-event.sh'
         self.assertTrue(source.is_file(),'bounded managed DDNS event worker is missing')
         # Materialize the already-tested status path in this fixture first.
         self.run_status('--json')
         text=source.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="'+str(self.root/'bin')+':/usr/bin:/bin"')
         text=text.replace('OWNER_UID=0','OWNER_UID='+str(os.getuid()))
-        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'scripts/lite-common.sh'))
-        text=text.replace('/usr/lib/tr3000-lite/ddns-lib.sh',str(ROOT/'scripts/tr3000-lite-ddns-lib.sh'))
+        text=text.replace('/usr/sbin/lite-common.sh',str(ROOT/'devices/tr3000/shared/runtime/lite-common.sh'))
+        text=text.replace('/usr/lib/tr3000-lite/ddns-lib.sh',str(ROOT/'devices/tr3000/lite/runtime/tr3000-lite-ddns-lib.sh'))
         text=text.replace('/usr/sbin/tr3000-lite-ddns-status',str(self.root/'status.sh'))
         text=text.replace('/usr/sbin/tr3000-lite-remote',str(self.root/'bin/tr3000-lite-remote'))
         text=text.replace('/usr/sbin/tr3000-lite-uplink-status',str(self.root/'bin/tr3000-lite-uplink-status'))

@@ -1,0 +1,721 @@
+{
+  "baseline": "9ecfdc3237c22d7be1dcd23bc4e33a48cfa83e69",
+  "files": [
+    {
+      "source": "configs/devices/TR3000/TR3000-Full-综合增强版-提示词.md",
+      "target": "devices/tr3000/full/requirements.md",
+      "sha256": "071c94e21a8fd11422dfe480047e21c7eeb639b59edbe4426305bf3fc2ab3b96",
+      "git_mode": "100644"
+    },
+    {
+      "source": "configs/devices/TR3000/TR3000-Lite-工业远程维护版-提示词.md",
+      "target": "devices/tr3000/lite/requirements.md",
+      "sha256": "60c701787c1d47090be4c9d1ab91aa824bc87107301ca2ac56e5a61e21efec05",
+      "git_mode": "100644"
+    },
+    {
+      "source": "configs/devices/tr3000.config",
+      "target": "devices/tr3000/config.config",
+      "sha256": "a8ac30b4ebf29a0f58df1a373bac3534a6d4d819c02c6f573caaea6941c69aae",
+      "git_mode": "100644"
+    },
+    {
+      "source": "configs/full.seed",
+      "target": "devices/tr3000/full/config.seed",
+      "sha256": "e2edb4c6f53a05b243d34806fb658d580e0ba7ba940fc2c21ee3fc25282ce406",
+      "git_mode": "100644"
+    },
+    {
+      "source": "configs/lite.seed",
+      "target": "devices/tr3000/lite/config.seed",
+      "sha256": "53ae2723019a4052107aafb4d64196ff8f2e55ec6aba2611da9739f86387b111",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/CLOUDFLARED-ACCESS.md",
+      "target": "devices/tr3000/docs/CLOUDFLARED-ACCESS.md",
+      "sha256": "be24ca9af29a2f85d400e03d0566aa62d6fddb9f3c7abfcf8697295116798654",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/DDNS-CLOUDFLARE.md",
+      "target": "devices/tr3000/docs/DDNS-CLOUDFLARE.md",
+      "sha256": "6d09028f917d3e199cf679e2ea343c457709cec53f83a604c19a5660360790d9",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/FULL-README.md",
+      "target": "devices/tr3000/full/README.md",
+      "sha256": "a18778c4bb97c31bdd24706d3bedcb153151249911a5f01f1f6750ceb1f93276",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/HOMEPROXY-SPLIT-ROUTING.md",
+      "target": "devices/tr3000/docs/HOMEPROXY-SPLIT-ROUTING.md",
+      "sha256": "e5c0ac3705c612a64ce2fa7838bc4f5d7e6df7e7bf5b775d86ae1fe07f31b772",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/LITE-README.md",
+      "target": "devices/tr3000/lite/README.md",
+      "sha256": "f760e1dd47baceb211782460ac9d75a12ee5818c22a6952021cd74e393c4da21",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/TAILSCALE.md",
+      "target": "devices/tr3000/docs/TAILSCALE.md",
+      "sha256": "64a0a94b36d663f8fad04a996c8462b41689acd40f9b24d4ecbad0aa857f811d",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/TEST-PLAN.md",
+      "target": "devices/tr3000/docs/TEST-PLAN.md",
+      "sha256": "7a3d58308754b452eaf41022d871ced93ac4df0850928ca447b524cf8bbdd8e2",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/TR3000-LITE-LAN-ACCESS.md",
+      "target": "devices/tr3000/docs/TR3000-LITE-LAN-ACCESS.md",
+      "sha256": "87eccccfe319a8918386f23d1232c59eb4016dfac023ae092ae2f616b6991dba",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/TR3000-LITE-PROVISIONING.md",
+      "target": "devices/tr3000/docs/TR3000-LITE-PROVISIONING.md",
+      "sha256": "0704ef8a95df7212bf20d50fd34f21e69f0f25b69b36bcc4cffca28788527531",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/TR3000-LITE-REMOTE-ACCESS.md",
+      "target": "devices/tr3000/docs/TR3000-LITE-REMOTE-ACCESS.md",
+      "sha256": "5f6c70ecf44559af0a16a0dacda3349ba6994e3dc59a520f77be39ef54df2639",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/TUNNEL-ACCESS.md",
+      "target": "devices/tr3000/docs/TUNNEL-ACCESS.md",
+      "sha256": "20366cddbea85642685989c33747efca554fc710c424213a3fd23961f3fc1bae",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/UBOOT-SAFETY.md",
+      "target": "devices/tr3000/uboot/README.md",
+      "sha256": "23cf9c2e96bd4bad5d53610b2ffa0f661c0cb2499da8b151880df1dc9be45fb0",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/WIREGUARD-VPS-ROUTING.md",
+      "target": "devices/tr3000/docs/WIREGUARD-VPS-ROUTING.md",
+      "sha256": "3467344fb7fe75f0c460640e6d9308e263634ed9382b8f17dfebdc6ed1348caa",
+      "git_mode": "100644"
+    },
+    {
+      "source": "docs/cudy-tr3000-uboot-flashing-record.md",
+      "target": "devices/tr3000/uboot/flashing-record.md",
+      "sha256": "94662c3c2ae715b6b4d1525e2f637718511f199567fcbcb6afe110c35d9f572a",
+      "git_mode": "100644"
+    },
+    {
+      "source": "feeds/devices/tr3000-full.lock",
+      "target": "devices/tr3000/full/feeds.lock",
+      "sha256": "091a17beb823e877c66665da46f0a76ae90aeecb87e691c83667539585c0bfa5",
+      "git_mode": "100644"
+    },
+    {
+      "source": "feeds/devices/tr3000-lite.lock",
+      "target": "devices/tr3000/lite/feeds.lock",
+      "sha256": "091a17beb823e877c66665da46f0a76ae90aeecb87e691c83667539585c0bfa5",
+      "git_mode": "100644"
+    },
+    {
+      "source": "files/etc/config/lite-uplink-watch",
+      "target": "devices/tr3000/shared/files/etc/config/lite-uplink-watch",
+      "sha256": "21f368c66aa47533c107a9d5703931b8371027707f3a0efa20dc965928c37e13",
+      "git_mode": "100644"
+    },
+    {
+      "source": "files/etc/config/ubihealthd",
+      "target": "devices/tr3000/shared/files/etc/config/ubihealthd",
+      "sha256": "343074cd810107f46a5259b9236f72479f0e0cecb45f632104b670412be331d3",
+      "git_mode": "100644"
+    },
+    {
+      "source": "files/etc/init.d/lite-uplink-watch",
+      "target": "devices/tr3000/shared/files/etc/init.d/lite-uplink-watch",
+      "sha256": "64d8726931df0a73c3e6dc02054fd3663df00d85a1c353c2a46557a3a4514b68",
+      "git_mode": "100644"
+    },
+    {
+      "source": "files/etc/uci-defaults/90-lite-uplink-watch",
+      "target": "devices/tr3000/shared/files/etc/uci-defaults/90-lite-uplink-watch",
+      "sha256": "0ebc14e5277988e192b703b92ff5abe0d05706b4ac1706745461f724e34fdabb",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/config/ddns",
+      "target": "devices/tr3000/full/files/etc/config/ddns",
+      "sha256": "74601da902e592c4fc7aecbcdbaec9a066b21f2051684ec707c9af06692d64cf",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/config/dhcp",
+      "target": "devices/tr3000/full/files/etc/config/dhcp",
+      "sha256": "c376aee048e120a4eecd1946f2102453ea24f5e6db39693eb261c4b324ba1491",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/config/firewall",
+      "target": "devices/tr3000/full/files/etc/config/firewall",
+      "sha256": "bcc8af54a097f4b12d7e9cf8da0707496077077b93a6efd3b69be3b3dc39523e",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/config/network",
+      "target": "devices/tr3000/full/files/etc/config/network",
+      "sha256": "a14d00308f21f90e97db761ccecedbdaa1af43d00d04222e09ac032c774591c8",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/config/tr3000-full-uplink-watch",
+      "target": "devices/tr3000/full/files/etc/config/tr3000-full-uplink-watch",
+      "sha256": "44bd1fd21b67584335b72e5d5a2919a35279875d5972a46f12fbafe3d0a62fbd",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/hotplug.d/iface/95-tr3000-full-uplink-reconcile",
+      "target": "devices/tr3000/full/files/etc/hotplug.d/iface/95-tr3000-full-uplink-reconcile",
+      "sha256": "6be5502d3ceb29b2543860ddbc7cb813be98819b1cb9a7f429fa97dfa5153563",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/hotplug.d/net/90-tr3000-full-usbwan",
+      "target": "devices/tr3000/full/files/etc/hotplug.d/net/90-tr3000-full-usbwan",
+      "sha256": "4bde1cb2ce5ae34249b8eaa96bff2a70c9e6cc25d0317432cafdf194b9f04756",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/init.d/tr3000-full-uplink-watch",
+      "target": "devices/tr3000/full/files/etc/init.d/tr3000-full-uplink-watch",
+      "sha256": "d180f6dc8133d8f398d0fd1d4b7a97a42e64bbfa4d9b7d6350c12d5876c69f2d",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/init.d/tr3000-full-wifi",
+      "target": "devices/tr3000/full/files/etc/init.d/tr3000-full-wifi",
+      "sha256": "2bae47bdd9732d1cdb8e6eb874e3126470b7d753d9c1b49870b510ed4f0668d1",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/tr3000-full/examples/cloudflared.yml.example",
+      "target": "devices/tr3000/full/files/etc/tr3000-full/examples/cloudflared.yml.example",
+      "sha256": "e33c454a37d44505f1c60247cf44d6567f5c9da66b02b5859e24faf62eacd501",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/uci-defaults/90-tr3000-full-uplink-watch",
+      "target": "devices/tr3000/full/files/etc/uci-defaults/90-tr3000-full-uplink-watch",
+      "sha256": "c74dcaacb692a52df3a778453bf30f144200b296b59122c658f5e659d44595e3",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/uci-defaults/91-tr3000-full-management-ap",
+      "target": "devices/tr3000/full/files/etc/uci-defaults/91-tr3000-full-management-ap",
+      "sha256": "24cdf66672bbe3beb89f5088ce553a9db5669f729dea46f17a347db13106dd38",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-full/files/etc/uci-defaults/95-tr3000-full-services",
+      "target": "devices/tr3000/full/files/etc/uci-defaults/95-tr3000-full-services",
+      "sha256": "2aa56ef83e9df4d008b049e2e2f5431ae897484f4ce8ecf95bc85cea2554a1c2",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/config/ddns",
+      "target": "devices/tr3000/lite/files/etc/config/ddns",
+      "sha256": "d4f7ef743e02df89ec1f79a6d66e935d152b5806ef33242ca4d9e28d364dd51d",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/config/dhcp",
+      "target": "devices/tr3000/lite/files/etc/config/dhcp",
+      "sha256": "a5a1ab0982d597e29d72ce5198287239ca82f5fc61f23f3cd22b860df1a19a1a",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/config/firewall",
+      "target": "devices/tr3000/lite/files/etc/config/firewall",
+      "sha256": "caef807eabbd183c5122aa00c81bf3d1a37c189bcbf46cd9e0794cebba13e2db",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/config/lite-uplink-watch",
+      "target": "devices/tr3000/lite/files/etc/config/lite-uplink-watch",
+      "sha256": "44bd1fd21b67584335b72e5d5a2919a35279875d5972a46f12fbafe3d0a62fbd",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/config/network",
+      "target": "devices/tr3000/lite/files/etc/config/network",
+      "sha256": "c3bc6fff295460754f25a797b55f6e2c5f6e43fae9f2b52e6ad11bac0dd0f5d7",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/config/tr3000-lite-remote",
+      "target": "devices/tr3000/lite/files/etc/config/tr3000-lite-remote",
+      "sha256": "9b5976e29bc12cd6172ac730e7aaf140b9869ea271f9d7f4cfded6c5fd1ced5c",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
+      "target": "devices/tr3000/lite/files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile",
+      "sha256": "4be4185a66a6a6837d0456d414318fef0ac0f0b84b2f5cc42d791d0436ddb391",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync",
+      "target": "devices/tr3000/lite/files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync",
+      "sha256": "681e10ccc75a18f900e96ab2936946d23932ea510fda1775c9009a9e156c0e43",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
+      "target": "devices/tr3000/lite/files/etc/hotplug.d/net/90-tr3000-lite-usbwan",
+      "sha256": "d9e404a2e0b000d67caad07d482a82473231a17bd387a409c419945c62e38e29",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/init.d/lite-uplink-watch",
+      "target": "devices/tr3000/lite/files/etc/init.d/lite-uplink-watch",
+      "sha256": "465b013f727089b9035951279efc548174f111a1e7635c1951c6c9c56286898b",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-remote",
+      "target": "devices/tr3000/lite/files/etc/init.d/tr3000-lite-remote",
+      "sha256": "f6086202c3bb0133565a203714ec2889c352dd9651daea2aaf6b0f330e908c4b",
+      "git_mode": "100755"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-wifi",
+      "target": "devices/tr3000/lite/files/etc/init.d/tr3000-lite-wifi",
+      "sha256": "01cd1164d7976a5ebe612e9c94554f40d9a4af64d9ab1c2cfebc38a6a530fb60",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/rc.d/S18tr3000-lite-remote",
+      "target": "devices/tr3000/lite/files/etc/rc.d/S18tr3000-lite-remote",
+      "sha256": "ba6e8fff390678066267a6f751a84648fd5ba6345fa9f40cf543a1836721015d",
+      "git_mode": "120000"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/ssh/sshd_config.d/99-tr3000-lite.conf",
+      "target": "devices/tr3000/lite/files/etc/ssh/sshd_config.d/99-tr3000-lite.conf",
+      "sha256": "1551b57797e1e3dc82dadca2b285b7ae2368ecbb1c0e981770ccdbd95de0cef8",
+      "git_mode": "100644"
+    },
+    {
+      "source": "overlays/devices/tr3000-lite/files/etc/uci-defaults/91-tr3000-lite-management-ap",
+      "target": "devices/tr3000/lite/files/etc/uci-defaults/91-tr3000-lite-management-ap",
+      "sha256": "4769d9afd55611ce23045e99eeb1ca2509cff6283ec8cb33a16a3fc920f2145d",
+      "git_mode": "100755"
+    },
+    {
+      "source": "packages/luci-app-tr3000-full/Makefile",
+      "target": "devices/tr3000/full/packages/luci-app-tr3000-full/Makefile",
+      "sha256": "637732f45d8f238abc2efcd10ba95c54ea312153b36d21ccf6d6c8a346ee019e",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js",
+      "target": "devices/tr3000/full/packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js",
+      "sha256": "2bb08dc70fa51098cb53f3714b4090f003f05000c6f24029ed68f4147ecc2f7c",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/uplinks.js",
+      "target": "devices/tr3000/full/packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/uplinks.js",
+      "sha256": "400b2ce4235dd3aa747d0e6f4ff886993c0fcfe7fd1548a4f638f0b50013f6b5",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-full/root/usr/share/luci/menu.d/luci-app-tr3000-full.json",
+      "target": "devices/tr3000/full/packages/luci-app-tr3000-full/root/usr/share/luci/menu.d/luci-app-tr3000-full.json",
+      "sha256": "16968fe95a3becd59bc17429eed876a733e81c8607cac8d9979ebe5970998f91",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-full/root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json",
+      "target": "devices/tr3000/full/packages/luci-app-tr3000-full/root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json",
+      "sha256": "c1577f3c78226d063fbf166b934fa44d39ed0df6db3ad491ab2e21cf9430827b",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-lite/Makefile",
+      "target": "devices/tr3000/lite/packages/luci-app-tr3000-lite/Makefile",
+      "sha256": "2f87169dac8693061717f1a712fd8544a2052e0b4c1beee1b4a6d55202a4c918",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js",
+      "target": "devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js",
+      "sha256": "d02b33b80724a287eba3f9c0f065d5b9969eb5182673b73b5722ffb28a667162",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/remote-access.js",
+      "target": "devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/remote-access.js",
+      "sha256": "5f9b8711638c708a5fb0c9fc493a20bd3f31d723cd3b613262553e60687087c8",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/uplinks.js",
+      "target": "devices/tr3000/lite/packages/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/uplinks.js",
+      "sha256": "289d23dc90513bf7e54947dd1780e53e0e766dcf171607f1313912c0fd60ab96",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-lite/root/usr/share/luci/menu.d/luci-app-tr3000-lite.json",
+      "target": "devices/tr3000/lite/packages/luci-app-tr3000-lite/root/usr/share/luci/menu.d/luci-app-tr3000-lite.json",
+      "sha256": "fa85912d45cd3207289ebd8a5c6b76b98b09b6e26748be3e5d95f3e374cb25b9",
+      "git_mode": "100644"
+    },
+    {
+      "source": "packages/luci-app-tr3000-lite/root/usr/share/rpcd/acl.d/luci-app-tr3000-lite.json",
+      "target": "devices/tr3000/lite/packages/luci-app-tr3000-lite/root/usr/share/rpcd/acl.d/luci-app-tr3000-lite.json",
+      "sha256": "23d207ff6e51b4310b5b68a9a8005cea232df0175b3999bd668c8848282066a0",
+      "git_mode": "100644"
+    },
+    {
+      "source": "patches/devices/tr3000-lite/ddns/0001-reserve-managed-bulk-start.patch",
+      "target": "devices/tr3000/lite/patches/ddns/0001-reserve-managed-bulk-start.patch",
+      "sha256": "a1d73e8a2d859a227fe38e1f0879796706fdaefadd19b44d5f0389b875b35117",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/build-full.sh",
+      "target": "devices/tr3000/build/build-full.sh",
+      "sha256": "5da7e0086302427bed5c6b7786e97a6870eb29d34e9de82ff40dcaf03a94d142",
+      "git_mode": "100644",
+      "reference_updated_sha256": "256ef06982274ec3134078763d98ec14e5c0783fa20fb94e3694dc176dfbdd3e"
+    },
+    {
+      "source": "scripts/build-lite.sh",
+      "target": "devices/tr3000/build/build-lite.sh",
+      "sha256": "d769d6451ff17d75bb2e3bb8d9e2122ecfd4a9d3d4e5c4f23511d09ecb8ad917",
+      "git_mode": "100644",
+      "reference_updated_sha256": "7e67f299c4c6aeff0c9d68be8d0e5a9003b9aedd00b616928afaf126b46014d1"
+    },
+    {
+      "source": "scripts/build-uboot.sh",
+      "target": "devices/tr3000/build/build-uboot.sh",
+      "sha256": "62fd16e10d6370345a0a2454fc8aa62378d4dd5b146530bf1b633b203c62f6d3",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/configure-full.sh",
+      "target": "devices/tr3000/build/configure-full.sh",
+      "sha256": "5b77d4e38c3583f65ca8c1e185229a3a5b5f6aea051fa8dae57dcd47c0ee1c6b",
+      "git_mode": "100644",
+      "reference_updated_sha256": "a31386f06a2b56137cfe6f9af9631b4fec0b4f70e4a80d600af2b9e5d5f81a54"
+    },
+    {
+      "source": "scripts/configure-lite.sh",
+      "target": "devices/tr3000/build/configure-lite.sh",
+      "sha256": "75a5647baf5b8e42e2abd9ee5706eacb6ed1ff28be83ae3af627b3788b55cfad",
+      "git_mode": "100644",
+      "reference_updated_sha256": "1c2752e891d7dd59e37b4898ff68b7380f90f1536e057efa296cd4800953d271"
+    },
+    {
+      "source": "scripts/lite-common.sh",
+      "target": "devices/tr3000/shared/runtime/lite-common.sh",
+      "sha256": "eb7af3abfe498e6e997d73a66bd7c81863a07abdad2696fb00d76f76e43f3d71",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/lite-uplink-watch.sh",
+      "target": "devices/tr3000/shared/runtime/lite-uplink-watch.sh",
+      "sha256": "8dbbcf9250bf7a12f4525afcbc88785e8e29b515bbd7a427466f3b33cc0f5de2",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/plant-access.sh",
+      "target": "devices/tr3000/shared/runtime/plant-access.sh",
+      "sha256": "56eb8c53dc868ad6f20db508e810c4aa8913352d494227cc9814ca8eed0dc170",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/plant-profile.sh",
+      "target": "devices/tr3000/shared/runtime/plant-profile.sh",
+      "sha256": "54e53d6d8e848609741926744e7152f0bc5194d3fbe3b2d8516b6ffc6eb7d733",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/preflight.sh",
+      "target": "devices/tr3000/shared/runtime/preflight.sh",
+      "sha256": "e7ace71a8317d2df60c4b0a421942f9a0734c7c4e57a71d208e5106bd43925f8",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/prepare-lite-ddns.py",
+      "target": "devices/tr3000/build/prepare-lite-ddns.py",
+      "sha256": "75d4e7e971df07d017d8a3ee300d56da97e606693769aebf1accc8b6968cbd65",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/service-toggle.sh",
+      "target": "devices/tr3000/shared/runtime/service-toggle.sh",
+      "sha256": "4b6148e0cf99181c720d2ed06876a8b6825fa62f037b8a9c5f9a44d54ac5b665",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/singbox-rollback.sh",
+      "target": "devices/tr3000/shared/runtime/singbox-rollback.sh",
+      "sha256": "4e1ffd526621c72dedbddd431f5a86e62e1e19fcb16dab4fbd2e5cd0aa637f86",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-full-uplink-changed.sh",
+      "target": "devices/tr3000/full/runtime/tr3000-full-uplink-changed.sh",
+      "sha256": "e53aca14e77fefe640aaea5e9957b064a23b47f3b88919e1978a400427022c25",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-full-uplink-lib.sh",
+      "target": "devices/tr3000/full/runtime/tr3000-full-uplink-lib.sh",
+      "sha256": "001ddb64d1771a2c194fcf1a72aa27b431e21926949617ce81201edc5257c33e",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-full-uplink-status.sh",
+      "target": "devices/tr3000/full/runtime/tr3000-full-uplink-status.sh",
+      "sha256": "2cf714d2db78966774ee923028cc725de0015aec2cbd8dee8ade9f3f0891d7cb",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-full-uplink-watch.sh",
+      "target": "devices/tr3000/full/runtime/tr3000-full-uplink-watch.sh",
+      "sha256": "c23245372b3539596bbaef06f1ed51b0896b732e2af59f15a6197882fa40f9f2",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-full-usbwan-lib.sh",
+      "target": "devices/tr3000/full/runtime/tr3000-full-usbwan-lib.sh",
+      "sha256": "ba98b19574894d4e6a7b1469653fd1d211d315d4e7ab71c714220aa795441cf3",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-full-wifi.sh",
+      "target": "devices/tr3000/full/runtime/tr3000-full-wifi.sh",
+      "sha256": "f2ba2165ce38980c4eed964bf20886f123d963351e2a6c8b6693e3e272edbd68",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-ddns-event.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-ddns-event.sh",
+      "sha256": "f6fc0765b5ce73e1c4af43e913bff47bf7b8e9bd987c76f8679edba58cb3de21",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-ddns-lib.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-ddns-lib.sh",
+      "sha256": "5c4c95c1db92fc4eaab71963f517ad1c30511fd8dbf1076b35e9641ea73c2830",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-ddns-status.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-ddns-status.sh",
+      "sha256": "6be9695aa370978802149dcf1e0500475f0d0667849dc818a6b27d8b074906b7",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-lite-enroll.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-enroll.sh",
+      "sha256": "39a3ef4b5093969e502a8acfe2aeee02b5c5763280c650dc13b4c858c0e2e5d5",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-plant-lib.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-plant-lib.sh",
+      "sha256": "66db5eabb2b11f353c9f0f746f7f3df246445fe18f2058c949370a0d7e74c175",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-plant.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-plant.sh",
+      "sha256": "e5a65194f54e9c75454f29ebfba48a3ab028cd0db83de691ea5d145e62d59564",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-remote-boot-close.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-remote-boot-close.sh",
+      "sha256": "ce6f382f4f8b3e051f6ea6e8c306731d2dd55b06a163de968575cb4f4f40a797",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-lite-remote-lib.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-remote-lib.sh",
+      "sha256": "a7da7d471d65951932d1cb450d5fc2c4859e9acfef7647cf95bd909dbd4b742c",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-remote.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-remote.sh",
+      "sha256": "29801371e0d2eb380a69b2aacff016da4af02500fa3823aaa6e16f596dd5bb50",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-lite-uplink-changed.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-uplink-changed.sh",
+      "sha256": "be51ebe103e98cc1fda64ba048e6d670539c93b97bde7c2602966040fe97224b",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-lite-uplink-lib.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-uplink-lib.sh",
+      "sha256": "7b8aa4bd7cf2656d89a830383ac988a500955fb38fe99a5076e4245d2b418ada",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-uplink-status.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-uplink-status.sh",
+      "sha256": "547f9125831aa2e2c3898a61a2df6506b569cb281487cf2639a6b83c11bd94e7",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-lite-uplink-watch.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-uplink-watch.sh",
+      "sha256": "a3ae104d575378641768be36cf56e59fe396ce59fdd4a63ec6b7372c07081db7",
+      "git_mode": "100755"
+    },
+    {
+      "source": "scripts/tr3000-lite-usbwan-lib.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-usbwan-lib.sh",
+      "sha256": "dc3e30cb10f44681f61411ac4122e098236f7c70a11af630ed1cd0add77abeed",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/tr3000-lite-wifi.sh",
+      "target": "devices/tr3000/lite/runtime/tr3000-lite-wifi.sh",
+      "sha256": "54a86d3cc64ee83335330d36095ca1012c0826432720bceb0cb6b78ca641d911",
+      "git_mode": "100644"
+    },
+    {
+      "source": "scripts/verify-image.sh",
+      "target": "devices/tr3000/build/verify-image.sh",
+      "sha256": "a121d439246ed18d6d3aa6fd74668d668ccb4b42f3a1dd7888a9b5099efbbf6c",
+      "git_mode": "100644"
+    }
+  ],
+  "configured_baseline": {
+    "full": {
+      "config_sha256": "28434a3c34dc990eabe2ebecdf3fcd17f16dad743839af2969ec7f2d0628bb75",
+      "asset_sha256": {
+        ".config": "28434a3c34dc990eabe2ebecdf3fcd17f16dad743839af2969ec7f2d0628bb75",
+        "files/etc/config/ddns": "74601da902e592c4fc7aecbcdbaec9a066b21f2051684ec707c9af06692d64cf",
+        "files/etc/config/dhcp": "c376aee048e120a4eecd1946f2102453ea24f5e6db39693eb261c4b324ba1491",
+        "files/etc/config/firewall": "bcc8af54a097f4b12d7e9cf8da0707496077077b93a6efd3b69be3b3dc39523e",
+        "files/etc/config/network": "a14d00308f21f90e97db761ccecedbdaa1af43d00d04222e09ac032c774591c8",
+        "files/etc/config/tr3000-full-uplink-watch": "44bd1fd21b67584335b72e5d5a2919a35279875d5972a46f12fbafe3d0a62fbd",
+        "files/etc/config/ubihealthd": "343074cd810107f46a5259b9236f72479f0e0cecb45f632104b670412be331d3",
+        "files/etc/hotplug.d/iface/95-tr3000-full-uplink-reconcile": "6be5502d3ceb29b2543860ddbc7cb813be98819b1cb9a7f429fa97dfa5153563",
+        "files/etc/hotplug.d/net/90-tr3000-full-usbwan": "4bde1cb2ce5ae34249b8eaa96bff2a70c9e6cc25d0317432cafdf194b9f04756",
+        "files/etc/init.d/tr3000-full-uplink-watch": "d180f6dc8133d8f398d0fd1d4b7a97a42e64bbfa4d9b7d6350c12d5876c69f2d",
+        "files/etc/init.d/tr3000-full-wifi": "2bae47bdd9732d1cdb8e6eb874e3126470b7d753d9c1b49870b510ed4f0668d1",
+        "files/etc/tr3000-full/examples/cloudflared.yml.example": "e33c454a37d44505f1c60247cf44d6567f5c9da66b02b5859e24faf62eacd501",
+        "files/etc/uci-defaults/90-tr3000-full-uplink-watch": "c74dcaacb692a52df3a778453bf30f144200b296b59122c658f5e659d44595e3",
+        "files/etc/uci-defaults/91-tr3000-full-management-ap": "24cdf66672bbe3beb89f5088ce553a9db5669f729dea46f17a347db13106dd38",
+        "files/etc/uci-defaults/95-tr3000-full-services": "2aa56ef83e9df4d008b049e2e2f5431ae897484f4ce8ecf95bc85cea2554a1c2",
+        "files/root/scripts/lite-common.sh": "eb7af3abfe498e6e997d73a66bd7c81863a07abdad2696fb00d76f76e43f3d71",
+        "files/root/scripts/preflight.sh": "e7ace71a8317d2df60c4b0a421942f9a0734c7c4e57a71d208e5106bd43925f8",
+        "files/usr/lib/tr3000-full/uplink-changed": "e53aca14e77fefe640aaea5e9957b064a23b47f3b88919e1978a400427022c25",
+        "files/usr/lib/tr3000-full/uplink-lib.sh": "001ddb64d1771a2c194fcf1a72aa27b431e21926949617ce81201edc5257c33e",
+        "files/usr/lib/tr3000-full/usbwan-lib.sh": "ba98b19574894d4e6a7b1469653fd1d211d315d4e7ab71c714220aa795441cf3",
+        "files/usr/sbin/lite-common.sh": "eb7af3abfe498e6e997d73a66bd7c81863a07abdad2696fb00d76f76e43f3d71",
+        "files/usr/sbin/tr3000-full-service": "4b6148e0cf99181c720d2ed06876a8b6825fa62f037b8a9c5f9a44d54ac5b665",
+        "files/usr/sbin/tr3000-full-uplink-status": "2cf714d2db78966774ee923028cc725de0015aec2cbd8dee8ade9f3f0891d7cb",
+        "files/usr/sbin/tr3000-full-uplink-watch": "c23245372b3539596bbaef06f1ed51b0896b732e2af59f15a6197882fa40f9f2",
+        "files/usr/sbin/tr3000-full-wifi": "f2ba2165ce38980c4eed964bf20886f123d963351e2a6c8b6693e3e272edbd68",
+        "files/usr/sbin/tr3000-full-wifi-ap": "24cdf66672bbe3beb89f5088ce553a9db5669f729dea46f17a347db13106dd38",
+        "package/luci-app-tr3000-full/Makefile": "637732f45d8f238abc2efcd10ba95c54ea312153b36d21ccf6d6c8a346ee019e",
+        "package/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js": "2bb08dc70fa51098cb53f3714b4090f003f05000c6f24029ed68f4147ecc2f7c",
+        "package/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/uplinks.js": "400b2ce4235dd3aa747d0e6f4ff886993c0fcfe7fd1548a4f638f0b50013f6b5",
+        "package/luci-app-tr3000-full/root/usr/share/luci/menu.d/luci-app-tr3000-full.json": "16968fe95a3becd59bc17429eed876a733e81c8607cac8d9979ebe5970998f91",
+        "package/luci-app-tr3000-full/root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json": "c1577f3c78226d063fbf166b934fa44d39ed0df6db3ad491ab2e21cf9430827b",
+        "target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts": "c89bbbdf816bab81f64692f8faeb0f15b21b89f7fdd04f12cb45df111cdc2a09"
+      }
+    },
+    "lite": {
+      "config_sha256": "86f1d7f4a0c25396dbca78f6dddd7c5e5cb3d0ee3a3aa55da2a22e54b69e2c85",
+      "asset_sha256": {
+        "files/etc/config/ddns": "d4f7ef743e02df89ec1f79a6d66e935d152b5806ef33242ca4d9e28d364dd51d",
+        "files/etc/config/dhcp": "a5a1ab0982d597e29d72ce5198287239ca82f5fc61f23f3cd22b860df1a19a1a",
+        "files/etc/config/firewall": "caef807eabbd183c5122aa00c81bf3d1a37c189bcbf46cd9e0794cebba13e2db",
+        "files/etc/config/lite-uplink-watch": "44bd1fd21b67584335b72e5d5a2919a35279875d5972a46f12fbafe3d0a62fbd",
+        "files/etc/config/network": "c3bc6fff295460754f25a797b55f6e2c5f6e43fae9f2b52e6ad11bac0dd0f5d7",
+        "files/etc/config/tr3000-lite-remote": "9b5976e29bc12cd6172ac730e7aaf140b9869ea271f9d7f4cfded6c5fd1ced5c",
+        "files/etc/config/ubihealthd": "343074cd810107f46a5259b9236f72479f0e0cecb45f632104b670412be331d3",
+        "files/etc/hotplug.d/iface/95-tr3000-lite-uplink-reconcile": "4be4185a66a6a6837d0456d414318fef0ac0f0b84b2f5cc42d791d0436ddb391",
+        "files/etc/hotplug.d/iface/96-tr3000-lite-remote-sync": "681e10ccc75a18f900e96ab2936946d23932ea510fda1775c9009a9e156c0e43",
+        "files/etc/hotplug.d/net/90-tr3000-lite-usbwan": "d9e404a2e0b000d67caad07d482a82473231a17bd387a409c419945c62e38e29",
+        "files/etc/init.d/lite-uplink-watch": "465b013f727089b9035951279efc548174f111a1e7635c1951c6c9c56286898b",
+        "files/etc/init.d/tr3000-lite-remote": "f6086202c3bb0133565a203714ec2889c352dd9651daea2aaf6b0f330e908c4b",
+        "files/etc/init.d/tr3000-lite-wifi": "01cd1164d7976a5ebe612e9c94554f40d9a4af64d9ab1c2cfebc38a6a530fb60",
+        "files/etc/rc.d/S18tr3000-lite-remote": "ba6e8fff390678066267a6f751a84648fd5ba6345fa9f40cf543a1836721015d",
+        "files/etc/ssh/sshd_config.d/99-tr3000-lite.conf": "1551b57797e1e3dc82dadca2b285b7ae2368ecbb1c0e981770ccdbd95de0cef8",
+        "files/etc/uci-defaults/90-lite-uplink-watch": "0ebc14e5277988e192b703b92ff5abe0d05706b4ac1706745461f724e34fdabb",
+        "files/etc/uci-defaults/91-tr3000-lite-management-ap": "4769d9afd55611ce23045e99eeb1ca2509cff6283ec8cb33a16a3fc920f2145d",
+        "files/root/scripts/lite-uplink-watch.sh": "a3ae104d575378641768be36cf56e59fe396ce59fdd4a63ec6b7372c07081db7",
+        "files/root/scripts/preflight.sh": "e7ace71a8317d2df60c4b0a421942f9a0734c7c4e57a71d208e5106bd43925f8",
+        "files/usr/lib/tr3000-lite/ddns-event": "f6fc0765b5ce73e1c4af43e913bff47bf7b8e9bd987c76f8679edba58cb3de21",
+        "files/usr/lib/tr3000-lite/ddns-lib.sh": "5c4c95c1db92fc4eaab71963f517ad1c30511fd8dbf1076b35e9641ea73c2830",
+        "files/usr/lib/tr3000-lite/plant-lib.sh": "66db5eabb2b11f353c9f0f746f7f3df246445fe18f2058c949370a0d7e74c175",
+        "files/usr/lib/tr3000-lite/remote-boot-close": "ce6f382f4f8b3e051f6ea6e8c306731d2dd55b06a163de968575cb4f4f40a797",
+        "files/usr/lib/tr3000-lite/remote-lib.sh": "a7da7d471d65951932d1cb450d5fc2c4859e9acfef7647cf95bd909dbd4b742c",
+        "files/usr/lib/tr3000-lite/uplink-changed": "be51ebe103e98cc1fda64ba048e6d670539c93b97bde7c2602966040fe97224b",
+        "files/usr/lib/tr3000-lite/uplink-lib.sh": "7b8aa4bd7cf2656d89a830383ac988a500955fb38fe99a5076e4245d2b418ada",
+        "files/usr/lib/tr3000-lite/usbwan-lib.sh": "dc3e30cb10f44681f61411ac4122e098236f7c70a11af630ed1cd0add77abeed",
+        "files/usr/sbin/lite-common.sh": "eb7af3abfe498e6e997d73a66bd7c81863a07abdad2696fb00d76f76e43f3d71",
+        "files/usr/sbin/lite-uplink-watch": "a3ae104d575378641768be36cf56e59fe396ce59fdd4a63ec6b7372c07081db7",
+        "files/usr/sbin/tr3000-lite-ddns-status": "6be9695aa370978802149dcf1e0500475f0d0667849dc818a6b27d8b074906b7",
+        "files/usr/sbin/tr3000-lite-enroll": "39a3ef4b5093969e502a8acfe2aeee02b5c5763280c650dc13b4c858c0e2e5d5",
+        "files/usr/sbin/tr3000-lite-plant": "e5a65194f54e9c75454f29ebfba48a3ab028cd0db83de691ea5d145e62d59564",
+        "files/usr/sbin/tr3000-lite-remote": "29801371e0d2eb380a69b2aacff016da4af02500fa3823aaa6e16f596dd5bb50",
+        "files/usr/sbin/tr3000-lite-uplink-status": "547f9125831aa2e2c3898a61a2df6506b569cb281487cf2639a6b83c11bd94e7",
+        "files/usr/sbin/tr3000-lite-wifi": "54a86d3cc64ee83335330d36095ca1012c0826432720bceb0cb6b78ca641d911",
+        "files/usr/sbin/tr3000-lite-wifi-ap": "4769d9afd55611ce23045e99eeb1ca2509cff6283ec8cb33a16a3fc920f2145d",
+        "package/luci-app-tr3000-lite/Makefile": "2f87169dac8693061717f1a712fd8544a2052e0b4c1beee1b4a6d55202a4c918",
+        "package/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/industrial-lan.js": "d02b33b80724a287eba3f9c0f065d5b9969eb5182673b73b5722ffb28a667162",
+        "package/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/remote-access.js": "5f9b8711638c708a5fb0c9fc493a20bd3f31d723cd3b613262553e60687087c8",
+        "package/luci-app-tr3000-lite/htdocs/luci-static/resources/view/tr3000-lite/uplinks.js": "289d23dc90513bf7e54947dd1780e53e0e766dcf171607f1313912c0fd60ab96",
+        "package/luci-app-tr3000-lite/root/usr/share/luci/menu.d/luci-app-tr3000-lite.json": "fa85912d45cd3207289ebd8a5c6b76b98b09b6e26748be3e5d95f3e374cb25b9",
+        "package/luci-app-tr3000-lite/root/usr/share/rpcd/acl.d/luci-app-tr3000-lite.json": "23d207ff6e51b4310b5b68a9a8005cea232df0175b3999bd668c8848282066a0"
+      }
+    }
+  },
+  "workflow_sha256": {
+    ".github/workflows/build-lite.yml": "daadf43025b9c1e6084c932a0ef72e1983d12b7b3349177e3b47063ca4f6449b",
+    ".github/workflows/build-full.yml": "d6c1981e37c775cf022b1bdf80844f09d49614003e1298e60436a17ac3c80f5f",
+    ".github/workflows/build-uboot.yml": "457edce232d95b5b35572d55808ddcada2ab3e38cf2b875f258d7df4ca5b349e"
+  },
+  "compatibility_aliases": {
+    "scripts/lite-common.sh": "../devices/tr3000/shared/runtime/lite-common.sh",
+    "scripts/tr3000-full-uplink-lib.sh": "../devices/tr3000/full/runtime/tr3000-full-uplink-lib.sh",
+    "scripts/tr3000-full-usbwan-lib.sh": "../devices/tr3000/full/runtime/tr3000-full-usbwan-lib.sh",
+    "scripts/tr3000-lite-ddns-lib.sh": "../devices/tr3000/lite/runtime/tr3000-lite-ddns-lib.sh",
+    "scripts/tr3000-lite-plant-lib.sh": "../devices/tr3000/lite/runtime/tr3000-lite-plant-lib.sh",
+    "scripts/tr3000-lite-remote-lib.sh": "../devices/tr3000/lite/runtime/tr3000-lite-remote-lib.sh",
+    "scripts/tr3000-lite-uplink-lib.sh": "../devices/tr3000/lite/runtime/tr3000-lite-uplink-lib.sh",
+    "scripts/tr3000-lite-usbwan-lib.sh": "../devices/tr3000/lite/runtime/tr3000-lite-usbwan-lib.sh"
+  },
+  "compatibility_executables": [
+    "scripts/tr3000-full-uplink-changed.sh",
+    "scripts/tr3000-full-uplink-status.sh",
+    "scripts/tr3000-full-uplink-watch.sh",
+    "scripts/tr3000-lite-ddns-status.sh",
+    "scripts/tr3000-lite-remote-boot-close.sh",
+    "scripts/tr3000-lite-remote.sh",
+    "scripts/tr3000-lite-uplink-changed.sh",
+    "scripts/tr3000-lite-uplink-status.sh",
+    "scripts/tr3000-lite-uplink-watch.sh"
+  ]
+}

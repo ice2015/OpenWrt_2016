@@ -29,18 +29,18 @@ common → distribution → device → local
 
 ### 2. 核心操作步骤
 1. **确认软件源（Feed）**：
-   * 官方/通用插件：检查对应设备的 feed lock 文件（如 `feeds/devices/tr3000-lite.lock`）。
+   * 官方/通用插件：检查对应设备的 feed lock 文件（如 `devices/tr3000/lite/feeds.lock`）。
    * 第三方定制插件：在 lock 文件中补充 Git 仓库 URL 与固定的 **40 位完整 Commit SHA**，确保构建可复现。
 2. **在 Seed 配置中启用插件**：
-   * **Lite 固件**：修改 `configs/lite.seed`
-   * **Full 固件**：修改 `configs/full.seed`
+   * **Lite 固件**：修改 `devices/tr3000/lite/config.seed`
+   * **Full 固件**：修改 `devices/tr3000/full/config.seed`
    * 命名规范：
      * 普通应用程序：`CONFIG_PACKAGE_<name>=y`
      * LuCI 管理页面：`CONFIG_PACKAGE_luci-app-<name>=y`
      * 配套中文语言包：`CONFIG_PACKAGE_luci-i18n-<name>-zh-cn=y`
      * 内核驱动模块：`CONFIG_PACKAGE_kmod-<name>=y`
 3. **检查配置门禁与避坑**：
-   * 检查 `scripts/configure-lite.sh`（或 `configure-full.sh`），确保新增插件不在排除包循环中。
+   * 检查 `devices/tr3000/build/configure-lite.sh`（或 `configure-full.sh`），确保新增插件不在排除包循环中。
    * **警惕隐式重型依赖**：避免引入如 `ruby`、`python3`、`rust/host` 等会在云端触发数小时自举编译的依赖项。
 4. **本地自动化校验**：
    ```powershell

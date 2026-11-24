@@ -31,7 +31,7 @@ class FullManagementAPTests(module_globals["ManagementAPTests"]):
     def test_ap_creation_does_not_mutate_plant_policy(self):
         # Full ships no plant policy file; the invariant that survives is
         # "AP creation leaves the shipped firewall untouched".
-        firewall = ROOT / "overlays/devices/tr3000-full/files/etc/config/firewall"
+        firewall = ROOT / "devices/tr3000/full/files/etc/config/firewall"
         (self.root / "etc/config" / firewall.name).write_bytes(firewall.read_bytes())
         self.run_ap()
         self.assertEqual(firewall.read_bytes(),
@@ -40,5 +40,7 @@ class FullManagementAPTests(module_globals["ManagementAPTests"]):
 
 class FullTransformSentinel(unittest.TestCase):
     def test_transformed_module_targets_the_full_script(self):
+        self.assertEqual(ROOT / "devices/tr3000/full/files/etc/uci-defaults/91-tr3000-full-management-ap", module_globals["SCRIPT"])
+        self.assertTrue(module_globals["SCRIPT"].is_file())
         self.assertIn("tr3000-full", str(module_globals["SCRIPT"]))
         self.assertNotIn("tr3000-lite", str(module_globals["SCRIPT"]))

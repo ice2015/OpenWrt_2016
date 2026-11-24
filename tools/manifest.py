@@ -163,6 +163,15 @@ def _validate_layer(owner: str, layer: str, root: Path) -> list[str]:
         resolved.relative_to(root)
     except ValueError:
         return [f"{owner} layer escapes repository: {layer}"]
+    if owner.startswith("device "):
+        device_id = owner.removeprefix("device ")
+        if resolved in (root, root / "devices"):
+            return [f"{owner} layer includes another device tree container: {layer}"]
+        # Check both the written path and symlink/.. resolution. A lexical
+        # detour through a different device must not become an input alias.
+        for path in (candidate, resolved.relative_to(root)):
+            if len(path.parts) >= 2 and path.parts[0] == "devices" and path.parts[1] != device_id:
+                return [f"{owner} layer references another device: {layer}"]
     if not resolved.exists():
         return [f"{owner} references missing layer: {layer}"]
     return []

@@ -81,7 +81,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-22.04", workflow)
         self.assertIn("cc777dfa3c1964518ddb2c310e8570830b11e954", workflow)
         self.assertIn("ec9ef10efc65da1e6d1de4e2c043c0e13d08eed8", workflow)
-        self.assertIn("scripts/build-lite.sh", workflow)
+        self.assertIn("devices/tr3000/build/build-lite.sh", workflow)
         self.assertIn("actions/cache@", workflow)
         self.assertIn("actions/cache@", workflow)
         self.assertIn("actions/upload-artifact@", workflow)
@@ -91,8 +91,8 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertIn("workflow_dispatch:", workflow)
         self.assertIn("f6b361ed80012244b1ed33be1b5080b4d65e83fb", workflow)
-        self.assertIn("scripts/build-uboot.sh", workflow)
-        self.assertIn("MULTI_LAYOUT=1", (ROOT / "scripts/build-uboot.sh").read_text(encoding="utf-8"))
+        self.assertIn("devices/tr3000/build/build-uboot.sh", workflow)
+        self.assertIn("MULTI_LAYOUT=1", (ROOT / "devices/tr3000/build/build-uboot.sh").read_text(encoding="utf-8"))
         self.assertNotIn("256mb", workflow.lower())
 
     def test_full_workflow_has_typed_options_and_pinned_build_inputs(self) -> None:
@@ -116,7 +116,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
         self.assertIn("cc777dfa3c1964518ddb2c310e8570830b11e954", workflow)
         self.assertIn("ec9ef10efc65da1e6d1de4e2c043c0e13d08eed8", workflow)
-        self.assertIn("scripts/build-full.sh", workflow)
+        self.assertIn("devices/tr3000/build/build-full.sh", workflow)
         self.assertIn("actions/cache@", workflow)
         self.assertIn("actions/upload-artifact@", workflow)
         self.assertIn("TR3000-128M-112M-Full", workflow)

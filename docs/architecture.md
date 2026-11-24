@@ -13,7 +13,9 @@ manifests/*.json
       │
       ├── tools/manifest.py：解析、校验、列出和解析目标
       │
-      ├── scripts/*.sh：本地与 CI 的稳定命令入口
+      ├── devices/<id>/：型号专属输入、构建实现和操作文档
+      │
+      ├── scripts/*.sh：公共工具与稳定兼容入口
       │
       └── .github/workflows/*.yml：权限、触发器、runner 和产物编排
                             │
@@ -61,3 +63,9 @@ Actions 权限默认为 `contents: read`，不使用 `pull_request_target`。签
 | `3` | 结构有效，但构建所需字段仍为 `UNRESOLVED` |
 | `4` | 目标已可解析，但当前脚手架尚未实现真实构建阶段 |
 
+
+## 按型号隔离
+
+TR3000 的构建实现在 `devices/tr3000/build/`，运行脚本分为 `shared/runtime/` 和选定变体的 `runtime/`；固件内安装路径保持不变。设备专属引用不得跨入其他 `devices/<id>/`，manifest 同时检查书写路径与符号链接解析后的归属。
+
+Lite/Full 的 source、output、ccache 和 Actions concurrency group 分别隔离。修改共享或发行版层仍可能影响多个目标；设备目录隔离不代表公共工具的修改没有影响。

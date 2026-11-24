@@ -5,8 +5,8 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable
 
-LIB=ROOT/'scripts/tr3000-lite-remote-lib.sh'
-COMMON=ROOT/'scripts/lite-common.sh'
+LIB=ROOT/'devices/tr3000/lite/runtime/tr3000-lite-remote-lib.sh'
+COMMON=ROOT/'devices/tr3000/shared/runtime/lite-common.sh'
 
 
 class RemoteValidationTests(unittest.TestCase):

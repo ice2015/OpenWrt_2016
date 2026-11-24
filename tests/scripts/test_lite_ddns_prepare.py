@@ -28,7 +28,12 @@ STOCK='''start_daemon_for_all_ddns_sections()
 
 class DdnsPrepareTests(unittest.TestCase):
     def test_bulk_start_skips_managed_section_but_keeps_foreign_and_original_source(self):
-        script=ROOT/'scripts/prepare-lite-ddns.py'
+        self.check_bulk_start(ROOT/'devices/tr3000/build/prepare-lite-ddns.py')
+
+    def test_legacy_entry_prepares_the_real_patch(self):
+        self.check_bulk_start(ROOT/'scripts/prepare-lite-ddns.py')
+
+    def check_bulk_start(self, script):
         self.assertTrue(script.is_file(),'Lite stock DDNS reservation tool is missing')
         with tempfile.TemporaryDirectory() as tmp:
             root=pathlib.Path(tmp); source=root/'source'; source.mkdir(); (source/'Makefile').write_text('all:\n')
