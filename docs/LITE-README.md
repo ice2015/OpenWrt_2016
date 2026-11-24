@@ -17,13 +17,14 @@
 
 ## 包选择
 
-[`configs/lite.seed`](../configs/lite.seed) 是覆盖上游配置的原生 OpenWrt `CONFIG_...` 差异，不是完整 `.config`。它保留构建基线并显式选择 LuCI 中文、HTTPS、Lite 专用 `luci-app-tr3000-lite`（网络 → 工业 LAN）、WireGuard、USB RNDIS/CDC-Ether、OpenSSH/SFTP、curl、CA、tcpdump、`ip-full`、`iputils-arping` 和提供 `ubinfo` 的 `ubi-utils`。固件 overlay 会预置空的 `ubihealthd` 配置，避免该包的一次性默认配置为健康监控自动生成启用项；本工作流只使用其只读信息工具。`scripts/configure-lite.sh` 合并差异后执行 `make defconfig`，并验证必需包和禁止包。
+[`configs/lite.seed`](../configs/lite.seed) 是覆盖上游配置的原生 OpenWrt `CONFIG_...` 差异，不是完整 `.config`。它保留构建基线并显式选择 LuCI 中文、HTTPS、Lite 专用 `luci-app-tr3000-lite`（网络 → 工业 LAN）、WireGuard、USB RNDIS/CDC-Ether、OpenSSH/SFTP、curl、CA、tcpdump、`ip-full`、`iputils-arping`、提供 `ubinfo` 的 `ubi-utils`，以及提供 `stat` 的 `coreutils-stat`（OpenWrt busybox 不含 `stat`/`od` applet，控制器的属主/权限门禁依赖它；随机数改用 busybox 自带的 `head`+`sha256sum`）。固件 overlay 会预置空的 `ubihealthd` 配置，避免该包的一次性默认配置为健康监控自动生成启用项；本工作流只使用其只读信息工具。`scripts/configure-lite.sh` 合并差异后执行 `make defconfig`，并验证必需包和禁止包。
 
 不预装 OpenClash、PassWall、sing-box、Tailscale、cloudflared、AdGuard Home、Docker、UPnP、Aurora 或 Bandix。`kmod-usb-net-ipheth` 默认不选；iPhone USB 共享还需要实际验证内核驱动、iOS 版本及用户态依赖（例如 usbmuxd），本构建不承诺兼容。
 
 ## 网络安全默认值
 
 - `wan` 使用 DHCP Client，metric 10；不提供 DHCP relay。
+- `loopback` 接口（`lo`，`127.0.0.1/8`）必须保留：路由器自身的解析器指向 `127.0.0.1` 的 dnsmasq，缺少它时设备无法解析任何域名，NTP 不同步、时钟停在构建日期、TLS 下载报证书“尚未生效”，软件包管理器全部失败（2026-11-24 真机确认）。构建脚本在编译前断言该段存在。
 - `lan` 是出厂的接入段：`br-lan`（成员 `eth1` 与管理 AP），路由器地址 **`192.168.10.1/24`**，DHCP 池 `192.168.10.100–192.168.10.249`。插线或连 WiFi 即拿到地址、可 ping 通、可进 `https://192.168.10.1`。工厂设备只有一个 LAN 口，它默认属于接入段而不是工业段。
 - `plant` 是不桥接的工业段接口，**默认不启用**（`proto none`，不绑定 `eth1`）。只有操作员在「网络 → TR3000 Lite → 工业 LAN」显式「启用 plant 模式」后，`eth1` 才从 `br-lan` 摘出交给 plant，默认静态地址 **`192.168.20.254/24`**。DHCPv4、DHCPv6、RA、NDP 服务在 plant 段永久关闭。接入工业 HUB 前必须人工确认地址未占用且网段适用。
 - 首次启动的 Lite defaults 脚本为实际检测到的每个无线设备创建一个始终启用的 WPA2-PSK (`psk2`) 管理 AP，SSID 为 `TR3000-Lite-<MAC 末六位大写十六进制>`；没有有效 MAC 时持久保存随机后缀。所有管理 AP 共用由 16 个随机字节生成的 32 位小写十六进制密钥；固件不含固定凭据，脚本不输出密钥。重复运行保留已有管理 SSID/密钥，不创建重复 AP；无无线设备、凭据不完整或提交/验证失败时保留 defaults 脚本以便重试。成功后才写入 `/etc/tr3000-lite/management-ap.initialized`。无线栈是 mt_wifi：驱动每次重建无线配置可能带出它自己的开放默认 AP，`/etc/init.d/tr3000-lite-wifi` 每次启动都会检查并重新禁用它，同时补齐受管 AP。
@@ -86,13 +87,49 @@ Lite 专用 `lite-uplink-watch` procd 服务与 Full 的旧共享实现隔离。
 
 管理 Wi-Fi 不桥接到 plant。首次部署必须在可信串口/本地控制台设置非空 root 密码，并从权限为 `0600` 的 `/etc/config/wireless` 读取该设备生成的管理 SSID/密钥；不要把密钥贴入日志或构建产物。AP 初始化本身不启用 plant HTTPS 或远程管理；plant HTTPS 的门禁是非空 root 密码加操作员显式启用，而管理 AP 的就绪状态守卫“交出唯一 LAN 口”这一步。首次启动无线设备发现、双频 AP 与 STA 共存、STA 断线期间管理 AP 持续可用、接入段 HTTPS/SSH 登录、工业模式切换实况、plant HTTPS 门禁及 Linux 文件权限仍需真机验证。`wpad-openssl` 固定为必需包，最终配置拒绝其他 `wpad-*` 提供者。
 
+## 真机发现的问题与本版修复（2026-11-24）
+
+基准固件 `55f42c4` 刷入真机后逐项验证，发现以下静态测试看不见的问题，均已在下一版固件修复并在同一台设备上验证修复有效：
+
+| # | 问题 | 修复 | 真机验证 |
+| --- | --- | --- | --- |
+| 1 | overlay 缺 `loopback` 接口 → 设备 DNS/NTP/TLS 全灭，`opkg update` 全部失败 | overlay 补回 loopback 段；构建前断言 | `lo` UP 后 dnsmasq 绑定 127.0.0.1:53，NTP 同步，6 个 feed 全部签名校验通过 |
+| 2 | 镜像无 `stat`/`od`（busybox 不含），plant 控制器与 AP 脚本在真机必然失败 | seed 选 `coreutils-stat`；`od` 改用 `head`+`sha256sum` | `opkg install coreutils-stat` 后控制器门禁正常；修补后 AP 脚本退出 0 |
+| 3 | `uci commit` 留下的 0 字节 `/tmp/.uci/<pkg>` 被误判为待提交修改，AP 初始化与 plant 事务从未成功 | 改用 `[ ! -s ]` 只拒绝非空 delta | 空 delta 走到地址校验；非空 delta 仍拒绝；配置不变 |
+| 4 | 管理 AP 未建立，设备广播两个开放热点（`ImmortalWrt-2.4G/5G`，绑在带 DHCP 的 lan） | 问题 2/3 修复后首启脚本正常执行 | 两个开放 AP 被禁用，生成 `TR3000-Lite-<MAC>` WPA2 受管 AP，就绪标记写入 |
+| 5 | openssh-server 默认 `PermitRootLogin prohibit-password`，LuCI 设的 root 密码无法 SSH；LuCI SSH 页面因依赖 dropbear 被隐藏 | overlay 增加 sshd drop-in（`PermitRootLogin yes`） | 密码 SSH 登录成功；LuCI 的 dropbear 专属页面仍隐藏（上游行为，OpenSSH 密钥管理页为后续项） |
+| 6 | Full 时代遗留脚本（`plant-profile.sh` 等）与死配置 `/etc/config/tr3000-lite` 随 Lite 镜像下发 | Lite 不再安装这些脚本；删除死配置；构建断言 | 静态审计测试锁定 |
+
+配套新增 `tests/structure/test_lite_device_readiness.py`：以从已验证镜像导出的命令清单（`tests/structure/lite-image-commands.txt`）审计所有随镜像脚本的工具调用，并锁定 loopback、空 delta 语义、sshd drop-in 与产物仓库。真机验收新增 T11–T15，见[测试计划](TEST-PLAN.md)。
+
+## 软件包来源（opkg）
+
+- 镜像预置的 `24.10-SNAPSHOT` 公共镜像源**不可依赖**：snapshot 会被镜像站定期清理，且与固定 revision 构建的镜像存在版本/ABI 漂移。修复 loopback 后公共源可用（真机实测 6 个 feed 签名校验通过），但仅作为应急手段。
+- 正式来源是**本次构建自身生成的仓库**：artifact 的 `package-repo/arch/<feed>`、`package-repo/target` 与签名公钥 `key-build.pub`。启用方式与 Full 相同：内网 HTTP 提供仓库 → 改写 `/etc/opkg/distfeeds.conf` → 公钥按 usign 约定（base64 解码后 bytes[2:10] 的 hex）放入 `/etc/opkg/keys/<keyid>` → `opkg update`，`check_signature` 保持开启。详见 [Full 说明的对应章节](FULL-README.md)。
+
+## SSH 访问
+
+Lite 使用 `openssh-server`（排除 dropbear）。OpenSSH 默认拒绝 root 密码登录，固件通过 `/etc/ssh/sshd_config.d/99-tr3000-lite.conf` 显式允许 `PermitRootLogin yes` 与 `PasswordAuthentication yes`；root 密码本就是 Lite 的强制门禁（plant HTTPS 与远程访问都要求非空）。首次部署仍应在可信工位设置强口令。LuCI 自带的 SSH-Keys/SSH Access 页面依赖 dropbear，在本固件中隐藏；OpenSSH 的密钥管理需通过控制台或后续专用页面，不要向 `/etc/dropbear/authorized_keys` 写密钥（无效）。
+
 ## 构建与产物
 
 GitHub Actions → **TR3000 Lite firmware** → Run workflow。工作流使用 Ubuntu 22.04、固定源码和 feed revisions；通过 `make defconfig`，最多 4 路并发编译，下载失败重试，编译并行失败时退回单线程。Artifacts 含 sysupgrade 镜像、SHA256、包清单、配置、源码提交、feed 锁定信息、上游许可证和构建日志，以及仅含公开默认值的 `lite-runtime-contract.txt`。构建脚本检查最终 `selected-packages.txt` 必须精确包含 `CONFIG_PACKAGE_luci-app-tr3000-lite=y`，还检查镜像实际包清单含 Lite LuCI、`wpad-openssl` 和三项 USB 网卡包，不含 Ruby/libruby 或额外 USB 网卡类型。`image-packages.manifest` 是该 profile 的完整已安装包/版本清单，`packages-manifest.txt` 是其包名视图；可选 `target-package-index.txt` 只是目标专属软件仓库索引，不能替代镜像清单。`profile.dts` 保存最终验证的 112 MiB 源码布局。契约记录公开接口/CIDR、HTTPS/DHCP/SNAT 策略、上行顺序/阈值、USB 驱动和安装路径，不包含无线密钥或密码，也不证明设备已启动。
 
 仅接受路径 `bin/targets/mediatek/filogic/` 下文件名包含 `cudy_tr3000-v1-ubootmod`、不超过 100 MiB、可读 tar 且含正确 `CONTROL` 入口的非空 `sysupgrade.bin`。它是系统升级镜像，不代表 Factory、BL2、FIP 或所有 U-Boot 刷写方式都兼容；不要用于未经确认的启动分区或跨布局保留旧配置升级。
 
-固件编译由 Linux GitHub Runner 执行；本地可在 Linux/WSL2 编译，原生 Windows 只用于编辑和仓库验证。第一阶段提交 `012dfec` 的 [Actions 43731565747](https://github.com/ice2015/OpenWrt_2016/actions/runs/43731565747) 已成功，下载后的实际 Squashfs 已核对第一阶段脚本/配置、Lite LuCI 和 `wpad-openssl`，Ruby/libruby 未安装。该历史镜像**不含本次第二/第三阶段全部功能**，不能作为最终交付或当前提交的构建证明。每次新里程碑必须检查对应提交的新构建和产物；设备启动、物理端口、联网、射频并发、真实路由切换及可写 overlay 余量仍待真机验证。所有验收项见[测试计划](TEST-PLAN.md)。
+固件编译由 Linux GitHub Runner 执行；本地可在 Linux/WSL2 编译，原生 Windows 只用于编辑和仓库验证。
+
+**当前基准固件**：提交 `55f42c4`（`feature/tr3000-lite-factory-access`）的 [Actions 44449317194](https://github.com/ice2015/OpenWrt_2016/actions/runs/44449317194) 已成功（耗时 1h 25m 37s），产物 `tr3000-lite-128m-ubootmod-112m`，sysupgrade 镜像 20 747 077 字节，SHA256 `e761cb00ffbd3c1b607d046fb2a78cde78f0a29bf06833d00ee4fd4a7a8b9d76`。下载后解包 `root` 分区逐项核对通过：
+
+1. `/etc/config/network` 含 `config interface 'lan'`、`option ipaddr '192.168.10.1'`、`config device 'br_lan'`、`list ports 'eth1'`，`plant` 段为 `proto 'none'` 且**不绑定** `eth1`；
+2. `/etc/config/dhcp` 含 `config dhcp 'lan'`、`option limit '150'`、`option dhcpv4 'server'`；
+3. 镜像内**不存在** `/etc/config/wireless`；
+4. `lite-runtime-contract.txt` 为 `schema_version=2`、`lan_cidr=192.168.10.1/24`、`wireless_stack=mt_wifi`、`management_ap_network=lan`、`plant_default_mode=inactive`；
+5. `image-packages.manifest` 含 `luci-app-tr3000-lite` 与 `wpad-openssl`，USB 网卡包恰为 `kmod-usb-net`、`kmod-usb-net-rndis`、`kmod-usb-net-cdc-ether` 三项，不含 Ruby/libruby；
+6. `profile.dts` 为 `reg = <0x5c0000 0x7000000>` 的 112 MiB UBI 布局，tar `CONTROL` 为 `cudy_tr3000-v1-ubootmod`；
+7. `/usr/sbin` 下 8 个 Lite 控制器、`/usr/lib/tr3000-lite` 下 8 个库/事件脚本、3 个 `init.d` 服务与 3 个 LuCI 视图均在镜像内；无线栈为 mt_wifi（`kmod-mt_wifi`、`mtwifi-cfg`、`wifi-scripts`），无 mac80211/mt7915e。
+
+该基准只证明**构建产物内容正确**，不证明设备已启动、DHCP 实际交付、RF 可用或路由切换正确。更早的 [Actions 43731565747](https://github.com/ice2015/OpenWrt_2016/actions/runs/43731565747)（第一阶段 `012dfec`）仅作历史记录，不再是当前提交的构建证明。每次新里程碑必须检查对应提交的新构建和产物；设备启动、物理端口、联网、射频并发、真实路由切换及可写 overlay 余量仍待真机验证。所有验收项见[测试计划](TEST-PLAN.md)。
 
 ## 工业现场限制
 

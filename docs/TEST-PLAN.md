@@ -22,7 +22,9 @@
 
 ## 已有证据与后续构建的界限
 
-第一阶段 `012dfec` 的 [Actions 43731565747](https://github.com/ice2015/OpenWrt_2016/actions/runs/43731565747) 已成功。下载 sysupgrade 的 SHA256 已复核，tar `CONTROL` 匹配目标，实际 Squashfs 中第一阶段控制器/库/network/dhcp/firewall/AP defaults/LuCI 源码与提交逐字节匹配；实际 opkg 状态有 Lite LuCI 和 `wpad-openssl`，无 Ruby/libruby。这不证明第二/第三阶段已编译，也不证明设备能启动或 RF/路由可用。每一新里程碑需记录对应新 SHA 的成功构建，不能沿用这次历史镜像作验收。
+**基准构建（当前提交）**：提交 `55f42c4` 的 [Actions 44449317194](https://github.com/ice2015/OpenWrt_2016/actions/runs/44449317194)（`TR3000 Lite firmware`）已成功，耗时 1h 25m 37s，产物 `tr3000-lite-128m-ubootmod-112m`。下载后 SHA256 已复核（`e761cb00…`），tar `CONTROL` 为 `cudy_tr3000-v1-ubootmod`，`profile.dts` 为 112 MiB 布局；实际 Squashfs 中已核对：接入段 `lan`（`192.168.10.1/24` + `br_lan` 含 `eth1`）、`dhcp 'lan'`（limit 150）、`plant` 默认 `proto none` 不接管 `eth1`、**无 `/etc/config/wireless`**、8 个 `/usr/sbin` 控制器与 3 个 `init.d` 服务、3 个 LuCI 视图与菜单、mt_wifi 栈（无 mac80211/mt7915e）；`image-packages.manifest` 有 Lite LuCI 和 `wpad-openssl`，无 Ruby/libruby。**这仍不证明设备能启动、DHCP 实际交付、RF 可用或路由切换正确**，真机项见下方 T1–T10。
+
+第一阶段 `012dfec` 的 [Actions 43731565747](https://github.com/ice2015/OpenWrt_2016/actions/runs/43731565747) 仅作历史记录。每一新里程碑需记录对应新 SHA 的成功构建，不能沿用旧镜像作验收。
 
 ## Lite 多上行自动化覆盖（离线，不等于内核/真机实测）
 
@@ -55,6 +57,11 @@
    - **T8** LuCI「退回接入模式」：成功；插线重新获得 `192.168.10.x`；
    - **T9** 断电重启（保留配置）：模式与地址保持，管理 AP 仍受管且加密、凭据不轮换；
    - **T10** 用旧版 Lite 配置升级本固件（保留设置）：启动日志与 LuCI 顶部出现“旧版配置结构”提示，不自动改写配置。
+   - **T11**（2026-11-24 已在基准机上验证修复）设备自身 DNS/NTP/软件包：`ip addr show lo` 有 `127.0.0.1/8` 且 UP；`netstat -lnp` 中 dnsmasq 监听 `127.0.0.1:53`；不指定服务器的 `nslookup` 成功；`date` 为当前时间（NTP 已同步）；`opkg update` 全部 feed `Signature check passed`；`opkg install coreutils-stat` 成功（公共源仅作应急，正式来源见产物 `package-repo/`）。
+   - **T12**（同日已验证）控制器工具依赖：`command -v stat` 存在；`tr3000-lite-plant status --json` 不再报 `stat: not found`；镜像内无 `od` 且脚本不调用它。
+   - **T13**（同日已验证）空 delta 语义：`uci commit` 后存在 0 字节 `/tmp/.uci/network` 时，`enable-plant` 能走到地址校验（重叠地址报 `management_overlap`）；写入非空 delta 后仍报 `pending_firewall_state`；两种情况下配置均不被改动。
+   - **T14**（同日已验证）管理 AP 自愈：首启脚本退出 0；两个 `ImmortalWrt-*` 开放 AP `disabled=1`；每 radio 一个 `TR3000-Lite-<MAC>` WPA2 受管 AP；`/etc/tr3000-lite/management-ap.initialized` 写入；`tr3000-lite-wifi status --json` 返回 `ready:true`。射频实际起停与并发仍待 T4/T5 复核。
+   - **T15**（同日已验证）SSH：设置 root 密码后，密码 SSH 登录成功（sshd drop-in `PermitRootLogin yes`）；LuCI 的 dropbear 专属 SSH 页面隐藏属预期，OpenSSH 密钥管理页为后续项。
    空 root 密码时 plant HTTPS 必须关闭；满足“非空 root 密码 + 显式启用”后仅 443 可达，80/22 不开放。**接入 HUB 前人工确认 plant 地址未占用且网段适用**；不适用先隔离修改。
 5. WAN DHCP 上网；从标准 LuCI 加入明确批准的加密 STA（保留管理 AP，禁用替换无线配置选项、显式启用 wwan），再加入已核验 RNDIS/CDC-Ether USB 路由棒。验证10/20/30、3失败/2成功、恢复抢占、DHCP/网关与 DNS。
 6. Lite 双 WireGuard 与两阶段入网真机全流程验证：
