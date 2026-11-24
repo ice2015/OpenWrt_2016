@@ -135,9 +135,17 @@ SSH 入口需要免密（密钥）root 登录；LuCI 入口使用自签证书，
 | B1 | 受管 WPA2 AP 从未生成，mt_wifi 开放默认热点 `ImmortalWrt-2.4G/5G` 持续开放（F5/F4 失败） | AP 脚本把 `/tmp/.uci/wireless` 的**存在**当作“管理员未提交改动”，而 mt_wifi 每次启动都会留下 0 字节空 delta，脚本因此永久以 `pending_wireless` 退出 | 只在 delta **非空**（确有未提交改动）时拒绝；delta 路径提为变量便于测试 | `test_empty_uci_runtime_delta_does_not_block_the_management_ap`、`test_pending_uci_runtime_delta_still_blocks_the_management_ap`、`test_pending_uci_state_delta_still_blocks_the_management_ap`、`test_symlinked_uci_delta_is_rejected` |
 | B2 | 同上，脚本改完仍失败 | 脚本用 `od` 生成随机密钥，而本固件 busybox **没有 `od`** applet | 改用 `sha256sum`/`md5sum`/`hexdump` 生成十六进制随机串 | `test_management_ap_does_not_depend_on_the_od_applet` |
 | B3 | TR3000 Full 服务页 HomeProxy / Cloudflare Tunnel 的 “Enable” 按钮点了没反应（F11 失败） | LuCI 的 `E()` 用 `setAttribute` 渲染属性，脚本写的 `'disabled': !state.installed` 变成 `disabled="false"`，HTML 仍按“存在即禁用”处理 | 改为按需写入字符串属性 `attributes.disabled = 'disabled'`（与仓库 Lite 页面写法一致） | `test_full_services_view_keets_installed_services_actionable`、`test_local_luci_views_never_render_a_boolean_disabled_attribute` |
-| B4 | 全新刷机时受管 AP 仍未生成（开放默认热点依旧开放） | `91-…-management-ap` 与 init 服务都假设 `/etc/config/wireless` 已存在；而 mt_wifi 驱动是在启动过程中异步创建该文件的，首启时两者竞争 → 控制器以 `missing_wireless` 退出，init 服务也只尝试一次 | 控制器首启最多等待 45 s 等待无线配置出现；init 服务改为最多重试 12 次（间隔 10 s），覆盖驱动较慢的情况 | `test_ap_creation_waits_for_the_radio_driver_configuration`、`test_repair_service_retries_until_the_radio_configuration_exists` |
+| B4 | 全新刷机时受管 AP 仍未生成（开放默认热点依旧开放） | `91-…-management-ap` 与 init 服务都假设 `/etc/config/wireless` 已存在；而 mt_wifi 驱动是在启动过程中异步创建该文件的，首启时两者竞争 → 控制器以 `missing_wireless` 退出，init 服务也只尝试一次 | 控制器首启最多等待 45 s；init 服务改为最多重试 12 次（间隔 10 s） | `test_ap_creation_waits_for_the_radio_driver_configuration`、`test_repair_service_retries_until_the_radio_configuration_exists` |
+| B5 | 设备自身无法解析任何域名（opkg update 全败、NTP 永不同步、按域名的 wget 全败）；LAN 客户端不受影响 | Full/Lite 的 network overlay 整体重写时**丢掉了上游的 loopback 段**（设计文档 §6.2 的示例 UCI 也没有），`lo` 永不启动 → dnsmasq（bind-dynamic）绑不上 127.0.0.1，而 `/tmp/resolv.conf` 恰指向 127.0.0.1 | 两个 overlay 补回标准 loopback 段（`lo` + `127.0.0.1/8`） | `test_overlay_networks_keep_the_loopback_interface` |
+| B6 | 服务页把“wg 接口未配置”误标为 “Not included in this build”（WireGuard 包实际在镜像里） | 控制器对 wireguard 的 `installed` 语义是“存在 network.wg 接口”，视图却把它与“未编译”共用一个标签 | 视图对 wireguard 单独显示 “wg interface not configured (Network → Interfaces)” | 结构测试断言视图含该分支与文案 |
 
-B4 在 2026-11-22 的全新配置首启中被实测触发（控制器报 `missing_wireless`，而 `/etc/config/wireless` 在启动后数十秒才由 mt_wifi 驱动生成）。B1–B4 均位于 Lite/Full 共有脚本，按漂移守卫要求两份同步修改。
+B4 在 2026-11-22 的全新配置首启中被实测触发（控制器报 `missing_wireless`，而 `/etc/config/wireless` 在启动后数十秒才由 mt_wifi 驱动生成）。B5 在 2026-11-24 由“opkg update 全败”报障触发：实机 `lo` 为 DOWN、dnsmasq 未绑 127.0.0.1；热修复 loopback 后设备解析、NTP（时间从编译日跳到真实时间）与本地监听立即恢复。B1–B6 均位于 Lite/Full 共有文件或两变体同步修改（漂移守卫要求逐字一致）。B5/B6 的修复在 `84fb1d3`/`46b8a91`，**尚未进入已刷固件**，需下次构建+刷机后复验。
+
+**opkg 软件源结论（2026-11-24 实测）**
+
+- 镜像预置源 `mirrors.vsean.net/.../24.10-SNAPSHOT/...` 在 B5 修复后仍不可用：官方 ImmortalWrt snapshot 路径已 404（snapshot 会被镜像站定期清理），vsean 返回 302。**固定修订版本的固件不能依赖活的 snapshot 镜像**，这是 snapshot 发行模型的固有问题，不是本仓库缺陷。
+- 正确源是构建自身生成的仓库（`bin/packages` + `bin/targets/.../packages`，含 `Packages.sig`）。实验室已验证完整链路：仓库上传到设备 `/tmp/repo` 并用第二个 uhttpd 实例在 `127.0.0.1:8091` 自服务 → 将构建公钥（`key-build.pub`，keyid `f690309031edcade`，文件名算法 = 公钥解码后 bytes[2:10] 的 hex）放入 `/etc/opkg/keys/` → `opkg update` 0 签名失败、12 个列表保留 → 安装/移除 htop 3.5.3-r1 成功，设备包数回到出厂 417。
+- 生产化建议（未实施）：把构建仓库随 Artifact 一起发布（或内网镜像），并在文档中说明 keyid 分发步骤；`/etc/opkg.conf` 的 `check_signature` 保持开启。
 
 B1/B2 的修复脚本已手工部署到测试设备验证：`/usr/sbin/tr3000-full-wifi repair` 返回 `ready=true, managed_aps=2, open_aps=0`，受管 AP `TR3000-Full-B515F0`（WPA2 PSK，`network=lan`）上线，开放默认 AP 变为 `disabled 1`，`/etc/config/wireless` 权限从 `0644` 收紧为 `0600`，就绪标记写入。B3 的修复视图已部署到设备验证：已安装服务的按钮 `disabled=false` 且点击后 `homeproxy` 真正变为 `enabled`（未配节点时仍不运行，无残留），随后恢复为禁用状态。
 
