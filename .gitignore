@@ -30,4 +30,4 @@ __pycache__/
 
 # Browser automation scratch space
 /.playwright-cli/
-
+/.playwright/

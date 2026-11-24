@@ -7,9 +7,9 @@ SOURCE_DIR=
 BASE_CONFIG=
 CCACHE_DIR_OVERRIDE=
 SEED="$REPO_ROOT/configs/full.seed"
-INCLUDE_TAILSCALE=true
+INCLUDE_TAILSCALE=false
 INCLUDE_SINGBOX=true
-INCLUDE_CLOUDFLARED=false
+INCLUDE_CLOUDFLARED=true
 
 usage() {
 	printf 'Usage: %s --source-dir DIR --base-config FILE [--seed FILE] [--ccache-dir DIR] [--include-tailscale true|false] [--include-singbox true|false] [--include-cloudflared true|false]\n' "$0"
@@ -112,19 +112,33 @@ mkdir -p "$SOURCE_DIR/package/luci-app-tr3000-full"
 cp -R "$LOCAL_LUCI_PACKAGE/." "$SOURCE_DIR/package/luci-app-tr3000-full/"
 mkdir -p "$SOURCE_DIR/files"
 cp -R "$REPO_ROOT/files/." "$SOURCE_DIR/files/"
+# Device-scoped Full assets win over the shared rootfs.
+FULL_OVERLAY="$REPO_ROOT/overlays/devices/tr3000-full/files"
+[ -d "$FULL_OVERLAY" ] || fail "Full overlay not found: $FULL_OVERLAY"
+cp -R "$FULL_OVERLAY/." "$SOURCE_DIR/files/"
 mkdir -p "$SOURCE_DIR/files/root/scripts" "$SOURCE_DIR/files/usr/sbin"
-for SCRIPT in plant-profile.sh plant-access.sh preflight.sh lite-common.sh singbox-rollback.sh; do
+for SCRIPT in preflight.sh lite-common.sh; do
 	install -m 0755 "$SCRIPT_DIR/$SCRIPT" "$SOURCE_DIR/files/root/scripts/$SCRIPT"
 done
 install -m 0755 "$SCRIPT_DIR/service-toggle.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-service"
-install -m 0755 "$SCRIPT_DIR/lite-uplink-watch.sh" "$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
+# The self-healing controller repairs the radio on every later boot; it runs
+# the same first-boot implementation from a permanent path.
+install -m 0755 "$SCRIPT_DIR/tr3000-full-wifi.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-wifi"
+install -m 0755 "$FULL_OVERLAY/etc/uci-defaults/91-tr3000-full-management-ap" \
+	"$SOURCE_DIR/files/usr/sbin/tr3000-full-wifi-ap"
+install -m 0755 "$SCRIPT_DIR/tr3000-full-uplink-watch.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-uplink-watch"
+install -m 0755 "$SCRIPT_DIR/tr3000-full-uplink-status.sh" "$SOURCE_DIR/files/usr/sbin/tr3000-full-uplink-status"
+mkdir -p "$SOURCE_DIR/files/usr/lib/tr3000-full"
+install -m 0644 "$SCRIPT_DIR/tr3000-full-uplink-lib.sh" "$SOURCE_DIR/files/usr/lib/tr3000-full/uplink-lib.sh"
+install -m 0644 "$SCRIPT_DIR/tr3000-full-usbwan-lib.sh" "$SOURCE_DIR/files/usr/lib/tr3000-full/usbwan-lib.sh"
+install -m 0755 "$SCRIPT_DIR/tr3000-full-uplink-changed.sh" "$SOURCE_DIR/files/usr/lib/tr3000-full/uplink-changed"
 install -m 0644 "$SCRIPT_DIR/lite-common.sh" "$SOURCE_DIR/files/usr/sbin/lite-common.sh"
-install -m 0755 "$REPO_ROOT/files/etc/init.d/lite-uplink-watch" \
-	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch"
-install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
-	"$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch"
-install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/95-tr3000-full-services" \
-	"$SOURCE_DIR/files/etc/uci-defaults/95-tr3000-full-services"
+# The shared rootfs still carries the Lite-named watcher for the Lite build;
+# Full ships its own controller, so drop the shared leftovers from this image.
+rm -f "$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch" \
+	"$SOURCE_DIR/files/etc/init.d/lite-uplink-watch" \
+	"$SOURCE_DIR/files/etc/config/lite-uplink-watch" \
+	"$SOURCE_DIR/files/usr/sbin/lite-uplink-watch"
 
 DYNAMIC_SEED=$(mktemp "$SOURCE_DIR/.config.full-options.XXXXXX")
 TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.full.XXXXXX")
@@ -133,7 +147,11 @@ cp "$SEED" "$DYNAMIC_SEED"
 for ENTRY in \
 	"tailscale:$INCLUDE_TAILSCALE" \
 	"sing-box:$INCLUDE_SINGBOX" \
-	"cloudflared:$INCLUDE_CLOUDFLARED"
+	"luci-app-homeproxy:$INCLUDE_SINGBOX" \
+	"luci-i18n-homeproxy-zh-cn:$INCLUDE_SINGBOX" \
+	"cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-i18n-cloudflared-zh-cn:$INCLUDE_CLOUDFLARED"
 do
 	PACKAGE=${ENTRY%%:*}
 	VALUE=${ENTRY#*:}
@@ -201,15 +219,26 @@ for PACKAGE in \
 	kmod-usb-net-cdc-ether kmod-usb-net-rndis kmod-wireguard luci \
 	luci-app-tr3000-full luci-i18n-base-zh-cn luci-proto-wireguard \
 	luci-ssl-openssl luci-theme-bootstrap openssh-server openssh-sftp-server \
-	tcpdump-mini ubi-utils wireguard-tools
+	tcpdump-mini ubi-utils wireguard-tools \
+	ucode-mod-digest \
+	luci-app-ddns ddns-scripts ddns-scripts-cloudflare luci-i18n-ddns-zh-cn \
+	luci-theme-argon luci-app-argon-config luci-i18n-argon-config-zh-cn \
+	wpad-openssl
 do
 	grep -Fq "CONFIG_PACKAGE_$PACKAGE=y" "$SOURCE_DIR/.config" ||
 		fail "required Full package was not selected: $PACKAGE"
 done
+if grep -E '^CONFIG_PACKAGE_wpad-[^=]+=[ym]$' "$SOURCE_DIR/.config" | grep -Fvx 'CONFIG_PACKAGE_wpad-openssl=y' >/dev/null; then
+	fail "conflicting wpad provider selected after defconfig"
+fi
 for ENTRY in \
 	"tailscale:$INCLUDE_TAILSCALE" \
 	"sing-box:$INCLUDE_SINGBOX" \
-	"cloudflared:$INCLUDE_CLOUDFLARED"
+	"luci-app-homeproxy:$INCLUDE_SINGBOX" \
+	"luci-i18n-homeproxy-zh-cn:$INCLUDE_SINGBOX" \
+	"cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
+	"luci-i18n-cloudflared-zh-cn:$INCLUDE_CLOUDFLARED"
 do
 	PACKAGE=${ENTRY%%:*}
 	VALUE=${ENTRY#*:}
@@ -223,7 +252,7 @@ done
 for PACKAGE in \
 	adguardhome docker dockerd luci-app-aurora-config luci-app-bandix \
 	luci-app-dockerman luci-app-openclash luci-app-passwall luci-app-upnp \
-	luci-theme-aurora miniupnpd dropbear ruby libruby tcpdump
+	luci-theme-aurora miniupnpd dropbear ruby libruby tcpdump kmod-usb-net-ipheth
 do
 	if grep -Fq "CONFIG_PACKAGE_$PACKAGE=y" "$SOURCE_DIR/.config"; then
 		fail "excluded package remained selected after defconfig: $PACKAGE"

@@ -1,0 +1,134 @@
+#!/bin/sh
+# Reconcile approved USB Ethernet events only; never consume DEVPATH as a path.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+. /usr/lib/tr3000-full/usbwan-lib.sh
+case "${ACTION:-}" in add|remove|reconcile) ;; *) exit 0 ;; esac
+tr3000_full_usbwan_name_valid "${INTERFACE:-}" || exit 1
+SYSFS=/sys
+CONFIG=/etc/config
+RUNTIME=/var/run/tr3000-full
+PENDING=/tmp/.uci/network
+OVERRIDE=/var/run/uci/network
+[ ! -L "$RUNTIME" ] && [ ! -L "$CONFIG" ] &&
+	[ -f "$CONFIG/network" ] && [ ! -L "$CONFIG/network" ] || exit 1
+mkdir -p "$RUNTIME" || exit 1
+chmod 0700 "$RUNTIME" || exit 1
+LOCK="$RUNTIME/usbwan.lock"
+tries=0
+until mkdir "$LOCK" 2>/dev/null; do
+	tries=$((tries+1))
+	[ "$tries" -lt 10 ] || exit 1
+	sleep 1
+done
+CANDIDATE=; REPLACEMENT=; DIRTY=0; NETWORK_LOCKED=0
+NETWORK_LOCK=/var/lock/tr3000-full-network
+cleanup() {
+	if [ "$DIRTY" = 1 ]; then
+		cp -p "$CANDIDATE/original" "$CONFIG/network" || :
+		ubus call network reload >/dev/null 2>&1 || :
+	fi
+	[ -z "$REPLACEMENT" ] || rm -f "$REPLACEMENT"
+	[ -z "$CANDIDATE" ] || rm -rf "$CANDIDATE"
+	[ "$NETWORK_LOCKED" = 0 ] || rmdir "$NETWORK_LOCK"
+	rmdir "$LOCK"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+get() { uci -q -c "$CONFIG" get "$1" 2>/dev/null; }
+selected=; driver=; vid=; pid=; path=
+write_status() {
+	[ ! -L "$RUNTIME/usbwan.json" ] || return 1
+	status_tmp=$(mktemp "$RUNTIME/.usbwan-status.XXXXXX") || return 1
+	# All values come from validated sysfs fields, never arbitrary command output.
+	(umask 077; printf '{"schema_version":1,"state":"%s","interface":"usbwan","device":"%s","driver":"%s","vid":"%s","pid":"%s","path":"%s"}\n' \
+		"$1" "$selected" "$driver" "$vid" "$pid" "$path" > "$status_tmp") &&
+		mv -f "$status_tmp" "$RUNTIME/usbwan.json"
+}
+refuse() {
+	selected=; driver=; vid=; pid=; path=
+	write_status "$1" || :
+	exit 1
+}
+
+# Serialize network-file writes: a USB event must not overwrite a
+# simultaneous configuration apply's network snapshot.
+[ ! -L /var/lock ] || refuse blocked
+mkdir -p /var/lock || refuse error
+tries=0
+until mkdir "$NETWORK_LOCK" 2>/dev/null; do
+	tries=$((tries+1))
+	[ "$tries" -lt 10 ] || refuse blocked
+	sleep 1
+done
+NETWORK_LOCKED=1
+current=$(get network.usbwan.device || :)
+owned=$(get network.usbwan.tr3000_full_managed || :)
+[ -z "$current" ] || [ "$owned" = 1 ] || refuse blocked
+[ "$(get network.usbwan.proto)" = dhcp ] || refuse blocked
+[ "$(get network.usbwan.metric)" = 30 ] || refuse blocked
+count=0
+for net in "$SYSFS"/class/net/*; do
+	name=${net##*/}
+	metadata=$(tr3000_full_usbwan_classify "$name" "$SYSFS") || continue
+	count=$((count+1))
+	selected=$name
+	selected_metadata=$metadata
+	IFS="$(printf '\t')" read -r driver vid pid path <<EOF
+$metadata
+EOF
+done
+if [ "$count" -gt 1 ]; then
+	state=ambiguous
+	selected=; driver=; vid=; pid=; path=
+elif [ "$count" -eq 0 ]; then
+	state=unavailable
+	selected=; driver=; vid=; pid=; path=
+else
+	state=bound
+	for protected in wan lan wwan; do
+		devices=$(get "network.$protected.device" || :)
+		for device in $devices; do [ "$device" != "$selected" ] || refuse blocked; done
+	done
+fi
+# Recompute from current sysfs under the lock, not stale add/remove event order.
+# A delayed remove for a name already replugged therefore cannot detach it.
+if [ "$selected" = "$current" ]; then
+	write_status "$state" || exit 1
+	exit 0
+fi
+[ ! -e "$PENDING" ] && [ ! -L "$PENDING" ] &&
+	[ ! -e "$OVERRIDE" ] && [ ! -L "$OVERRIDE" ] || refuse blocked
+changes=$(uci -q -c "$CONFIG" changes network) || refuse error
+[ -z "$changes" ] || refuse blocked
+CANDIDATE=$(mktemp -d "$RUNTIME/usbwan-candidate.XXXXXX") || refuse error
+cp -p "$CONFIG/network" "$CANDIDATE/original" &&
+	cp -p "$CONFIG/network" "$CANDIDATE/network" &&
+	mkdir "$CANDIDATE/delta" || refuse error
+candidate_uci() { uci -q -c "$CANDIDATE" -C '' -t "$CANDIDATE/delta" "$@"; }
+if [ -n "$selected" ]; then
+	# Recheck after potentially slow UCI calls: do not bind a vanished/replaced NIC.
+	[ "$(tr3000_full_usbwan_classify "$selected" "$SYSFS")" = "$selected_metadata" ] || refuse error
+	candidate_uci set "network.usbwan.device=$selected" &&
+		candidate_uci set network.usbwan.auto=1 || refuse error
+else
+	candidate_uci delete network.usbwan.device &&
+		candidate_uci set network.usbwan.auto=0 || refuse error
+fi
+candidate_uci set network.usbwan.tr3000_full_managed=1 &&
+	candidate_uci commit network || refuse error
+# Preserve permissions and replace one config atomically, retaining the original
+# for best-effort recovery if netifd reload/ifup fails. Never revert admin deltas.
+REPLACEMENT=$(mktemp "$CONFIG/.network-usbwan.XXXXXX") || refuse error
+cp -p "$CANDIDATE/network" "$REPLACEMENT" || refuse error
+if [ -n "$current" ]; then ifdown usbwan >/dev/null 2>&1 || refuse error; fi
+mv -f "$REPLACEMENT" "$CONFIG/network" || refuse error
+REPLACEMENT=
+DIRTY=1
+ubus call network reload >/dev/null 2>&1 || refuse error
+if [ -n "$selected" ]; then
+	ifup usbwan >/dev/null 2>&1 || { ifdown usbwan >/dev/null 2>&1 || :; refuse error; }
+fi
+DIRTY=0
+write_status "$state" || exit 1

@@ -7,9 +7,9 @@ SOURCE_DIR=
 UPSTREAM_DIR=
 ARTIFACT_DIR=
 JOBS=4
-INCLUDE_TAILSCALE=true
+INCLUDE_TAILSCALE=false
 INCLUDE_SINGBOX=true
-INCLUDE_CLOUDFLARED=false
+INCLUDE_CLOUDFLARED=true
 
 usage() {
 	printf 'Usage: %s --source-dir DIR --upstream-dir DIR --artifact-dir DIR [--jobs N] [--include-tailscale true|false] [--include-singbox true|false] [--include-cloudflared true|false]\n' "$0"
@@ -88,6 +88,27 @@ sh "$SCRIPT_DIR/configure-full.sh" \
 	--include-cloudflared "$INCLUDE_CLOUDFLARED"
 cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/build.config"
 
+# The shipped overlay must keep the home router reachable out of the box:
+# a factory device has to hand out an address, answer ping and serve LuCI.
+ACCESS_NETWORK="$SOURCE_DIR/files/etc/config/network"
+ACCESS_DHCP="$SOURCE_DIR/files/etc/config/dhcp"
+[ -f "$ACCESS_NETWORK" ] || fail "Full overlay is missing the access segment network configuration"
+[ -f "$ACCESS_DHCP" ] || fail "Full overlay is missing the access segment DHCP configuration"
+for access_token in "config interface 'lan'" "option ipaddr '192.168.10.1'" \
+	"config device 'br_lan'" "list ports 'eth1'"; do
+	grep -Fq "$access_token" "$ACCESS_NETWORK" ||
+		fail "Full overlay access segment is incomplete: $access_token"
+done
+for retired in plant mgmt; do
+	if grep -Fq "$retired" "$ACCESS_NETWORK"; then
+		fail "Full overlay must not ship the retired industrial segment: $retired"
+	fi
+done
+grep -Fq "config dhcp 'lan'" "$ACCESS_DHCP" ||
+	fail "Full overlay access segment has no DHCP configuration"
+[ ! -e "$SOURCE_DIR/files/etc/config/wireless" ] ||
+	fail "Full overlay must not ship a wireless configuration"
+
 if [ -n "${SOURCE_SHA:-}" ]; then
 	SOURCE_DATE_EPOCH=$(git -C "$SOURCE_DIR" show -s --format=%ct "$SOURCE_SHA")
 	export SOURCE_DATE_EPOCH
@@ -144,8 +165,87 @@ $IMAGE_LIST
 EOF
 [ "$IMAGE_COUNT" -gt 0 ] || fail "no firmware image was packaged"
 grep '^CONFIG_PACKAGE_.*=y$' "$SOURCE_DIR/.config" | sort > "$ARTIFACT_DIR/selected-packages.txt"
+grep -Fq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' "$SOURCE_DIR/.config" ||
+	fail "final config does not select the expected device profile"
+grep -Fq 'reg = <0x5c0000 0x7000000>;' \
+	"$SOURCE_DIR/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts" ||
+	fail "final DTS is not the expected 112 MiB UBI layout"
+
+# The target repository index contains only target-specific packages. Use the
+# profile manifest emitted by opkg list-installed for the complete image list.
+IMAGE_MANIFESTS=$(find "$TARGET_DIR" -maxdepth 1 -type f \
+	-name '*cudy_tr3000-v1-ubootmod.manifest' | sort)
+[ "$(printf '%s\n' "$IMAGE_MANIFESTS" | awk 'NF { n++ } END { print n+0 }')" -eq 1 ] ||
+	fail "expected exactly one image package manifest for cudy_tr3000-v1-ubootmod"
+for package in luci-app-tr3000-full wpad-openssl \
+	luci-theme-argon ddns-scripts-cloudflare kmod-usb-net kmod-usb-net-rndis kmod-usb-net-cdc-ether; do
+	awk -v package="$package" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS" ||
+		fail "image manifest is missing required package: $package"
+done
+if grep -Eq '^(ruby|libruby|luci-app-openclash|luci-app-passwall|luci-theme-aurora)([[:space:]]|$)' "$IMAGE_MANIFESTS"; then
+	fail "image manifest contains an excluded package"
+fi
+IMAGE_USB_PACKAGES=$(awk '$1 ~ /^kmod-usb-net/ { print $1 }' "$IMAGE_MANIFESTS" | sort -u)
+EXPECTED_USB_PACKAGES=$(printf '%s\n' kmod-usb-net kmod-usb-net-cdc-ether kmod-usb-net-rndis)
+[ "$IMAGE_USB_PACKAGES" = "$EXPECTED_USB_PACKAGES" ] ||
+	fail "image manifest contains an unexpected USB network package"
+for entry in "cloudflared:$INCLUDE_CLOUDFLARED" "luci-app-cloudflared:$INCLUDE_CLOUDFLARED" \
+	"tailscale:$INCLUDE_TAILSCALE" "sing-box:$INCLUDE_SINGBOX" \
+	"luci-app-homeproxy:$INCLUDE_SINGBOX"; do
+	PACKAGE=${entry%%:*}
+	VALUE=${entry#*:}
+	if [ "$VALUE" = true ]; then
+		awk -v package="$PACKAGE" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS" ||
+			fail "requested optional package is missing from the image: $PACKAGE"
+	elif awk -v package="$PACKAGE" '$1 == package { found=1 } END { exit !found }' "$IMAGE_MANIFESTS"; then
+		fail "disabled optional package remained in the image: $PACKAGE"
+	fi
+done
+cp "$IMAGE_MANIFESTS" "$ARTIFACT_DIR/image-packages.manifest"
+awk 'NF { print $1 }' "$IMAGE_MANIFESTS" | sort -u > "$ARTIFACT_DIR/packages-manifest.txt"
+cp "$SOURCE_DIR/target/linux/mediatek/dts/mt7981b-cudy-tr3000-v1-ubootmod.dts" "$ARTIFACT_DIR/profile.dts"
+
+# Expected public defaults only: never read device wireless, shadow or private
+# UCI. This describes the shipped policy; it does not assert a successful boot.
+cat > "$ARTIFACT_DIR/full-runtime-contract.txt" <<'EOF'
+schema_version=1
+evidence_kind=expected-defaults-not-live-state
+lan_interface=lan
+lan_device=br-lan
+lan_cidr=192.168.10.1/24
+lan_dhcp_pool=192.168.10.100-192.168.10.249
+plant_segment=absent
+uplink_order=wan,wwan,usbwan
+uplink_metrics=10,20,30
+uplink_interval_seconds=15
+uplink_fail_rounds=3
+uplink_recover_rounds=2
+uplink_daemon=/usr/sbin/tr3000-full-uplink-watch
+uplink_status=/usr/sbin/tr3000-full-uplink-status
+usb_drivers=rndis_host,cdc_ether
+usb_hotplug=/etc/hotplug.d/net/90-tr3000-full-usbwan
+wireless_stack=mt_wifi
+management_ap_network=lan
+management_ap_encryption=psk2
+management_ap_default_open_ap=disabled
+proxy_engine=sing-box
+proxy_ui=homeproxy
+proxy_default=disabled
+tunnel_default=disabled
+wg_listener_default=0
+wg_to_lan_forwarding=present
+ddns_provider_default=cloudflare.com-v4
+ddns_default=disabled
+luci_theme_default=argon
+luci_theme_fallback=bootstrap
+wan_management=off
+EOF
+if find "$ARTIFACT_DIR" -type f \( -name '*.bundle' -o -name '*.key' -o -name '*token*' -o -name '*inventory*' \) | grep -q .; then
+	fail "forbidden secret or staging file entered the Artifact directory"
+fi
 if [ -f "$TARGET_DIR/packages/Packages.manifest" ]; then
-	grep '^Package: ' "$TARGET_DIR/packages/Packages.manifest" | sed 's/^Package: //' | sort -u > "$ARTIFACT_DIR/packages-manifest.txt"
+	grep '^Package: ' "$TARGET_DIR/packages/Packages.manifest" |
+		sed 's/^Package: //' | sort -u > "$ARTIFACT_DIR/target-package-index.txt"
 fi
 cat > "$ARTIFACT_DIR/README.txt" <<EOF
 Build type: TR3000-Full, 128 MiB NAND, U-Boot Mod, 112 MiB UBI layout
@@ -153,6 +253,10 @@ Device profile: cudy_tr3000-v1-ubootmod
 Optional packages: tailscale=$INCLUDE_TAILSCALE sing-box=$INCLUDE_SINGBOX cloudflared=$INCLUDE_CLOUDFLARED
 Runtime policy: remote-access services and WireGuard listener are disabled by default.
 Images in firmware/ are sysupgrade images for the verified layout, not factory or U-Boot images.
+full-runtime-contract.txt records public expected defaults, not live hardware verification.
+image-packages.manifest is the complete profile image package/version list; packages-manifest.txt is its name-only view.
+target-package-index.txt, if present, is only the target-specific package repository index.
+profile.dts is the final verified 112 MiB profile source; actual writable overlay capacity still requires hardware checks.
 Source SHA: ${SOURCE_SHA:-not-supplied}
 Wrapper/config SHA: $(git -C "$UPSTREAM_DIR" rev-parse HEAD)
 EOF

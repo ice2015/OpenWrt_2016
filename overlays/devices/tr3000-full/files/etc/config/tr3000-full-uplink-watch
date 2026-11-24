@@ -1,0 +1,16 @@
+config settings 'globals'
+	option interval '15'
+	option failures '3'
+	option successes '2'
+
+config uplink 'wan'
+	list probe_ip '1.1.1.1'
+	list probe_ip '9.9.9.9'
+
+config uplink 'wwan'
+	list probe_ip '1.1.1.1'
+	list probe_ip '9.9.9.9'
+
+config uplink 'usbwan'
+	list probe_ip '1.1.1.1'
+	list probe_ip '9.9.9.9'

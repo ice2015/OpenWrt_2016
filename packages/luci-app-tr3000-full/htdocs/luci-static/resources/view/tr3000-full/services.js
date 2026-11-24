@@ -5,10 +5,10 @@
 
 var controller = '/usr/sbin/tr3000-full-service';
 var services = [
-	{ id: 'wireguard', title: _('WireGuard tunnel'), note: _('Plant access still requires explicit peer, destination and port authorization.') },
-	{ id: 'tailscale', title: _('Tailscale'), note: _('Configure ACLs and approved routes before enabling.') },
-	{ id: 'sing-box', title: _('sing-box'), note: _('Industrial, management and VPN endpoint traffic must remain excluded.') },
-	{ id: 'cloudflared', title: _('Cloudflare Tunnel'), note: _('Expose only Access-protected web applications, never PLC control ports.') }
+	{ id: 'wireguard', title: _('WireGuard tunnel'), note: _('Inbound access to the home LAN. Configure the wg interface and enable the firewall rules first.') },
+	{ id: 'tailscale', title: _('Tailscale'), note: _('Optional backup remote channel. Configure ACLs before enabling.') },
+	{ id: 'homeproxy', title: _('HomeProxy (sing-box)'), note: _('Configure nodes and routing mode in Services → HomeProxy.') },
+	{ id: 'cloudflared', title: _('Cloudflare Tunnel'), note: _('Expose only Access-protected web applications.') }
 ];
 
 function invoke(action, service) {
@@ -33,25 +33,37 @@ return view.extend({
 	render: function(status) {
 		var rows = services.map(function(service) {
 			var state = status[service.id] || { installed: false, enabled: false, running: false };
-			var label = !state.installed
-				? _('Not included in this build')
-				: (state.running ? _('Running') : _('Stopped'));
+			// WireGuard ships in every build; its controller reports "installed"
+			// only once a wg interface exists, so the label must not claim the
+			// package is missing.
+			var label = state.installed
+				? (state.running ? _('Running') : _('Stopped'))
+				: (service.id === 'wireguard'
+					? _('wg interface not configured (Network → Interfaces)')
+					: _('Not included in this build'));
 			var action = state.enabled || state.running ? 'disable' : 'enable';
+			// LuCI renders every attribute through setAttribute, so a boolean
+			// "disabled: false" would still emit the HTML disabled attribute
+			// and leave the button inert. Only omit or set the attribute.
+			var attributes = {
+				'class': action === 'enable' ? 'cbi-button cbi-button-apply' : 'cbi-button cbi-button-reset',
+				'click': ui.createHandlerFn(this, invoke, action, service.id)
+			};
+			if (!state.installed) attributes.disabled = 'disabled';
 			return E('tr', {}, [
 				E('td', { 'class': 'td left' }, [ E('strong', {}, service.title), E('br'), E('small', {}, service.note) ]),
 				E('td', { 'class': 'td' }, label),
-				E('td', { 'class': 'td right' }, E('button', {
-					'class': action === 'enable' ? 'cbi-button cbi-button-apply' : 'cbi-button cbi-button-reset',
-					'disabled': !state.installed,
-					'click': ui.createHandlerFn(this, invoke, action, service.id)
-				}, action === 'enable' ? _('Enable') : _('Disable')))
+				E('td', { 'class': 'td right' }, E('button', attributes,
+					action === 'enable' ? _('Enable') : _('Disable')))
 			]);
 		}, this);
 
 		return E([], [
 			E('h2', {}, _('TR3000 Full remote services')),
+			status.legacy_config_detected ? E('div', { 'class': 'alert-message danger' },
+				_('Legacy industrial configuration detected. Reflash without keeping settings (sysupgrade -n).')) : E([]),
 			E('div', { 'class': 'alert-message warning' },
-				_('All remote services are disabled by default. Enabling a tunnel does not grant access to the plant network.')),
+				_('All remote services are disabled by default. Enabling a tunnel does not open the WAN management plane.')),
 			E('table', { 'class': 'table' }, [
 				E('tr', { 'class': 'tr table-titles' }, [
 					E('th', { 'class': 'th' }, _('Service')),

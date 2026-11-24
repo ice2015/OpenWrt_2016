@@ -14,8 +14,8 @@ from tests.scripts import test_tr3000_lite_plant as plant_tests
 # The fixture's fake /dev/urandom. The controller derives the key and the
 # fallback suffix from it with busybox head+sha256sum (od is not shipped).
 FIXTURE_RANDOM = bytes(range(16)) * 4
-FIXTURE_KEY = hashlib.sha256(FIXTURE_RANDOM[:64]).hexdigest()[:32]
-FIXTURE_SUFFIX = hashlib.sha256(FIXTURE_RANDOM[:12]).hexdigest()[:6].upper()
+FIXTURE_KEY = hashlib.sha256(FIXTURE_RANDOM[:16]).hexdigest()[:32]
+FIXTURE_SUFFIX = hashlib.sha256(FIXTURE_RANDOM[:3]).hexdigest()[:6].upper()
 
 SCRIPT = ROOT/'overlays/devices/tr3000-lite/files/etc/uci-defaults/91-tr3000-lite-management-ap'
 FAKE = r'''
@@ -149,6 +149,10 @@ class ManagementAPTests(unittest.TestCase):
         (self.root/'bin/fake.py').write_text(FAKE)
         uci=self.root/'bin/uci'
         uci.write_text('#!/bin/sh\nexec "$TEST_PYTHON" -S "$WIFI_FIXTURE/bin/fake.py" "$@"\n',newline='\n'); uci.chmod(0o755)
+        # The firmware image ships a busybox without the "od" applet. A stub
+        # that fails like a missing applet proves the controller never needs it.
+        od=self.root/'bin/od'
+        od.write_text('#!/bin/sh\ntouch "$WIFI_FIXTURE/od-used"\nexit 127\n',newline='\n'); od.chmod(0o755)
         self.state={'wireless.radio0':'wifi-device','wireless.radioOdd':'wifi-device'}
         self.save()
 
@@ -162,7 +166,7 @@ class ManagementAPTests(unittest.TestCase):
         self.assertTrue(SCRIPT.is_file(), 'management AP defaults script is missing')
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
         text=text.replace('RUNTIME=/tmp','RUNTIME="'+self.root.as_posix()+'/tmp"')
-        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/dev/urandom',(self.root/'random').as_posix())):
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/tmp/.uci',self.root.as_posix()+'/tmp/.uci'),('/dev/urandom',(self.root/'random').as_posix())):
             text=text.replace(old,new)
         installed=self.root/'etc/uci-defaults/91-tr3000-lite-management-ap'
         installed.write_text(text,newline='\n')
@@ -229,7 +233,7 @@ file=91-tr3000-lite-management-ap
     def ap_script_text(self):
         text=SCRIPT.read_text().replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd "$WIFI_FIXTURE/bin" && pwd):/usr/bin:/bin"')
         text=text.replace('RUNTIME=/tmp','RUNTIME="'+self.root.as_posix()+'/tmp"')
-        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/dev/urandom',(self.root/'random').as_posix())):
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),('/sys/',self.root.as_posix()+'/sys/'),('/var/',self.root.as_posix()+'/var/'),('/tmp/.uci',self.root.as_posix()+'/tmp/.uci'),('/dev/urandom',(self.root/'random').as_posix())):
             text=text.replace(old,new)
         return text
 
@@ -344,8 +348,96 @@ file=91-tr3000-lite-management-ap
         self.assertEqual('0',d['wireless.secure.disabled'])
         self.assertEqual('sae',d['wireless.secure.encryption'])
 
+    def test_ap_creation_waits_for_the_radio_driver_configuration(self):
+        # The radio driver publishes /etc/config/wireless a few seconds into
+        # the boot. The controller must wait for it instead of failing the
+        # first-boot identity before the radios are configured.
+        (self.root/'etc/config/wireless').unlink(missing_ok=True)
+        import threading
+        def publish():
+            import time
+            time.sleep(4)
+            (self.root/'etc/config/wireless').write_text(json.dumps(MTWIFI_STATE))
+        publisher = threading.Thread(target=publish); publisher.start()
+        d = self.run_ap(state=None)
+        publisher.join()
+        self.assertEqual(2, len(self.aps(d)))
+        self.assertEqual('1', d.get('wireless.default_radio0.disabled'))
+
+    def test_repair_service_retries_until_the_radio_configuration_exists(self):
+        # The init service runs before the radio driver has published its
+        # configuration, so it has to retry instead of giving up for the boot.
+        self.install_ap_script(); self.install_fake_wifi()
+        (self.root/'etc/config/wireless').unlink(missing_ok=True)
+        init=ROOT/'overlays/devices/tr3000-lite/files/etc/init.d/tr3000-lite-wifi'
+        self.assertTrue(init.is_file(),'the wireless init service is missing')
+        text=init.read_text().replace('#!/bin/sh /etc/rc.common','#!/bin/sh')
+        for old,new in (('/etc/',self.root.as_posix()+'/etc/'),
+                        ('/usr/sbin/tr3000-lite-wifi',(self.root/'bin/tr3000-lite-wifi').as_posix()),
+                        ('/sbin/wifi',(self.root/'bin/wifi').as_posix())):
+            text=text.replace(old,new)
+        # The controller and the fake wifi helper have to exist for the service.
+        shutil_src=self.root/'bin/tr3000-lite-wifi'
+        shutil_src.write_text((ROOT/'scripts/tr3000-lite-wifi.sh').read_text()
+                              .replace('PATH=/usr/sbin:/usr/bin:/sbin:/bin','PATH="$(cd \"$WIFI_FIXTURE/bin\" && pwd):/usr/bin:/bin"')
+                              .replace('/etc/',self.root.as_posix()+'/etc/')
+                              .replace('/usr/sbin/tr3000-lite-wifi-ap',(self.root/'usr/sbin/tr3000-lite-wifi-ap').as_posix())
+                              .replace('/sbin/wifi',(self.root/'bin/wifi').as_posix()),newline='\n')
+        shutil_src.chmod(0o755)
+        (self.root/'bin/logger').write_text('#!/bin/sh\nexit 0\n',newline='\n'); (self.root/'bin/logger').chmod(0o755)
+        target=self.root/'bin/tr3000-lite-wifi-init'
+        target.write_text(text,newline='\n'); target.chmod(0o755)
+        import threading
+        def publish():
+            import time
+            time.sleep(4)
+            (self.root/'etc/config/wireless').write_text(json.dumps(MTWIFI_STATE))
+        publisher=threading.Thread(target=publish); publisher.start()
+        result=subprocess.run([bash_executable(),'-c','. "%s"; start' % target],
+                              capture_output=True,text=True,timeout=180,
+                              env=dict(os.environ,WIFI_FIXTURE=self.root.as_posix(),TEST_PYTHON=Path(sys.executable).as_posix()))
+        publisher.join()
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        d=self.load()
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertTrue(self.marker().is_file())
+
     def test_marker_directory_cannot_complete_initialization(self):
         self.marker().mkdir(parents=True); self.run_ap(False)
+
+    def test_empty_uci_runtime_delta_does_not_block_the_management_ap(self):
+        # The radio driver creates an empty uci runtime delta on every boot.
+        # It carries no pending change, so it must not keep the open default
+        # access point enabled or block the managed AP.
+        delta=self.root/'tmp/.uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        delta.write_text('')
+        d=self.run_ap(state=MTWIFI_STATE)
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertEqual('1',d.get('wireless.default_radio0.disabled'))
+        self.assertEqual('1',d.get('wireless.default_radio1.disabled'))
+        self.assertTrue(self.marker().is_file())
+
+    def test_pending_uci_runtime_delta_still_blocks_the_management_ap(self):
+        # A delta that really carries a staged administrator change must keep
+        # the controller from consuming it.
+        delta=self.root/'tmp/.uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        delta.write_text("package wireless\n")
+        self.run_ap(False)
+        self.assertFalse(self.marker().exists())
+
+    def test_pending_uci_state_delta_still_blocks_the_management_ap(self):
+        delta=self.root/'var/run/uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        delta.write_text("package wireless\n")
+        self.run_ap(False)
+        self.assertFalse(self.marker().exists())
+
+    def test_symlinked_uci_delta_is_rejected(self):
+        delta=self.root/'tmp/.uci/wireless'; delta.parent.mkdir(parents=True, exist_ok=True)
+        target=self.root/'tmp/.uci/real'
+        target.write_text('')
+        delta.symlink_to(target)
+        self.run_ap(False)
+        self.assertFalse(self.marker().exists())
 
     def test_stale_persistent_lock_cannot_block_boot_retry(self):
         (self.root/'etc/tr3000-lite/ap.lock').mkdir(parents=True)
@@ -465,6 +557,16 @@ file=91-tr3000-lite-management-ap
         (self.root/'sys/class/net/ra0/address').write_text('00:00:00:00:00:00')
         d=self.run_ap(); self.assertEqual({'TR3000-Lite-'+FIXTURE_SUFFIX},{d[a+'.ssid'] for a in self.aps(d)})
         self.assertEqual(d,self.run_ap())
+
+    def test_management_ap_does_not_depend_on_the_od_applet(self):
+        # The image has no "od"; the controller must derive its entropy from
+        # the hash utilities instead of dumping the random bytes.
+        d=self.run_ap(state=MTWIFI_STATE)
+        self.assertEqual(2,len(self.aps(d)))
+        self.assertFalse((self.root/'od-used').exists(),'the controller called od')
+        for ap in self.aps(d):
+            self.assertEqual(32,len(d[ap+'.key']))
+            self.assertTrue(all(c in '0123456789abcdef' for c in d[ap+'.key']))
 
     def test_ap_creation_does_not_mutate_plant_policy(self):
         firewall=ROOT/'overlays/devices/tr3000-lite/files/etc/config/firewall'

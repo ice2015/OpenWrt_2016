@@ -3,7 +3,7 @@ set -eu
 
 usage() {
 	printf 'Usage: %s status [--json]\n' "$0"
-	printf '       %s enable|disable wireguard|tailscale|sing-box|cloudflared\n' "$0"
+	printf '       %s enable|disable wireguard|tailscale|homeproxy|cloudflared\n' "$0"
 }
 
 usage_fail() {
@@ -13,7 +13,7 @@ usage_fail() {
 
 known_service() {
 	case "$1" in
-		wireguard|tailscale|sing-box|cloudflared) return 0 ;;
+		wireguard|tailscale|homeproxy|cloudflared) return 0 ;;
 		*) return 1 ;;
 	esac
 }
@@ -63,6 +63,14 @@ wireguard_running() {
 		ifstatus wg 2>/dev/null | grep -Eq '"up"[[:space:]]*:[[:space:]]*true'
 }
 
+# A retained industrial configuration (plant/mgmt) predates this firmware and
+# must be reflashed without keeping settings; never rewrite it silently.
+legacy_config_detected() {
+	command -v uci >/dev/null 2>&1 || return 1
+	[ -n "$(uci -q get network.plant 2>/dev/null)" ] ||
+		[ -n "$(uci -q get network.mgmt 2>/dev/null)" ]
+}
+
 print_json_status() {
 	printf '{'
 	printf '"wireguard":{"installed":%s,"enabled":%s,"running":%s},' \
@@ -73,14 +81,16 @@ print_json_status() {
 		"$(json_boolean init_installed tailscale)" \
 		"$(json_boolean init_enabled tailscale)" \
 		"$(json_boolean init_running tailscale)"
-	printf '"sing-box":{"installed":%s,"enabled":%s,"running":%s},' \
-		"$(json_boolean init_installed sing-box)" \
-		"$(json_boolean init_enabled sing-box)" \
-		"$(json_boolean init_running sing-box)"
-	printf '"cloudflared":{"installed":%s,"enabled":%s,"running":%s}' \
+	printf '"homeproxy":{"installed":%s,"enabled":%s,"running":%s},' \
+		"$(json_boolean init_installed homeproxy)" \
+		"$(json_boolean init_enabled homeproxy)" \
+		"$(json_boolean init_running homeproxy)"
+	printf '"cloudflared":{"installed":%s,"enabled":%s,"running":%s},' \
 		"$(json_boolean init_installed cloudflared)" \
 		"$(json_boolean init_enabled cloudflared)" \
 		"$(json_boolean init_running cloudflared)"
+	printf '"legacy_config_detected":%s' \
+		"$(json_boolean legacy_config_detected)"
 	printf '}\n'
 }
 

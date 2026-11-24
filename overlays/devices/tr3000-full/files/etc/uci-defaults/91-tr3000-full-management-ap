@@ -1,0 +1,284 @@
+#!/bin/sh
+# Lite first-boot identity. No password or policy exception is introduced here.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+umask 077
+STATE=/etc/tr3000-full
+CONFIG=/etc/config
+RUNTIME=/tmp
+# uci keeps uncommitted changes in a runtime delta and saved changes in a
+# state delta. Both files appear as soon as any process stages a change in
+# the runtime context, so only a delta that actually carries changes may
+# block the management AP.
+UCI_STATE_DELTA=/var/run/uci/wireless
+UCI_RUNTIME_DELTA=/tmp/.uci/wireless
+LOCK="$RUNTIME/tr3000-full-management-ap.lock"
+MARKER="$STATE/management-ap.initialized"
+TMP=
+LOCKED=0
+cleanup() {
+	[ -z "$TMP" ] || rm -rf "$TMP" || :
+	[ "$LOCKED" = 0 ] || rmdir "$LOCK" || :
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+fail() { printf 'Management AP initialization failed: %s\n' "$1" >&2; exit 1; }
+for path in /etc "$STATE" "$CONFIG" "$CONFIG/wireless" "$MARKER"; do
+	[ ! -L "$path" ] || fail unsafe_path
+done
+[ ! -e "$MARKER" ] || [ -f "$MARKER" ] || fail unsafe_marker
+# The radio driver creates the wireless configuration asynchronously while the
+# system boots. Waiting for it keeps the first-boot identity intact instead of
+# failing before the radios have published their configuration.
+waited=0
+while [ ! -f "$CONFIG/wireless" ]; do
+	[ "$waited" -ge 45 ] && fail missing_wireless
+	sleep 3
+	waited=$((waited+3))
+done
+# /tmp stays volatile with either pinned base-files /var layout.
+[ -d "$RUNTIME" ] && [ ! -L "$RUNTIME" ] || fail unsafe_runtime
+# Do not consume administrator changes or libuci runtime overrides.
+# The radio driver leaves an empty runtime delta behind on every boot; an
+# empty delta carries no pending change, and treating it as one would keep
+# the open default access point enabled forever.
+delta_pending() {
+	for delta in "$@"; do
+		[ -e "$delta" ] || continue
+		if [ -L "$delta" ]; then fail unsafe_delta; fi
+		if [ -s "$delta" ]; then return 0; fi
+	done
+	return 1
+}
+if delta_pending "$UCI_STATE_DELTA"; then fail runtime_override; fi
+if delta_pending "$UCI_RUNTIME_DELTA"; then fail pending_wireless; fi
+# Boot sources defaults on the left of &&, where set -e cannot enforce errors.
+mkdir -p "$STATE" || fail state_directory
+chmod 0700 "$STATE" || fail state_permissions
+mkdir "$LOCK" 2>/dev/null || fail busy
+LOCKED=1
+TMP=$(mktemp -d "$STATE/ap.XXXXXX") || fail temporary_directory
+mkdir "$TMP/delta" || fail delta_directory
+cp "$CONFIG/wireless" "$TMP/wireless" || fail candidate_copy
+chmod 0600 "$TMP/wireless" "$CONFIG/wireless" || fail wireless_permissions
+CONF=$TMP
+uci_ap() { uci -q -c "$CONF" -C '' -t "$TMP/delta" "$@"; }
+get() { uci_ap get "$1" 2>/dev/null || :; }
+sections() {
+	# -X exposes internal cfg... names for anonymous sections, as netifd needs.
+	uci_ap -X show wireless > "$TMP/sections" || return 1
+	sed -n "s/^wireless\.\([^.=]*\)=$1\$/\1/p" "$TMP/sections"
+}
+interface_uses_radio() {
+	# mtwifi writes a scalar device, mac80211 may write a list. Read the
+	# exported value instead of relying on a list-only delimiter option.
+	uci_ap show wireless | awk -v section="wireless.$1" -v radio="$2" '
+		index($0, section ".device=") == 1 {
+			value = substr($0, length(section) + 8)
+			gsub(/[^A-Za-z0-9_.-]/, " ", value)
+			count = split(value, parts, " ")
+			for (i = 1; i <= count; i++) if (parts[i] == radio) found = 1
+		}
+		END { exit !found }'
+}
+radios=$(sections wifi-device) || fail radio_discovery
+[ -n "$radios" ] || fail no_radios
+# Anonymous cfg names are hashes of options and change on commit/reload.
+# Pair normal and -X output in UCI order to distinguish true anonymous
+# sections from explicitly named cfg... sections, then persist safe names.
+uci_ap show wireless > "$TMP/extended" || fail radio_discovery
+references=$(sed -n 's/^wireless\.\([^.=]*\)=wifi-device$/\1/p' "$TMP/extended") || fail radio_discovery
+set -- $references
+radio_index=0
+for radio in $radios; do
+	printf '%s\n' "$radio" | grep -Eq '^[A-Za-z0-9_]+$' || fail invalid_radio_name
+	[ "$#" -gt 0 ] || fail radio_mapping
+	reference=$1; shift
+	case "$reference" in
+		"$radio") ;;
+		@wifi-device\[*\])
+			printf '%s\n' "$reference" | grep -Eq '^@wifi-device\[[0-9]+\]$' || fail radio_mapping
+			base=tr3000_full_radio_$radio_index
+			stable=$base; collision=0
+			while [ -n "$(get "wireless.$stable")" ]; do
+				collision=$((collision+1)); stable=${base}_$collision
+			done
+			uci_ap rename "wireless.$radio=$stable" || fail radio_rename
+			interfaces=$(sections wifi-iface) || fail interface_discovery
+			# Export names and list keywords distinguish even one-item lists.
+			uci_ap -n export wireless > "$TMP/reference-export" || fail reference_export
+			for interface in $interfaces; do
+				awk -v target="$interface" '
+					BEGIN { q=sprintf("%c",39); escaped=q "\\" q q }
+					$1 == "config" { active=($3 == q target q) }
+					active && $1 == "list" && $2 == "device" {
+						if (!found++) print "LIST"
+						value=$0; sub(/^[ \t]*list[ \t]+device[ \t]+/, "", value)
+						if (substr(value,1,1) != q || substr(value,length(value),1) != q) exit 2
+						value=substr(value,2,length(value)-2)
+						while ((position=index(value,escaped)))
+							value=substr(value,1,position-1) q substr(value,position+length(escaped))
+						print value
+					}
+				' "$TMP/reference-export" > "$TMP/device-list" || fail reference_parse
+				if [ -s "$TMP/device-list" ]; then
+					if grep -Fxq -e "$radio" -e "$reference" "$TMP/device-list"; then
+						uci_ap delete "wireless.$interface.device" || fail radio_reference
+						{
+							IFS= read -r list_type || fail reference_parse
+							while IFS= read -r device; do
+								case "$device" in "$radio"|"$reference") device=$stable;; esac
+								uci_ap add_list "wireless.$interface.device=$device" || fail radio_reference
+							done
+						} < "$TMP/device-list"
+					fi
+					continue
+				fi
+				device=$(get "wireless.$interface.device")
+				case "$device" in
+					"$radio"|"$reference") uci_ap set "wireless.$interface.device=$stable" || fail radio_reference;;
+				esac
+			done
+			;;
+		*) fail radio_mapping;;
+	esac
+	radio_index=$((radio_index+1))
+done
+[ "$#" -eq 0 ] || fail radio_mapping
+radios=$(sections wifi-device) || fail radio_discovery
+SSID=; KEY=
+managed=$(sections wifi-iface) || fail interface_discovery
+for section in $managed; do
+	[ "$(get "wireless.$section.tr3000_full_managed")" = 1 ] || continue
+	# Preserve the value's trailing bytes: command substitution alone strips LF.
+	s=$(get "wireless.$section.ssid"; printf .); s=${s%.}; s=${s%?}
+	k=$(get "wireless.$section.key"; printf .); k=${k%.}; k=${k%?}
+	[ -n "$s" ] && [ "${#s}" -le 32 ] || fail invalid_saved_ssid
+	[ "$(printf %s "$s" | tr -d '\000-\037\177')" = "$s" ] || fail invalid_saved_ssid
+	if [ "${#k}" -eq 64 ]; then
+		case "$k" in *[!0-9a-fA-F]*) fail invalid_saved_key;; esac
+	else
+		[ "${#k}" -ge 8 ] && [ "${#k}" -le 63 ] || fail invalid_saved_key
+	fi
+	# UCI permits quoted text, but WPA credentials must be printable ASCII.
+	case "$k" in *[!\ -~]*) fail invalid_saved_identity;; esac
+	if [ -n "$SSID" ]; then
+		[ "$SSID" = "$s" ] && [ "$KEY" = "$k" ] || fail mismatched_identity
+	else SSID=$s; KEY=$k; fi
+done
+random_hex() {
+	# This firmware ships a busybox without the "od" applet, so the random
+	# bytes are hashed instead of being dumped. sha256sum and md5sum are
+	# always present; hexdump is the last resort.
+	for hasher in sha256sum md5sum; do
+		command -v "$hasher" >/dev/null 2>&1 || continue
+		value=$(head -c "$1" /dev/urandom | "$hasher" 2>/dev/null | cut -c1-"$((2 * $1))")
+		[ "${#value}" -eq "$((2 * $1))" ] || continue
+		case "$value" in *[!0-9a-f]*) continue;; esac
+		printf %s "$value"
+		return 0
+	done
+	value=$(head -c "$1" /dev/urandom | hexdump -v -e '1/1 "%02x"' 2>/dev/null | cut -c1-"$((2 * $1))")
+	[ "${#value}" -eq "$((2 * $1))" ] || return 1
+	case "$value" in *[!0-9a-f]*) return 1;; esac
+	printf %s "$value"
+}
+valid_mac() {
+	printf '%s\n' "$1" | grep -Eq '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$' || return 1
+	case "$1" in 00:00:00:00:00:00|[fF][fF]:[fF][fF]:[fF][fF]:[fF][fF]:[fF][fF]:[fF][fF]) return 1;; esac
+}
+if [ -z "$SSID" ]; then
+	suffix=
+	for radio in $radios; do
+		mac=$(get "wireless.$radio.macaddr")
+		if valid_mac "$mac"; then suffix=$(printf %s "$mac" | tr -d : | tail -c 6 | tr a-f A-F); break; fi
+	done
+	if [ -z "$suffix" ]; then
+		# Only the radio hardware may name the management network; a wired
+		# port address must never leak into the SSID.
+		for path in /sys/class/net/ra*/address /sys/class/net/mtwifi*/address /sys/class/net/wlan*/address; do
+			[ -f "$path" ] || continue
+			mac=$(cat "$path")
+			if valid_mac "$mac"; then suffix=$(printf %s "$mac" | tr -d : | tail -c 6 | tr a-f A-F); break; fi
+		done
+	fi
+	if [ -z "$suffix" ]; then
+		[ ! -L "$STATE/ap-suffix" ] || fail unsafe_suffix
+		if [ -f "$STATE/ap-suffix" ]; then suffix=$(cat "$STATE/ap-suffix") || fail suffix_read
+		else
+			suffix=$(random_hex 3) || fail entropy
+			suffix=$(printf %s "$suffix" | tr a-f A-F) || fail suffix_format
+			printf '%s\n' "$suffix" > "$TMP/suffix" || fail suffix_write
+			mv "$TMP/suffix" "$STATE/ap-suffix" || fail suffix_install
+		fi
+		printf '%s\n' "$suffix" | grep -Eq '^[0-9A-F]{6}$' || fail invalid_suffix
+	fi
+	SSID=TR3000-Full-$suffix
+	KEY=$(random_hex 16) || fail entropy
+fi
+for radio in $radios; do
+	section=
+	for candidate in $managed; do
+		[ "$(get "wireless.$candidate.tr3000_full_managed")" = 1 ] || continue
+		[ "$(get "wireless.$candidate.device")" = "$radio" ] || continue
+		[ -z "$section" ] || fail duplicate_managed_radio
+		section=$candidate
+	done
+	if [ -z "$section" ]; then
+		section=tr3000_full_mgmt_$(printf %s "$radio" | tr -c 'A-Za-z0-9_' _)
+		[ -z "$(get "wireless.$section")" ] || fail section_collision
+	fi
+	uci_ap set "wireless.$section=wifi-iface" || fail interface_create
+	# Enabling an upstream-disabled radio must not activate its default open AP.
+	# Preserve administrator encrypted APs and every STA interface.
+	for candidate in $managed; do
+		[ "$(get "wireless.$candidate.tr3000_full_managed")" != 1 ] || continue
+		interface_uses_radio "$candidate" "$radio" || continue
+		[ "$(get "wireless.$candidate.mode")" = ap ] || continue
+		case "$(get "wireless.$candidate.encryption")" in
+			''|none|open) uci_ap set "wireless.$candidate.disabled=1" || fail disable_open_ap;;
+		esac
+	done
+	for assignment in "device=$radio" 'tr3000_full_managed=1' 'mode=ap' 'network=lan' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
+		uci_ap set "wireless.$section.$assignment" || fail interface_configure
+	done
+	uci_ap set "wireless.$radio.disabled=0" || fail radio_enable
+done
+verify() {
+	interfaces=$(sections wifi-iface) || return 1
+	for radio in $radios; do
+		count=0
+		for section in $interfaces; do
+			if [ "$(get "wireless.$section.tr3000_full_managed")" != 1 ]; then
+				interface_uses_radio "$section" "$radio" || continue
+				if [ "$(get "wireless.$section.mode")" = ap ]; then
+					case "$(get "wireless.$section.encryption")" in
+						''|none|open) [ "$(get "wireless.$section.disabled")" = 1 ] || return 1;;
+					esac
+				fi
+				continue
+			fi
+			[ "$(get "wireless.$section.device")" = "$radio" ] || continue
+			count=$((count+1))
+			for pair in 'mode=ap' 'network=lan' 'encryption=psk2' 'disabled=0' "ssid=$SSID" "key=$KEY"; do
+				[ "$(get "wireless.$section.${pair%%=*}")" = "${pair#*=}" ] || return 1
+			done
+		done
+		[ "$count" = 1 ] && [ "$(get "wireless.$radio.disabled")" = 0 ] || return 1
+	done
+}
+uci_ap commit wireless || fail commit
+# Never let uncommitted deltas make a failed/no-op commit appear persistent.
+rm -rf "$TMP/delta" || fail clear_delta
+mkdir "$TMP/delta" || fail verification_delta_directory
+verify || fail verification
+# Same-filesystem rename keeps the live credential-bearing config private.
+mv "$TMP/wireless" "$CONFIG/wireless" || fail wireless_install
+CONF=$CONFIG
+verify || fail live_verification
+printf 'initialized\n' > "$TMP/marker" || fail marker_write
+mv "$TMP/marker" "$MARKER" || fail marker_install
+# The boot runner removes this defaults file only after sourced success.
+exit 0

@@ -1,0 +1,4 @@
+#!/bin/sh
+
+/etc/init.d/tr3000-full-uplink-watch enable
+/etc/init.d/tr3000-full-uplink-watch start

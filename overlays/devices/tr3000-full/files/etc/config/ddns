@@ -1,0 +1,15 @@
+# Cloudflare-first DDNS template. No hostname, zone or token in the image;
+# the administrator fills credentials in LuCI after first boot.
+config ddns 'global'
+	option ddns_dateformat '%F %R'
+	option ddns_loglines '250'
+	option upd_privateip '0'
+
+config service 'cloudflare_v4'
+	option enabled '0'
+	option use_ipv6 '0'
+	option use_https '1'
+	option service_name 'cloudflare.com-v4'
+	option interface 'wan'
+	option ip_source 'network'
+	option ip_network 'wan'

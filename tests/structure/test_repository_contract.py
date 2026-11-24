@@ -1,8 +1,11 @@
 from pathlib import Path
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 
@@ -424,7 +427,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("docs/TR3000-LITE-LAN-ACCESS.md", readme)
         for document in ("docs/LITE-README.md", "docs/TR3000-LITE-PROVISIONING.md",
-                         "docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/SINGBOX-SPLIT-ROUTING.md"):
+                         "docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/HOMEPROXY-SPLIT-ROUTING.md"):
             text = (ROOT / document).read_text(encoding="utf-8")
             self.assertNotIn("192.168.77", text, document + " still documents the retired management segment")
             self.assertNotIn("br-mgmt", text, document + " still documents the retired management bridge")
@@ -446,7 +449,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         stale_plant_address = f"{access_prefix}.254"
         stale_plant_host = f"{access_prefix}.100"
         for document in ("docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/TR3000-LITE-PROVISIONING.md",
-                         "docs/WIREGUARD-VPS-ROUTING.md", "docs/WIREGUARD-SNAT.md"):
+                         "docs/WIREGUARD-VPS-ROUTING.md"):
             text = (ROOT / document).read_text(encoding="utf-8")
             # The access segment must never be published as the industrial network.
             self.assertNotIn(f"--plant-cidr {access_cidr}", text,
@@ -531,9 +534,10 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             "docs/FULL-README.md",
             "docs/UBOOT-SAFETY.md",
             "docs/WIREGUARD-VPS-ROUTING.md",
-            "docs/WIREGUARD-SNAT.md",
+            "docs/TUNNEL-ACCESS.md",
             "docs/TAILSCALE.md",
-            "docs/SINGBOX-SPLIT-ROUTING.md",
+            "docs/HOMEPROXY-SPLIT-ROUTING.md",
+            "docs/DDNS-CLOUDFLARE.md",
             "docs/CLOUDFLARED-ACCESS.md",
             "docs/TR3000-LITE-PROVISIONING.md",
             "docs/TR3000-LITE-REMOTE-ACCESS.md",
@@ -556,32 +560,182 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
         menu_path = package / "root/usr/share/luci/menu.d/luci-app-tr3000-full.json"
         acl_path = package / "root/usr/share/rpcd/acl.d/luci-app-tr3000-full.json"
         view_path = package / "htdocs/luci-static/resources/view/tr3000-full/services.js"
+        uplinks_path = package / "htdocs/luci-static/resources/view/tr3000-full/uplinks.js"
 
         self.assertTrue((package / "Makefile").is_file())
         self.assertTrue(view_path.is_file())
+        self.assertTrue(uplinks_path.is_file())
         menu = json.loads(menu_path.read_text(encoding="utf-8"))
         acl = json.loads(acl_path.read_text(encoding="utf-8"))
+        self.assertEqual({"admin/services/tr3000-full", "admin/services/tr3000-full/services",
+                          "admin/services/tr3000-full/uplinks"}, set(menu))
         entry = menu["admin/services/tr3000-full"]
         self.assertNotIn("auth", entry)
+        self.assertEqual({"type": "firstchild"}, entry["action"])
         self.assertEqual(["luci-app-tr3000-full"], entry["depends"]["acl"])
+        for child, path in (("services", "tr3000-full/services"), ("uplinks", "tr3000-full/uplinks")):
+            child_entry = menu[f"admin/services/tr3000-full/{child}"]
+            self.assertNotIn("auth", child_entry)
+            self.assertEqual({"type": "view", "path": path}, child_entry["action"])
+            self.assertEqual(["luci-app-tr3000-full"], child_entry["depends"]["acl"])
         self.assertNotIn("file", acl["luci-app-tr3000-full"].get("read", {}))
         write_files = acl["luci-app-tr3000-full"]["write"]["file"]
         self.assertEqual(
-            {"/usr/sbin/tr3000-full-service": ["exec"]},
+            {"/usr/sbin/tr3000-full-service": ["exec"],
+             "/usr/sbin/tr3000-full-uplink-status": ["exec"]},
             write_files,
         )
         view = view_path.read_text(encoding="utf-8")
-        for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
+        for service in ("wireguard", "tailscale", "homeproxy", "cloudflared"):
             self.assertIn(f"'{service}'", view)
+        self.assertIn("legacy_config_detected", view)
+        self.assertIn("sysupgrade -n", view)
         self.assertNotIn("/bin/sh", view)
+        uplinks = uplinks_path.read_text(encoding="utf-8")
+        self.assertIn("/usr/sbin/tr3000-full-uplink-status", uplinks)
+        self.assertNotIn("tr3000-lite", uplinks)
+
+    def test_full_services_view_keeps_installed_services_actionable(self) -> None:
+        view = (
+            ROOT / "packages/luci-app-tr3000-full/htdocs/luci-static/resources/view/tr3000-full/services.js"
+        ).read_text(encoding="utf-8")
+        # LuCI forwards every element attribute to setAttribute, so a boolean
+        # value becomes disabled="false" and the HTML attribute still disables
+        # the button: the Enable action of an installed service would be inert.
+        self.assertNotIn("'disabled': !state.installed", view)
+        self.assertNotIn('"disabled": !state.installed', view)
+        self.assertIn("attributes.disabled = 'disabled'", view)
+        # WireGuard is always compiled; an unconfigured wg interface must not
+        # be reported as a missing package.
+        self.assertIn("service.id === 'wireguard'", view)
+        self.assertIn("wg interface not configured", view)
+        # The attribute is only ever set to the presence-based string value.
+        code = "\n".join(
+            line for line in view.splitlines() if not line.lstrip().startswith("//")
+        )
+        for match in re.finditer(r"disabled\s*=\s*([^;\n]+)", code):
+            value = match.group(1).strip()
+            with self.subTest(value=value):
+                self.assertIn(value, ("'disabled'", '"disabled"'))
+
+    def test_local_luci_views_never_render_a_boolean_disabled_attribute(self) -> None:
+        # A boolean false in an element attribute map still disables the
+        # element in HTML; only the DOM property assignment may use booleans.
+        offenders = []
+        for path in sorted((ROOT / "packages").rglob("*.js")):
+            text = path.read_text(encoding="utf-8")
+            for match in re.finditer(r"['\"]disabled['\"]\s*:\s*([^,}\n]+)", text):
+                value = match.group(1).strip()
+                if value == "false" or value.startswith("!"):
+                    offenders.append(f"{path.relative_to(ROOT)}: {match.group(0)}")
+        self.assertEqual([], offenders)
 
     def test_full_first_boot_policy_disables_remote_services(self) -> None:
         defaults = (
-            ROOT / "files/etc/uci-defaults/95-tr3000-full-services"
+            ROOT / "overlays/devices/tr3000-full/files/etc/uci-defaults/95-tr3000-full-services"
         ).read_text(encoding="utf-8")
 
-        for service in ("wireguard", "tailscale", "sing-box", "cloudflared"):
+        for service in ("wireguard", "tailscale", "cloudflared", "homeproxy"):
             self.assertIn(f"disable {service}", defaults)
+        # The sing-box package ships its own init; HomeProxy owns the binary.
+        self.assertIn("/etc/init.d/sing-box disable", defaults)
+
+    def test_full_service_status_flags_legacy_industrial_config(self) -> None:
+        fake_uci = (
+            "import json, os, sys\n"
+            "args = [a for a in sys.argv[1:] if a != '-q']\n"
+            "data = json.loads(open(os.environ['LEGACY_CFG']).read())\n"
+            "if args[0] == 'get':\n"
+            "    if args[1] not in data: sys.exit(1)\n"
+            "    print(data[args[1]])\n"
+            "elif args[0] == 'show':\n"
+            "    for k, v in data.items():\n"
+            "        if k.startswith(args[1] + '.'): print(k + '=' + chr(39) + v + chr(39))\n"
+            "else: sys.exit(2)\n"
+        )
+        for config, expected in (({"network.plant": "interface"}, True),
+                                 ({"network.mgmt": "interface"}, True),
+                                 ({"network.lan": "interface"}, False)):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                bindir = root / "bin"; bindir.mkdir()
+                (root / "fake_uci.py").write_text(fake_uci, encoding="utf-8")
+                cfg = root / "uci.json"; cfg.write_text(json.dumps(config), encoding="utf-8")
+                uci = bindir / "uci"
+                uci.write_text('#!/bin/sh\nexec "$PYTHON" -S "$LEGACY_ROOT/fake_uci.py" "$@"\n', encoding="utf-8")
+                uci.chmod(0o755)
+                env = dict(os.environ, PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}",
+                           PYTHON=sys.executable, LEGACY_ROOT=str(root), LEGACY_CFG=str(cfg))
+                result = subprocess.run(
+                    ["bash", str(ROOT / "scripts/service-toggle.sh"), "status", "--json"],
+                    capture_output=True, text=True, env=env)
+                self.assertEqual(0, result.returncode, result.stderr)
+                status = json.loads(result.stdout)
+                self.assertIs(expected, status["legacy_config_detected"])
+                for service in ("wireguard", "tailscale", "homeproxy", "cloudflared"):
+                    self.assertIn(service, status)
+
+    def test_overlay_networks_keep_the_loopback_interface(self) -> None:
+        # Without a loopback interface the device resolver (which points at
+        # 127.0.0.1), local daemons and NTP by name all stop working.
+        for variant in ("tr3000-full", "tr3000-lite"):
+            network = (ROOT / "overlays/devices" / variant / "files/etc/config/network").read_text(encoding="utf-8")
+            with self.subTest(variant=variant):
+                self.assertIn("config interface 'loopback'", network)
+                self.assertIn("option device 'lo'", network)
+                self.assertIn("option ipaddr '127.0.0.1'", network)
+
+    def test_full_overlay_ships_home_router_network(self) -> None:
+        overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+        network = (overlay / "network").read_text(encoding="utf-8")
+        self.assertIn("config interface 'lan'", network)
+        self.assertIn("option ipaddr '192.168.10.1'", network)
+        self.assertIn("config device 'br_lan'", network)
+        self.assertIn("list ports 'eth1'", network)
+        self.assertNotIn("plant", network)
+        self.assertNotIn("mgmt", network)
+        dhcp = (overlay / "dhcp").read_text(encoding="utf-8")
+        self.assertIn("config dhcp 'lan'", dhcp)
+        self.assertIn("option start '100'", dhcp)
+        self.assertIn("option limit '150'", dhcp)
+
+    def test_full_firewall_keeps_tunnels_closed_by_default(self) -> None:
+        from tests.scripts.test_scripts import uci_sections
+        overlay = ROOT / "overlays/devices/tr3000-full/files/etc/config"
+        firewall = uci_sections((overlay / "firewall").read_text(encoding="utf-8"))
+        sections = {s[".name"]: s for s in firewall if s[".name"]}
+        zones = {s["name"]: s for s in firewall if s[".type"] == "zone"}
+        self.assertEqual("ACCEPT", zones["lan"]["input"])
+        self.assertNotIn("plant", zones)
+        self.assertNotIn("mgmt", zones)
+        for name in ("tr3000_full_wg_mgmt", "tr3000_full_wg_icmp", "tr3000_full_wg_listener"):
+            self.assertEqual("0", sections[name]["enabled"])
+        self.assertTrue(any(s[".type"] == "forwarding" and s["src"] == "wg" and s["dest"] == "lan" for s in firewall))
+        self.assertFalse(any(s[".type"] == "forwarding" and s["src"] == "wg" and s["dest"] == "wan" for s in firewall))
+        self.assertFalse(any(n.startswith("tr3000_lite_") for n in sections))
+
+    def test_full_only_assets_left_the_shared_rootfs(self) -> None:
+        for name in ("network", "dhcp", "firewall"):
+            self.assertFalse((ROOT / "files/etc/config" / name).exists())
+        self.assertFalse((ROOT / "files/etc/tr3000-full/examples/sing-box.json.example").exists())
+        self.assertFalse((ROOT / "files/etc/config/wireless").exists())
+        self.assertFalse((ROOT / "overlays/devices/tr3000-full/files/etc/config/wireless").exists())
+
+    def test_full_documents_describe_the_home_router(self) -> None:
+        readme = (ROOT / "docs/FULL-README.md").read_text(encoding="utf-8")
+        for doc in ("HOMEPROXY-SPLIT-ROUTING.md", "TUNNEL-ACCESS.md", "DDNS-CLOUDFLARE.md"):
+            self.assertTrue((ROOT / "docs" / doc).is_file(), doc)
+            self.assertIn(f"docs/{doc}", readme)
+        for forbidden in ("192.168.77", "br-mgmt", "plant"):
+            self.assertNotIn(forbidden, readme)
+        plan = (ROOT / "docs/TEST-PLAN.md").read_text(encoding="utf-8")
+        for case in range(1, 15):
+            self.assertIn(f"F{case}", plan)
+        self.assertFalse((ROOT / "docs/WIREGUARD-SNAT.md").exists())
+        self.assertFalse((ROOT / "docs/SINGBOX-SPLIT-ROUTING.md").exists())
+        root_readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("WIREGUARD-SNAT.md", root_readme)
+        self.assertNotIn("SINGBOX-SPLIT-ROUTING.md", root_readme)
 
 
 if __name__ == "__main__":

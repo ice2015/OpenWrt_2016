@@ -1,0 +1,64 @@
+config defaults
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	option synflood_protect '1'
+
+config zone
+	option name 'wan'
+	list network 'wan'
+	list network 'wwan'
+	list network 'usbwan'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	option masq '1'
+	option mtu_fix '1'
+
+config zone
+	option name 'lan'
+	list network 'lan'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'ACCEPT'
+
+config zone
+	option name 'wg'
+	list network 'wg'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config forwarding
+	option src 'lan'
+	option dest 'wan'
+
+# Inbound tunnel access: the peer reaches the home LAN, not the WAN egress.
+config forwarding
+	option src 'wg'
+	option dest 'lan'
+
+# All tunnel entry points stay closed until the administrator enables them.
+config rule 'tr3000_full_wg_listener'
+	option name 'Allow-WireGuard-listener-disabled-by-default'
+	option enabled '0'
+	option src 'wan'
+	option proto 'udp'
+	option dest_port '51820'
+	option target 'ACCEPT'
+
+config rule 'tr3000_full_wg_mgmt'
+	option name 'Allow-Full-wg-management'
+	option enabled '0'
+	option src 'wg'
+	option proto 'tcp'
+	option dest_port '22 443'
+	option target 'ACCEPT'
+
+config rule 'tr3000_full_wg_icmp'
+	option name 'Allow-Full-wg-ping'
+	option enabled '0'
+	option src 'wg'
+	option proto 'icmp'
+	option icmp_type 'echo-request'
+	option target 'ACCEPT'

@@ -6,7 +6,7 @@ on:
       include_tailscale:
         description: Include Tailscale in the firmware (runtime remains disabled)
         type: boolean
-        default: true
+        default: false
       include_singbox:
         description: Include sing-box in the firmware (runtime remains disabled)
         type: boolean
@@ -14,7 +14,7 @@ on:
       include_cloudflared:
         description: Include cloudflared; may exceed the safe image-size gate
         type: boolean
-        default: false
+        default: true
       release:
         description: Publish verified firmware as a GitHub prerelease
         type: boolean
