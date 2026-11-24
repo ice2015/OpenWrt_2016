@@ -28,3 +28,6 @@ __pycache__/
 /.superpowers/
 /.worktrees/
 
+# Browser automation scratch space
+/.playwright-cli/
+

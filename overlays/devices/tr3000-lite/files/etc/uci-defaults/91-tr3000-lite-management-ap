@@ -27,8 +27,11 @@ done
 # /tmp stays volatile with either pinned base-files /var layout.
 [ -d "$RUNTIME" ] && [ ! -L "$RUNTIME" ] || fail unsafe_runtime
 # Do not consume administrator changes or libuci runtime overrides.
+# A libuci delta file exists even when it is empty: uci commit leaves a
+# zero-length /tmp/.uci/<package> behind. Only a non-empty delta carries
+# uncommitted changes, so only that must block the first-boot identity.
 [ ! -e /var/run/uci/wireless ] && [ ! -L /var/run/uci/wireless ] || fail runtime_override
-[ ! -e /tmp/.uci/wireless ] && [ ! -L /tmp/.uci/wireless ] || fail pending_wireless
+[ ! -s /tmp/.uci/wireless ] || fail pending_wireless
 # Boot sources defaults on the left of &&, where set -e cannot enforce errors.
 mkdir -p "$STATE" || fail state_directory
 chmod 0700 "$STATE" || fail state_permissions
@@ -144,7 +147,8 @@ for section in $managed; do
 	else SSID=$s; KEY=$k; fi
 done
 random_hex() {
-	value=$(od -An -N "$1" -tx1 /dev/urandom | tr -d ' \n')
+	# od is not part of the Lite image. busybox provides head and sha256sum.
+	value=$(head -c $((4 * $1)) /dev/urandom | sha256sum | cut -c1-$((2 * $1)))
 	[ "${#value}" -eq "$((2 * $1))" ] || return 1
 	case "$value" in *[!0-9a-f]*) return 1;; esac
 	printf %s "$value"

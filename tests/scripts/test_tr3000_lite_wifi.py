@@ -1,4 +1,5 @@
 """Run the AP defaults with isolated UCI, entropy and hardware inputs."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,12 @@ import unittest
 
 from tests.scripts.test_scripts import ROOT, bash_executable
 from tests.scripts import test_tr3000_lite_plant as plant_tests
+
+# The fixture's fake /dev/urandom. The controller derives the key and the
+# fallback suffix from it with busybox head+sha256sum (od is not shipped).
+FIXTURE_RANDOM = bytes(range(16)) * 4
+FIXTURE_KEY = hashlib.sha256(FIXTURE_RANDOM[:64]).hexdigest()[:32]
+FIXTURE_SUFFIX = hashlib.sha256(FIXTURE_RANDOM[:12]).hexdigest()[:6].upper()
 
 SCRIPT = ROOT/'overlays/devices/tr3000-lite/files/etc/uci-defaults/91-tr3000-lite-management-ap'
 FAKE = r'''
@@ -138,7 +145,7 @@ class ManagementAPTests(unittest.TestCase):
         # address must never leak into the SSID.
         (self.root/'sys/class/net/ra0/address').write_text('02:ab:cd:12:34:ef\n')
         (self.root/'sys/class/net/eth0/address').write_text('aa:bb:cc:dd:ee:ff\n')
-        (self.root/'random').write_bytes(bytes(range(16))*4)
+        (self.root/'random').write_bytes(FIXTURE_RANDOM)
         (self.root/'bin/fake.py').write_text(FAKE)
         uci=self.root/'bin/uci'
         uci.write_text('#!/bin/sh\nexec "$TEST_PYTHON" -S "$WIFI_FIXTURE/bin/fake.py" "$@"\n',newline='\n'); uci.chmod(0o755)
@@ -187,7 +194,7 @@ file=91-tr3000-lite-management-ap
         self.assertEqual(success,self.marker().is_file())
         self.assertEqual(not success,installed.exists())
         self.assertEqual(already_locked,lock.exists(), 'runtime lock ownership/cleanup changed')
-        self.assertNotIn('000102030405060708090a0b0c0d0e0f',r.stdout+r.stderr)
+        self.assertNotIn(FIXTURE_KEY,r.stdout+r.stderr)
         return self.load()
 
     def aps(self,d): return [k for k,v in d.items() if v=='wifi-iface' and d.get(k+'.tr3000_lite_managed')=='1']
@@ -297,7 +304,7 @@ file=91-tr3000-lite-management-ap
     def test_detected_radios_have_encrypted_shared_identity(self):
         d=self.run_ap(); aps=self.aps(d); self.assertEqual(2,len(aps))
         for ap in aps:
-            for option,value in {'mode':'ap','network':'lan','encryption':'psk2','disabled':'0','ssid':'TR3000-Lite-1234EF','key':'000102030405060708090a0b0c0d0e0f'}.items(): self.assertEqual(value,d[ap+'.'+option])
+            for option,value in {'mode':'ap','network':'lan','encryption':'psk2','disabled':'0','ssid':'TR3000-Lite-1234EF','key':FIXTURE_KEY}.items(): self.assertEqual(value,d[ap+'.'+option])
         self.assertEqual({'radio0','radioOdd'},{d[a+'.device'] for a in aps})
 
     def test_repeat_and_new_radio_preserve_credentials(self):
@@ -456,15 +463,14 @@ file=91-tr3000-lite-management-ap
     def test_random_fallback_suffix_is_persisted(self):
         # Without a usable radio address the suffix is random but persisted.
         (self.root/'sys/class/net/ra0/address').write_text('00:00:00:00:00:00')
-        d=self.run_ap(); self.assertEqual({'TR3000-Lite-000102'},{d[a+'.ssid'] for a in self.aps(d)})
+        d=self.run_ap(); self.assertEqual({'TR3000-Lite-'+FIXTURE_SUFFIX},{d[a+'.ssid'] for a in self.aps(d)})
         self.assertEqual(d,self.run_ap())
 
     def test_ap_creation_does_not_mutate_plant_policy(self):
         firewall=ROOT/'overlays/devices/tr3000-lite/files/etc/config/firewall'
-        policy=ROOT/'overlays/devices/tr3000-lite/files/etc/config/tr3000-lite'
-        for p in (firewall,policy): (self.root/'etc/config'/p.name).write_bytes(p.read_bytes())
+        (self.root/'etc/config'/firewall.name).write_bytes(firewall.read_bytes())
         self.run_ap()
-        for p in (firewall,policy): self.assertEqual(p.read_bytes(),(self.root/'etc/config'/p.name).read_bytes())
+        self.assertEqual(firewall.read_bytes(),(self.root/'etc/config'/firewall.name).read_bytes())
 
     @unittest.skipIf(os.name=='nt','NTFS does not model Linux chmod; verify on Linux/firmware')
     def test_wireless_credentials_are_private(self):

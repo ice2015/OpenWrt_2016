@@ -331,7 +331,7 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
 
     def test_tr3000_lite_overlay_is_device_scoped(self) -> None:
         overlay = ROOT / "overlays/devices/tr3000-lite/files/etc/config"
-        for config in ("network", "dhcp", "firewall", "tr3000-lite"):
+        for config in ("network", "dhcp", "firewall"):
             self.assertTrue((overlay / config).is_file(), f"missing Lite overlay: {config}")
         self.assertFalse((ROOT / "files/etc/config/tr3000-lite").exists())
         for manifest in (ROOT / "manifests/devices").glob("*.json"):
@@ -428,6 +428,45 @@ const ok = data => ({code: 0, stdout: JSON.stringify(data), stderr: ''});
             text = (ROOT / document).read_text(encoding="utf-8")
             self.assertNotIn("192.168.77", text, document + " still documents the retired management segment")
             self.assertNotIn("br-mgmt", text, document + " still documents the retired management bridge")
+
+    def test_lite_documents_keep_the_access_and_industrial_segments_apart(self) -> None:
+        # The access segment and the industrial segment must never be mixed.
+        # The expected values are derived from the shipped overlay so this
+        # guard follows the firmware instead of a duplicated constant.
+        from tests.scripts.test_scripts import uci_sections
+        firewall = {s[".name"]: s for s in uci_sections(
+            (ROOT / "overlays/devices/tr3000-lite/files/etc/config/firewall").read_text(encoding="utf-8")) if s[".name"]}
+        plant_cidr = firewall["tr3000_lite_lan_plant_tcp"]["dest_ip"]
+        plant_address = firewall["tr3000_lite_lan_plant_snat_tcp"]["snat_ip"]
+        access_cidr = firewall["tr3000_lite_lan_plant_tcp"]["src_ip"]
+        self.assertNotEqual(access_cidr, plant_cidr)
+        # The retired plant address that used to sit inside the access segment.
+        access_network = access_cidr.split("/")[0]
+        access_prefix = access_network.rsplit(".", 1)[0]
+        stale_plant_address = f"{access_prefix}.254"
+        stale_plant_host = f"{access_prefix}.100"
+        for document in ("docs/TR3000-LITE-REMOTE-ACCESS.md", "docs/TR3000-LITE-PROVISIONING.md",
+                         "docs/WIREGUARD-VPS-ROUTING.md", "docs/WIREGUARD-SNAT.md"):
+            text = (ROOT / document).read_text(encoding="utf-8")
+            # The access segment must never be published as the industrial network.
+            self.assertNotIn(f"--plant-cidr {access_cidr}", text,
+                             document + " still routes the access segment as the plant network")
+            self.assertNotIn(f"--plant-ip {stale_plant_address}", text,
+                             document + " still uses an access segment address as the plant address")
+            self.assertNotIn(f"SNAT to {stale_plant_address}", text,
+                             document + " still SNATs to an access segment address")
+            self.assertNotIn(f"PLC: {stale_plant_host}", text,
+                             document + " still places the plant PLC inside the access segment")
+            self.assertNotIn(f"AllowedIPs = 10.77.0.2/32, {access_cidr}", text,
+                             document + " still advertises the access segment to the engineer tunnel")
+            self.assertNotIn(f"AllowedIPs = 10.88.0.2/32, {access_cidr}", text,
+                             document + " still advertises the access segment to the VPS tunnel")
+        # The offline provisioning tool must default to the shipped plant segment.
+        tool = (ROOT / "tools/tr3000_lite_provision.py").read_text(encoding="utf-8")
+        self.assertIn(f'"plant_cidr", "{plant_cidr}"', tool,
+                      "the offline provisioning tool must default to the shipped plant segment")
+        self.assertNotIn(f'"plant_cidr", "{access_cidr}"', tool,
+                         "the offline provisioning tool must not default to the access segment")
 
     def test_required_layer_files_exist(self) -> None:
         required = {

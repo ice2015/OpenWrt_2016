@@ -134,7 +134,7 @@ grep -Fq 'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y' "$SOU
 [ "$(grep -c '^CONFIG_TARGET_mediatek_filogic_DEVICE_.*=y$' "$SOURCE_DIR/.config")" -eq 1 ] ||
 	fail "configuration must select exactly one mediatek filogic device profile"
 for package in \
-	ca-bundle curl ddns-scripts ddns-scripts-cloudflare ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
+	ca-bundle coreutils-stat curl ddns-scripts ddns-scripts-cloudflare ip-full iputils-arping kmod-usb-net kmod-usb-net-cdc-ether \
 	kmod-usb-net-rndis kmod-wireguard luci luci-app-ddns luci-app-tr3000-lite \
 	luci-i18n-base-zh-cn luci-proto-wireguard luci-ssl-openssl \
 	openssh-server openssh-sftp-server tcpdump-mini ubi-utils wireguard-tools wpad-openssl
@@ -164,7 +164,11 @@ done
 mkdir -p "$SOURCE_DIR/files"
 cp -R "$REPO_ROOT/files/." "$SOURCE_DIR/files/"
 mkdir -p "$SOURCE_DIR/files/root/scripts"
-for script in plant-profile.sh plant-access.sh preflight.sh lite-common.sh; do
+# Only the read-only preflight helper belongs on the Lite image. plant-profile.sh
+# and plant-access.sh are the Full-era single-tunnel helpers: they bypass the
+# paired network/firewall transaction, the backup/rollback and the management AP
+# gate, and their example address now sits inside the Lite access segment.
+for script in preflight.sh; do
 	install -m 0755 "$SCRIPT_DIR/$script" "$SOURCE_DIR/files/root/scripts/$script"
 done
 mkdir -p "$SOURCE_DIR/files/usr/sbin" "$SOURCE_DIR/files/etc/init.d" "$SOURCE_DIR/files/etc/uci-defaults"
@@ -215,4 +219,16 @@ install -m 0755 "$REPO_ROOT/files/etc/uci-defaults/90-lite-uplink-watch" \
 	"$SOURCE_DIR/files/etc/uci-defaults/90-lite-uplink-watch"
 # Device/variant overrides deliberately win over the shared rootfs and assets.
 cp -R "$LITE_OVERLAY/." "$SOURCE_DIR/files/"
+# The Full variant's first-boot service defaults do not apply to the Lite
+# image: tr3000-full-service is not installed there, so every call is a no-op.
+rm -f "$SOURCE_DIR/files/etc/uci-defaults/95-tr3000-full-services"
+# The deprecated Full-era helpers must not reach the Lite image.
+for legacy in plant-profile.sh plant-access.sh; do
+	[ ! -e "$SOURCE_DIR/files/root/scripts/$legacy" ] ||
+		fail "deprecated Full-era helper reached the Lite image: $legacy"
+done
+[ ! -e "$SOURCE_DIR/files/etc/uci-defaults/95-tr3000-full-services" ] ||
+	fail "Full variant first-boot defaults reached the Lite image"
+[ -f "$SOURCE_DIR/files/etc/ssh/sshd_config.d/99-tr3000-lite.conf" ] ||
+	fail "Lite SSH drop-in is missing: openssh-server denies root password login by default"
 printf 'Lite configuration validated for the 112 MiB U-Boot Mod profile.\n'
