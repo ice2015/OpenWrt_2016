@@ -1,5 +1,0 @@
-# Plant HTTPS requires a nonempty root password before it can be enabled.
-config plant 'plant'
-	option allow_luci '0'
-	option allow_mgmt '1'
-	option allow_wireguard '0'

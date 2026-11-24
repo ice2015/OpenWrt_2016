@@ -19,8 +19,8 @@ PLC/HMI 常只有固定 IP 且没有默认网关。工程师经 WireGuard 访问
 ```sh
 sh /root/scripts/plant-access.sh enable \
   --peer 10.77.0.10 \
-  --plant-cidr 192.168.10.0/24 \
-  --plant-ip 192.168.10.254 \
+  --plant-cidr 192.168.20.0/24 \
+  --plant-ip 192.168.20.254 \
   --protocol tcp \
   --ports 102
 ```
