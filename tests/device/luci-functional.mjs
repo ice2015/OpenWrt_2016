@@ -78,8 +78,9 @@ try {
   assert('T1.2', 'Argon theme is active',
     (await page.locator('link[href*="argon"]').count()) > 0,
     `${await page.locator('link[href*="argon"]').count()} argon stylesheet links`);
-  assert('T1.3', 'the router reports a configured root password',
-    !/No password set/i.test(body), body.match(/No password set[^\n]*/i)?.[0] || 'warning absent');
+  assert('T1.3', PASS ? 'the router reports a configured root password' : 'the router keeps the factory empty root password',
+    PASS ? !/No password set/i.test(body) : /No password set/i.test(body),
+    body.match(/No password set[^\n]*/i)?.[0] || 'warning absent');
 
   // ------------------------------------------------- TR3000 Full own pages
   await open(page, '/cgi-bin/luci/admin/services/tr3000-full/services');
