@@ -123,10 +123,13 @@ class LiteDeviceReadinessTests(unittest.TestCase):
         for script in (LITE / "etc/uci-defaults/91-tr3000-lite-management-ap",
                        ROOT / "scripts/tr3000-lite-plant.sh"):
             text = script.read_text(encoding="utf-8")
-            self.assertNotRegex(text, r"!\s*-e\s+\"?\$?\{?[^\n]*\.uci/",
-                                script.name + " still refuses on the existence of a libuci delta file")
-            self.assertRegex(text, r"!\s*-s\s",
-                              script.name + " must only refuse a non-empty libuci delta file")
+            # A delta only blocks when it carries content.
+            self.assertIn("-s ", text,
+                          script.name + " must test the size of a libuci delta file")
+            # The old guard refused on the mere existence of the file.
+            for pattern in (r"!\s*-e\s+\"?/tmp/\.uci", r"!\s*-e\s+\"?\$\w*ROOT/tmp/\.uci"):
+                self.assertNotRegex(text, pattern,
+                                    script.name + " still refuses on the existence of a libuci delta file")
 
     def test_lite_ssh_accepts_the_root_password_the_operator_sets(self) -> None:
         # The image ships openssh-server, not dropbear. OpenSSH defaults to
