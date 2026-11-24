@@ -448,6 +448,11 @@ config rule 'tr3000_full_wg_listener'
 - 真机冒烟自动化（需要设备农场）。
 - sing-box 订阅的定时更新与失败回退策略。
 
+## 10.1 实施后勘误（2026-11-24）
+
+- §6.2 的 network 示例 UCI **遗漏了 loopback 段**，该遗漏随实现进入 Full/Lite overlay：`lo` 不启动导致 dnsmasq 绑不上 127.0.0.1、设备自身解析与 NTP 全败（B5）。已在 `84fb1d3` 为两个 overlay 补回标准 loopback 段并加契约测试。本 spec 作为历史记录保留原示例，以本节勘误为准。
+- §6.9 服务页对 WireGuard 的 “installed” 语义（存在 `network.wg` 接口）曾与“未编译”共用标签，已在 `46b8a91` 区分文案（B6）。
+
 ## 11. 实施者裁量记录（非用户决定，可否掉）
 
 以下是写作/审阅过程中由我定下的具体选择，列出供审批时核对：

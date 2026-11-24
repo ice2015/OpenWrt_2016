@@ -49,7 +49,7 @@ Full 的定位是**自用家用路由器**：出厂插线即可管理，家里�
 
 - 默认主题 **Argon**（首启自动设置），**Bootstrap** 保留备用，可在 系统 → 语言和风格 切回。Aurora 被显式排除。
   - 切换步骤：系统 → 系统 → “语言和风格” → “Design” 选 `bootstrap` → **Save**（此时仅暂存）→ 点击顶栏 **“Unsaved Changes: N”** → 下拉选 **Apply unchecked** → 刷新后生效。LuCI 24.10 的该页面只有 Save 按钮，不会自动提交。
-- **服务 → TR3000 Full**：远程服务状态/启停页（WireGuard、Tailscale、HomeProxy、Cloudflare Tunnel）与多上行状态页。只控制固定控制器，未编译的服务不可启用。
+- **服务 → TR3000 Full**：远程服务状态/启停页（WireGuard、Tailscale、HomeProxy、Cloudflare Tunnel）与多上行状态页。只控制固定控制器，未编译的服务不可启用。WireGuard 行在 `wg` 接口未配置前显示 “wg interface not configured (Network → Interfaces)”（包在镜像里，但按设计不自动建接口）；Tailscale 未编入时显示 “Not included in this build”。
 - 检测到旧版工业配置结构时，服务页顶部显示红色提示并要求不保留配置重刷；固件不自动改写旧配置。
 
 ## GitHub Actions
@@ -78,7 +78,7 @@ Artifact 名为 `TR3000-128M-112M-Full`。`full-runtime-contract.txt` 记录的�
 1. 在本地控制台记录设备标签、NAND 芯片、序列批次、`/proc/mtd`、`ubinfo -a`、坏块、当前 BL2/FIP/Factory、启动日志和恢复入口（`sh /root/scripts/preflight.sh` 为只读报告）。
 2. 将 Factory/RF、bootloader、环境与配置备份到设备外并核验 SHA-256。
 3. 实机逐个插拔网线，确认 `eth0`/`eth1` 与物理 WAN/LAN 的映射。
-4. 刷入本固件（首次安装或 `sysupgrade -n`），插线进入 `https://192.168.10.1` 设置 root 密码。
+4. 刷入本固件：断电 → 按住 Reset 上电 5–8 s 至红灯 → U-Boot 网页（PC 用 DHCP，或静态 `192.168.1.2` 后访问 `http://192.168.1.1`）→ 分区布局选 **112M** → 上传 `…-ubootmod-squashfs-sysupgrade.bin` → 等待自动重启。**不要用 `sysupgrade` 刷本机**（见下节）。出厂 root 密码为空：插线进入 `https://192.168.10.1` 后按提示设置非空 root 密码。
 5. 按需配置 HomeProxy 节点、穿透通道与 DDNS；凭据只写设备本机受限文件。
 6. 按 [`TEST-PLAN.md`](TEST-PLAN.md) 的 F1–F14 区分 CI 与真机验收。
 
@@ -95,9 +95,16 @@ Artifact 名为 `TR3000-128M-112M-Full`。`full-runtime-contract.txt` 记录的�
 
 ## 升级与回滚边界
 
-- **升级本固件必须不保留配置刷机**（`sysupgrade -n`）。Full 没有发布过工业版正式固件；若设备上存在早期试验固件的工业配置结构，启动后服务页会明确提示，不自动迁移。
-- 传输后重新核验镜像 SHA-256，并在目标设备上先运行 `sysupgrade -T <verified-image>`；失败时停止，不能用 `-F` 绕过。
+- **本机的刷写与升级路径是 U-Boot 网页恢复，不是 `sysupgrade`。** 2026-11-22 实机证明：上游 `/lib/upgrade/nand.sh` 在运行中的系统里无法交换 UBI 卷（`ubimkvol` 报 `ENOSPC`、`ubirmvol/ubiupdatevol` 报 `EBUSY`，因 `rootfs_data` 占满剩余 LEB 且卷被运行根持有）；`sysupgrade -n` 会“成功”交接并重启，但**实际不写入**，设备回到旧固件。`sysupgrade -T` 仍可作为只读镜像体检使用；失败时停止，不能用 `-F` 绕过。
+- 每次刷入都是全新配置（U-Boot 恢复天然不保留配置）。Full 没有发布过工业版正式固件；若设备上存在早期试验固件的工业配置结构，启动后服务页会明确提示，不自动迁移。
+- 刷写前备份 Factory/RF、BL2、FIP、u-boot-env 与配置并异机核验 SHA-256；回滚用同一 U-Boot 恢复入口重刷已验证镜像。
 - 本仓库不提供猜测的 `mtd write`、`dd`、`nandwrite`、擦除命令、MTD 编号或偏移。刷 U-Boot 前阅读 [`UBOOT-SAFETY.md`](UBOOT-SAFETY.md)。
+
+## 软件包来源（opkg）
+
+- 镜像预置的 `24.10-SNAPSHOT` 公共镜像源**不可依赖**：snapshot 会被镜像站定期清理（2026-11-24 实测官方路径 404、第三方镜像 302）。固定修订版本的固件应以**本次构建自身生成的仓库**为准：构建产物目录下的 `bin/packages/<arch>/…` 与 `bin/targets/<target>/<subtarget>/packages`（含 `Packages.gz` 与 `Packages.sig`）。
+- 启用步骤：把上述仓库以 HTTP 提供给设备（内网镜像或设备自服务均可）→ 改写 `/etc/opkg/distfeeds.conf` 指向它 → 将本次构建的公钥 `key-build.pub` 放入 `/etc/opkg/keys/<keyid>`，其中 keyid 为公钥 base64 解码后 **bytes[2:10] 的十六进制**（usign 约定）→ `opkg update`。`/etc/opkg.conf` 的 `check_signature` 保持开启。
+- 从活的 snapshot 源安装内核模块存在 ABI 不匹配风险；本固件的包集合以 `image-packages.manifest` 为唯一事实源。
 
 ## 本地校验
 

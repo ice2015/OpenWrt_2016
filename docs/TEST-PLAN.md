@@ -111,7 +111,8 @@
 | SSH 设备契约 | `TR3000_FULL_DEVICE=192.168.10.1 python -m unittest tests.device.test_tr3000_full_device -v` | 出厂网络、防火墙默认关闭、远程服务默认停止、Argon 主题、Cloudflare DDNS 模板、受管 WPA2 AP 与凭据权限、无线无超时、上行状态结构、LuCI 包落地 |
 | LuCI 功能 | `TR3000_FULL_DEVICE=192.168.10.1 TR3000_FULL_LUCI_PASS=<root 密码> node tests/device/luci-functional.mjs` | 真实浏览器操作 LuCI：仪表盘与主题、TR3000 Full 服务页与按钮可用性、多上行页、HomeProxy/DDNS/Cloudflared/WireGuard 上游页、无线页受管 AP 与开放默认 AP 状态、防火墙区、主题回退项 |
 
-SSH 入口需要免密（密钥）root 登录；LuCI 入口使用自签证书，因此忽略 HTTPS 错误。每个用例都输出 PASS/FAIL 与证据，失败项必须回到源码修复并补回归用例，不得以“环境问题”结案，除非能给出可复现的证据。
+SSH 入口需要免密（密钥）root 登录；LuCI 入口使用自签证书，因此忽略 HTTPS 错误。
+按操作者要求（2026-11-24），后续刷入后的验收**保持出厂空 root 密码**：引导脚本只注入 SSH 公钥、不设密码；LuCI 套件在空密码下断言出厂警告存在（T1.3 的双分支）。空密码期间 LAN 内任何人可经 LuCI/ttyd 取得 root，属出厂设计（F3 要求首启设密码），验收完成后若设备转入日常使用应自行设置密码。每个用例都输出 PASS/FAIL 与证据，失败项必须回到源码修复并补回归用例，不得以“环境问题”结案，除非能给出可复现的证据。
 
 ## 2026-11-20 真机验收轮次（Full，设备固件 = 本分支 `edd3c46` 内容）
 
