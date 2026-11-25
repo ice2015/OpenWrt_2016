@@ -1,0 +1,248 @@
+{
+  "schema": 1,
+  "device": "nx30pro",
+  "product": "H3C Magic NX30 Pro",
+  "status": "source-locked-build-not-verified-on-device",
+  "distribution": "immortalwrt-mt798x",
+  "source": {
+    "repository": "https://github.com/jerryhan77/immortalwrt-mt798x.git",
+    "revision": "78cf22edddf07443d8f0506c9f361d3498475189",
+    "branch": "nx30pro-112m",
+    "branch_note": "The branch name is informational only. The build always uses the commit above.",
+    "kernel": "5.4",
+    "kernel_note": "KERNEL_PATCHVER:=5.4 in target/linux/mediatek/Makefile."
+  },
+  "feeds": [
+    {
+      "id": "packages",
+      "repository": "https://github.com/immortalwrt/packages.git",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "branch": "openwrt-21.02",
+      "role": "package sources of the base distribution"
+    },
+    {
+      "id": "luci",
+      "repository": "https://github.com/immortalwrt/luci.git",
+      "revision": "97b019be0a676c48ec2d804f0aace49cefcbb365",
+      "branch": "openwrt-21.02",
+      "role": "LuCI applications, themes and translations"
+    },
+    {
+      "id": "routing",
+      "repository": "https://github.com/openwrt/routing.git",
+      "revision": "d79f2b57ebeddabe72f0a099e12aa81e9598adc5",
+      "branch": "openwrt-21.02",
+      "role": "routing packages"
+    },
+    {
+      "id": "telephony",
+      "repository": "https://github.com/openwrt/telephony.git",
+      "revision": "920fbc5c0a2e4badf51bceff42e9a1e3eb693462",
+      "branch": "openwrt-21.02",
+      "role": "telephony packages"
+    }
+  ],
+  "feed_revision_note": "The feed revisions are the branch heads of the source commit date, so the build input does not drift with the moving branches. No device feed is needed: every package of the requirement table exists in the base feeds.",
+  "target": {
+    "target": "mediatek",
+    "subtarget": "mt7981",
+    "profile": "h3c_nx30pro_112M",
+    "profile_symbol": "CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y",
+    "device_tree": "mt7981-h3c-nx30pro-112M",
+    "device_tree_file": "target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts",
+    "kernel_config": "kernel-bin | lzma | fit lzma"
+  },
+  "image": {
+    "image_size_kib": 110592,
+    "image_size_note": "IMAGE_SIZE := 110592k is the upper bound of the factory image, not a measured size. The UBI partition of the partition contract is 112 MiB, so the image has about 4 MiB of head room.",
+    "blocksize": "128k",
+    "pagesize": 2048,
+    "ubinize_opts": "-E 5",
+    "kernel_in_ubi": true,
+    "factory_image": "factory.bin",
+    "sysupgrade_image": "sysupgrade.bin",
+    "factory_rule": "append-ubi | check-size $$$$(IMAGE_SIZE)",
+    "sysupgrade_rule": "sysupgrade-tar | append-metadata"
+  },
+  "partition_contract": {
+    "source": "the same 112M device tree that the boot loader lock uses",
+    "unit": "bytes",
+    "partitions": [
+      {"label": "BL2", "offset": 0, "size": 1048576},
+      {"label": "u-boot-env", "offset": 1048576, "size": 524288},
+      {"label": "Factory", "offset": 1572864, "size": 2097152},
+      {"label": "FIP", "offset": 3670016, "size": 2097152},
+      {"label": "ubi", "offset": 5767168, "size": 117440512}
+    ],
+    "address_space": "nmbm-logical"
+  },
+  "packages": [
+    {
+      "requirement": "transparent proxy",
+      "package": "luci-app-passwall",
+      "symbol": "CONFIG_PACKAGE_luci-app-passwall=y",
+      "source": "luci feed",
+      "revision": "97b019be0a676c48ec2d804f0aace49cefcbb365",
+      "version": "4.68-1",
+      "backend": "xray-core and xray-plugin from the packages feed",
+      "status": "available"
+    },
+    {
+      "requirement": "transparent proxy backend",
+      "package": "xray-core",
+      "symbol": "CONFIG_PACKAGE_xray-core=y",
+      "source": "packages feed",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "status": "available"
+    },
+    {
+      "requirement": "sing-box backend",
+      "package": "sing-box",
+      "symbol": null,
+      "source": null,
+      "revision": null,
+      "status": "unavailable",
+      "detail": "sing-box does not exist in the openwrt-21.02 package feed and modern releases need a Go toolchain the 21.02 base does not provide. PassWall 4.68 only offers the xray backend. The requirement is met with xray and the difference is recorded instead of shipping a second proxy manager."
+    },
+    {
+      "requirement": "cloud tunnel",
+      "package": "cloudflared",
+      "symbol": "CONFIG_PACKAGE_cloudflared=y",
+      "source": "packages feed",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "status": "available",
+      "detail": "There is no LuCI application for cloudflared in this feed. The tunnel is configured at deployment time from the command line and the service stays disabled until a configuration file exists."
+    },
+    {
+      "requirement": "DDNS",
+      "package": "ddns-scripts and luci-app-ddns",
+      "symbol": "CONFIG_PACKAGE_ddns-scripts=y, CONFIG_PACKAGE_luci-app-ddns=y",
+      "source": "packages feed and luci feed",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "status": "available",
+      "detail": "The providers ship inside ddns-scripts in this base. The service provider and the domain are entered at deployment time."
+    },
+    {
+      "requirement": "overlay network",
+      "package": "tailscale",
+      "symbol": "CONFIG_PACKAGE_tailscale=y",
+      "source": "packages feed",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "status": "partial",
+      "detail": "The daemon and the command line client are available, the LuCI application is not part of the openwrt-21.02 luci feed. The overlay network is configured with the shipped client."
+    },
+    {
+      "requirement": "overlay network",
+      "package": "zerotier and luci-app-zerotier",
+      "symbol": "CONFIG_PACKAGE_zerotier=y, CONFIG_PACKAGE_luci-app-zerotier=y",
+      "source": "packages feed and luci feed",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "status": "available"
+    },
+    {
+      "requirement": "VPN server",
+      "package": "luci-app-wireguard and wireguard-tools",
+      "symbol": null,
+      "source": "luci feed and the main tree",
+      "revision": null,
+      "status": "unavailable",
+      "detail": "The userspace tools are present but the 5.4 kernel of this base carries no wireguard module and the feed has no wireguard-go package. A kernel mode WireGuard server is therefore not possible on this base and the requirement stays open."
+    },
+    {
+      "requirement": "container engine",
+      "package": "docker, dockerd, containerd, runc, fuse-overlayfs, luci-app-docker",
+      "symbol": "CONFIG_PACKAGE_dockerd=y, CONFIG_PACKAGE_luci-app-docker=y",
+      "source": "packages feed and luci feed",
+      "revision": "c494d5269421c94090b56a971b9796c21f808a55",
+      "status": "available",
+      "detail": "fuse-overlayfs is the storage driver that this base supports. overlay2 is not assumed to work."
+    },
+    {
+      "requirement": "interface",
+      "package": "luci-theme-argon and luci-theme-bootstrap",
+      "symbol": "CONFIG_PACKAGE_luci-theme-argon=y, CONFIG_PACKAGE_luci-theme-bootstrap=y",
+      "source": "luci feed",
+      "revision": "97b019be0a676c48ec2d804f0aace49cefcbb365",
+      "status": "available"
+    },
+    {
+      "requirement": "interface language",
+      "package": "luci-i18n-*-zh-cn",
+      "symbol": "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y",
+      "source": "luci feed, translations live in the per application po/zh_Hans directories",
+      "revision": "97b019be0a676c48ec2d804f0aace49cefcbb365",
+      "status": "available"
+    },
+    {
+      "requirement": "firewall",
+      "package": "firewall3 and luci-app-firewall",
+      "symbol": "CONFIG_PACKAGE_firewall=y",
+      "source": "main tree package/network/config/firewall and luci feed",
+      "revision": "78cf22edddf07443d8f0506c9f361d3498475189",
+      "status": "available",
+      "detail": "This base uses firewall3, not firewall4. The firewall rules of the image follow the base behaviour and are not rewritten by the device layer."
+    }
+  ],
+  "excluded_packages": [
+    {"package": "sing-box", "reason": "not in the base feed"},
+    {"package": "luci-app-openclash", "reason": "PassWall stays the only transparent proxy manager"},
+    {"package": "luci-app-wireguard", "reason": "no kernel support on the 5.4 base"},
+    {"package": "wireguard-tools", "reason": "no kernel support on the 5.4 base"},
+    {"package": "ruby", "reason": "pulls the Rust toolchain and pushes the build past the runner limit"},
+    {"package": "libruby", "reason": "pulls the Rust toolchain and pushes the build past the runner limit"},
+    {"package": "luci-app-dockerman", "reason": "luci-app-docker is the management entry of this base"}
+  ],
+  "system_dependencies": [
+    {
+      "topic": "WAN MAC source",
+      "source": "target/linux/mediatek/mt7981/base-files/etc/board.d/02_network, case h3c,nx30pro",
+      "detail": "The base reads the WAN MAC with mtd_get_mac_ascii from the pdt_data_1 partition and derives the LAN MAC from it.",
+      "impact": "The 112M partition contract has no pdt_data_1 partition, so the stock source of the MAC does not exist on this layout. The device patch takes the MAC from a provisioned file, then from the factory data area, and only then from the stock partition when it is still there.",
+      "status": "handled by devices/nx30pro/patches/0001-mediatek-nx30pro-wan-mac-source.patch"
+    },
+    {
+      "topic": "factory data write",
+      "source": "target/linux/mediatek/mt7981/base-files/etc/board.d/02_network, case h3c,nx30pro",
+      "detail": "When the first two bytes at offset 4 of the Factory partition are 00-0c, the base writes a MAC derived from the WAN MAC into the Factory partition at offset 4.",
+      "impact": "The first boot can modify the factory data area, so the area has to be backed up before the system is started. The patch keeps this behaviour but only when a real WAN MAC was found.",
+      "status": "handled by devices/nx30pro/patches/0001-mediatek-nx30pro-wan-mac-source.patch"
+    }
+  ],
+  "unresolved": [
+    {
+      "topic": "WAN MAC value of the device",
+      "status": "UNRESOLVED",
+      "needed": "Read the ethaddr of the stock device before the layout change and provision it into /etc/nx30pro/wan-mac at deployment time"
+    },
+    {
+      "topic": "WireGuard server",
+      "status": "UNRESOLVED",
+      "needed": "A newer kernel or a userspace implementation that the 21.02 base can carry"
+    },
+    {
+      "topic": "sing-box backend",
+      "status": "UNRESOLVED",
+      "needed": "A feed revision that builds on the toolchain of this base"
+    },
+    {
+      "topic": "LuCI management of Tailscale",
+      "status": "UNRESOLVED",
+      "needed": "A LuCI revision that carries luci-app-tailscale and stays compatible with the 21.02 base"
+    },
+    {
+      "topic": "Container storage driver",
+      "status": "UNRESOLVED",
+      "needed": "Device test of fuse-overlayfs on the final writable space"
+    },
+    {
+      "topic": "Image size and free overlay space",
+      "status": "UNRESOLVED",
+      "needed": "The build report of the first successful build and a device test afterwards"
+    },
+    {
+      "topic": "Runtime behaviour of every service",
+      "status": "UNRESOLVED",
+      "needed": "Device test with the deployment configuration"
+    }
+  ]
+}

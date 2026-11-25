@@ -14,12 +14,23 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class RepositoryContractTests(unittest.TestCase):
     def test_new_device_directories_do_not_claim_build_support(self):
-        for device in ("a6s", "nx30pro"):
+        for device in ("a6s", "wr30u"):
             text = (ROOT / "devices" / device / "README.md").read_text(encoding="utf-8")
             self.assertIn("待适配", text)
             self.assertIn("UNRESOLVED", text)
             self.assertNotIn("112 MiB", text)
             self.assertFalse((ROOT / "manifests/devices" / (device + ".json")).exists())
+
+    def test_nx30pro_documents_its_own_firmware_and_boot_loader(self):
+        text = (ROOT / "devices/nx30pro/README.md").read_text(encoding="utf-8")
+        self.assertIn("UNRESOLVED", text)
+        self.assertIn("h3c_nx30pro_112M", text)
+        self.assertIn("候选", text)
+        self.assertTrue((ROOT / "manifests/devices/nx30pro.json").exists())
+        manifest = json.loads(
+            (ROOT / "manifests/devices/nx30pro.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(["immortalwrt-mt798x"], manifest["supported_distributions"])
 
     def test_device_index_documents_existing_variants(self):
         index = (ROOT / "devices/README.md").read_text(encoding="utf-8")

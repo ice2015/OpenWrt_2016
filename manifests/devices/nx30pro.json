@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "nx30pro",
+  "display_name": "NX30 Pro",
+  "supported_distributions": ["immortalwrt-mt798x"],
+  "target": "mediatek",
+  "subtarget": "mt7981",
+  "profile": "h3c_nx30pro_112M",
+  "config_layers": ["devices/nx30pro/config.config"],
+  "feed_layers": ["devices/nx30pro/feeds.conf"],
+  "patch_layers": ["devices/nx30pro/patches"],
+  "overlay_layers": ["devices/nx30pro/files"],
+  "artifact_patterns": [
+    "bin/targets/mediatek/mt7981/h3c_nx30pro_112M-factory.bin",
+    "bin/targets/mediatek/mt7981/h3c_nx30pro_112M-sysupgrade.bin"
+  ],
+  "notes": [
+    "The device uses its own source fork, which is registered as the distribution immortalwrt-mt798x in manifests/sources.json.",
+    "The boot loader of this device is built by devices/nx30pro/build/build-uboot.sh and uses the same partition contract.",
+    "The WAN MAC of the device is deployment specific and is provisioned into /etc/nx30pro/wan-mac, never into the image."
+  ]
+}

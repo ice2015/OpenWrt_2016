@@ -1,0 +1,20 @@
+# Deployment values for this device
+
+This directory is empty in the image. It holds the values that belong to one
+device and must never be part of a build.
+
+## wan-mac
+
+`wan-mac` holds the WAN MAC of this device, one MAC address and nothing else.
+
+The 112 MiB partition layout has no `pdt_data_1` partition, so the stock
+place where the base looks for the WAN MAC does not exist on this layout.
+Read the MAC from the stock device before the layout change and write it
+here:
+
+```sh
+printf '%s\n' 'aa:bb:cc:dd:ee:ff' > /etc/nx30pro/wan-mac
+```
+
+The value is used by the board script to derive the LAN MAC. Nothing in this
+directory is read by the build and nothing here is committed to Git.

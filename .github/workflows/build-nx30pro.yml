@@ -1,0 +1,83 @@
+name: NX30 Pro firmware
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nx30pro-firmware
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    env:
+      SOURCE_REVISION: 78cf22edddf07443d8f0506c9f361d3498475189
+    steps:
+      - name: Check out this build project
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /opt/hostedtoolcache
+          sudo docker image prune --all --force || true
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ca-certificates ccache file gawk gettext git \
+            libncurses-dev libssl-dev perl python3 python3-distutils \
+            python3-setuptools rsync swig unzip wget zlib1g-dev \
+            device-tree-compiler flex bison
+
+      - name: Validate the repository
+        run: |
+          bash scripts/validate.sh
+          python3 -m unittest tests.structure.test_nx30pro_firmware_contract \
+            tests.scripts.test_nx30pro_firmware_build -v
+
+      - name: Build the firmware candidate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/nx30pro-firmware" "$GITHUB_WORKSPACE/firmware-artifact/logs"
+          sh devices/nx30pro/build/build.sh \
+            --lock devices/nx30pro/source-lock.json \
+            --source-dir "$RUNNER_TEMP/nx30pro-firmware/source" \
+            --feed-dir "$RUNNER_TEMP/nx30pro-firmware/feeds" \
+            --artifact-dir "$GITHUB_WORKSPACE/firmware-artifact"
+
+      - name: Upload firmware candidates and provenance
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nx30pro-firmware-112m
+          path: |
+            firmware-artifact/images/
+            firmware-artifact/build-report.json
+            firmware-artifact/source-lock.json
+            firmware-artifact/IMAGE-ROLES.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build logs and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nx30pro-firmware-logs
+          path: firmware-artifact/logs/
+          if-no-files-found: warn
+          retention-days: 30

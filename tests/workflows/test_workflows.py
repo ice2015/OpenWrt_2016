@@ -119,6 +119,27 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("uboot-artifact/images/", workflow)
         self.assertIn("uboot-artifact/logs/", workflow)
 
+    def test_nx30pro_firmware_workflow_builds_the_locked_candidate(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        lock = json.loads(
+            (ROOT / "devices/nx30pro/source-lock.json").read_text(encoding="utf-8")
+        )
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
+        self.assertIn("concurrency:", workflow)
+        self.assertIn(lock["source"]["revision"], workflow)
+        self.assertIn("devices/nx30pro/build/build.sh", workflow)
+        self.assertIn("devices/nx30pro/source-lock.json", workflow)
+        self.assertIn("actions/upload-artifact@", workflow)
+        self.assertNotIn("secrets:", workflow)
+        # The images are published only when the build and the checks
+        # succeeded; the logs are always kept for diagnosis.
+        self.assertRegex(workflow, r"(?s)- name: Upload firmware candidates.*?if: success\(\)")
+        self.assertRegex(workflow, r"(?s)- name: Upload build logs.*?if: always\(\)")
+        self.assertIn("firmware-artifact/images/", workflow)
+        self.assertIn("firmware-artifact/logs/", workflow)
+
     def test_full_workflow_has_typed_options_and_pinned_build_inputs(self) -> None:
         workflow = self.workflow("build-full.yml")
 
