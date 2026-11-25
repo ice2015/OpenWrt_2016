@@ -168,6 +168,33 @@ def config_symbols(text):
     return symbols
 
 
+def verify_device_tree(text, lock):
+    """Check that the device tree carries the partition contract of the lock."""
+    pattern = re.compile(
+        r"partition@\w+\s*\{\s*label\s*=\s*\"([^\"]+)\";\s*reg\s*=\s*<([^>]+)>;\s*\};",
+        re.S,
+    )
+    actual = []
+    for label, register in pattern.findall(text):
+        values = register.split()
+        if len(values) != 2:
+            continue
+        try:
+            actual.append((label, int(values[0], 0), int(values[1], 0)))
+        except ValueError:
+            continue
+    expected = [
+        (entry["label"], entry["offset"], entry["size"])
+        for entry in lock["partition_contract"]["partitions"]
+    ]
+    if actual != expected:
+        raise ConfigError(
+            "the device tree does not carry the partition contract of the lock: %s"
+            % actual
+        )
+    return actual
+
+
 def verify_config(text, lock):
     """Check the configuration that the build really produced."""
     symbols = config_symbols(text)
@@ -277,6 +304,14 @@ def command_verify_config(args):
     return 0
 
 
+def command_verify_device_tree(args):
+    lock = load_lock(args.lock)
+    text = Path(args.dts).read_text(encoding="utf-8")
+    verify_device_tree(text, lock)
+    print("The device tree carries the partition contract of the lock.")
+    return 0
+
+
 def command_report(args):
     lock = load_lock(args.lock)
     errors = validate_lock(lock)
@@ -315,6 +350,13 @@ def main(argv=None):
     verify.add_argument("--lock", required=True)
     verify.add_argument("--config", required=True)
     verify.set_defaults(handler=command_verify_config)
+
+    verify_tree = subparsers.add_parser(
+        "verify-device-tree", help="check the partition contract of the device tree"
+    )
+    verify_tree.add_argument("--lock", required=True)
+    verify_tree.add_argument("--dts", required=True)
+    verify_tree.set_defaults(handler=command_verify_device_tree)
 
     report = subparsers.add_parser("report", help="write the build report")
     report.add_argument("--lock", required=True)

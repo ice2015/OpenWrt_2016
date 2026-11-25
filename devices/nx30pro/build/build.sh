@@ -102,7 +102,11 @@ if [ -n "${SOURCE_REVISION:-}" ] && [ "$SOURCE_REVISION" != "$LOCK_REVISION" ]; 
 fi
 
 if [ -z "$JOBS" ]; then
+	# The runner has four cores and about seven gigabytes of memory. The Go
+	# and container builds of this base need more memory than a plain build,
+	# so the parallelism stays below the core count.
 	JOBS=$(nproc 2>/dev/null || printf '2')
+	[ "$JOBS" -gt 3 ] && JOBS=3
 fi
 
 # The source is prepared in a clean directory. A checkout that carries local

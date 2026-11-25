@@ -18,7 +18,7 @@ class ManifestTests(unittest.TestCase):
         catalog = load_catalog(ROOT)
 
         self.assertEqual(
-            {"tr3000", "x86-64", "raspberry-pi"},
+            {"tr3000", "x86-64", "raspberry-pi", "nx30pro"},
             {device.id for device in catalog.devices},
         )
         self.assertEqual([], validate_catalog(catalog, ROOT))
@@ -33,6 +33,7 @@ class ManifestTests(unittest.TestCase):
                 ("immortalwrt", "raspberry-pi"),
                 ("immortalwrt", "tr3000"),
                 ("immortalwrt", "x86-64"),
+                ("immortalwrt-mt798x", "nx30pro"),
                 ("openwrt", "raspberry-pi"),
                 ("openwrt", "tr3000"),
                 ("openwrt", "x86-64"),

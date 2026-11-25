@@ -764,8 +764,9 @@ class ScriptInterfaceTests(unittest.TestCase):
             result = run_script("list-targets.sh", cwd=Path(directory))
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual(6, len(result.stdout.splitlines()))
+        self.assertEqual(7, len(result.stdout.splitlines()))
         self.assertIn("openwrt\ttr3000\tunresolved\tTR3000", result.stdout)
+        self.assertIn("immortalwrt-mt798x\tnx30pro\tready\tNX30 Pro", result.stdout)
 
     def test_build_propagates_unsupported_pair_exit_code_before_mutation(self) -> None:
         work = ROOT / "work"

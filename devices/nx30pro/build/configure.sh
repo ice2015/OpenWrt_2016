@@ -89,14 +89,8 @@ grep -Fq 'CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y' "$DEVICE_CONF
 
 DTS="$SOURCE_DIR/target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts"
 [ -f "$DTS" ] || fail "the 112M device tree is missing: $DTS"
-for entry in "label = \"BL2\"; reg = <0x00 0x100000>;" \
-	"label = \"u-boot-env\"; reg = <0x100000 0x80000>;" \
-	"label = \"Factory\"; reg = <0x180000 0x200000>;" \
-	"label = \"FIP\"; reg = <0x380000 0x200000>;" \
-	"label = \"ubi\"; reg = <0x580000 0x7000000>;"
-do
-	grep -Fq "$entry" "$DTS" || fail "the 112M device tree does not carry the partition contract: $entry"
-done
+python3 "$HELPER" verify-device-tree --lock "$LOCK" --dts "$DTS" ||
+	fail "the 112M device tree does not carry the partition contract"
 
 IMAGE_RULES="$SOURCE_DIR/target/linux/mediatek/image/mt7981.mk"
 grep -Fq 'define Device/h3c_nx30pro_112M' "$IMAGE_RULES" ||
