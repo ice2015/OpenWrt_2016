@@ -152,6 +152,9 @@ cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 (
 	cd "$SOURCE_DIR"
 	./scripts/feeds update -a
+	# The feeds have to be installed into the package tree before defconfig,
+	# otherwise the packages of the requirement table do not exist as symbols.
+	./scripts/feeds install -a -f
 	make defconfig
 )
 
