@@ -3,8 +3,9 @@
 
 The helper is the only place that knows what a build ready source lock looks
 like. It refuses a lock that does not pin a full upstream commit, that names
-another board, that carries a partition layout other than the 112M layout of
-the selected system, or that does not confirm both image types.
+another board or another vendored tree, that carries a partition layout other
+than the 112M layout of the selected system, or that does not confirm both
+image types.
 
 Artifacts are classified by their content. The ATF FIP package is recognised
 by its table of contents header and its BL31 and BL33 entries, the MediaTek
@@ -15,7 +16,9 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,8 +29,13 @@ EXPECTED_REPOSITORY = "https://github.com/hanwckf/bl-mt798x"
 EXPECTED_SOC = "mt7981"
 EXPECTED_BOARD = "h3c_magic-nx30-pro"
 
+# The trees that the pinned upstream build script really builds.
+EXPECTED_UBOOT_TREE = "uboot-mtk-20230718-09eda825"
+EXPECTED_ATF_TREE = "atf-20240117-bacca82a8"
+
 # The partition contract of the selected system, from the device tree of
-# jerryhan77/immortalwrt-mt798x at the locked commit.
+# jerryhan77/immortalwrt-mt798x at the locked commit. The offsets are NMBM
+# logical addresses, not physical NAND addresses.
 EXPECTED_PARTITIONS = [
     ("BL2", 0x000000, 0x100000),
     ("u-boot-env", 0x100000, 0x080000),
@@ -49,6 +57,9 @@ TOC_ENTRY = struct.Struct("<16sQQQ")
 BL31_UUID = bytes.fromhex("47d4086d4cfe98469b952950cbbd5a00")
 BL33_UUID = bytes.fromhex("d6d0eea7fcead54b97829934f234b6e4")
 SPIM_NAND_HEADER = b"SPINAND!"
+# The boot loader checks the first eight bytes of the header, the full header
+# of the preloader image is sixteen bytes long.
+BL2_HEADER_SIZE = 16
 UBOOT_MARKER = b"U-Boot "
 
 
@@ -68,6 +79,21 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
+def run_output(command):
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        return "UNRESOLVED (%s)" % error
+    if result.returncode != 0:
+        return "UNRESOLVED"
+    return result.stdout.strip()
+
+
 def load_lock(path):
     try:
         lock = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -82,7 +108,7 @@ def validate_lock(lock):
     """Return the list of reasons why the lock is not build ready."""
     errors = []
     source = lock.get("source") or {}
-    build_env = lock.get("source", {}).get("build_env") or source.get("build_env") or {}
+    build_env = source.get("build_env") or {}
 
     commit = source.get("commit")
     if not isinstance(commit, str) or not COMMIT_RE.match(commit):
@@ -94,6 +120,17 @@ def validate_lock(lock):
     if repository != EXPECTED_REPOSITORY:
         errors.append(
             "the source repository must be %s, got %r" % (EXPECTED_REPOSITORY, repository)
+        )
+
+    if source.get("uboot_tree") != EXPECTED_UBOOT_TREE:
+        errors.append(
+            "the U-Boot tree must be the tree the pinned build script uses (%s), got %r"
+            % (EXPECTED_UBOOT_TREE, source.get("uboot_tree"))
+        )
+    if source.get("atf_tree") != EXPECTED_ATF_TREE:
+        errors.append(
+            "the ATF tree must be the tree the pinned build script uses (%s), got %r"
+            % (EXPECTED_ATF_TREE, source.get("atf_tree"))
         )
 
     board = build_env.get("BOARD")
@@ -185,6 +222,125 @@ def render_plan(lock):
     }
 
 
+def validate_effective_config(text, lock):
+    """Check the boot loader configuration that was really compiled.
+
+    The patch is applied to a defconfig, so only the configuration that the
+    build produced proves that the compiled boot loader carries the 112M
+    partition table and not the stock one.
+    """
+    errors = []
+    expected_table = lock["compatibility"]["minimal_device_patch"]["value"]
+    match = re.search(r'^CONFIG_MTDPARTS_DEFAULT="([^"]*)"', text, re.M)
+    if not match:
+        errors.append("the effective configuration has no CONFIG_MTDPARTS_DEFAULT")
+    elif match.group(1) != expected_table:
+        errors.append(
+            "the effective partition table is not the 112M table but %r"
+            % match.group(1)
+        )
+    if "CONFIG_MTK_FIXED_MTD_MTDPARTS=y" not in text:
+        errors.append("the effective configuration does not fix the mtd parts")
+    if "CONFIG_TARGET_MT7981=y" not in text:
+        errors.append("the effective configuration does not target MT7981")
+    expected_tree = 'CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"'
+    if expected_tree not in text:
+        errors.append("the effective configuration does not use the NX30 Pro device tree")
+    if errors:
+        raise LockError("; ".join(errors))
+    return []
+
+
+def upstream_build_trees(source_dir):
+    """Return the trees that the pinned build script really builds."""
+    build_script = Path(source_dir) / "build.sh"
+    if not build_script.is_file():
+        raise LockError("the pinned build script is missing: %s" % build_script)
+    text = build_script.read_text(encoding="utf-8")
+    uboot = re.search(r"^UBOOT_DIR=(\S+)$", text, re.M)
+    atf = re.search(r"^ATF_DIR=(\S+)$", text, re.M)
+    if not uboot or not atf:
+        raise LockError("the pinned build script does not name its trees")
+    return uboot.group(1), atf.group(1)
+
+
+def check_worktree_clean(source_dir, allow_paths=()):
+    """Fail when the checkout carries changes that are not the device patch."""
+    source_dir = Path(source_dir)
+    result = subprocess.run(
+        ["git", "-C", str(source_dir), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise LockError("the source directory is not a usable git checkout")
+    changed = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip()
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        changed.append(path)
+    unexpected = [path for path in changed if path not in allow_paths]
+    if unexpected:
+        raise LockError(
+            "the source checkout carries local changes: %s" % ", ".join(sorted(unexpected))
+        )
+    return changed
+
+
+def check_output_dir_empty(source_dir, output_name="output"):
+    """Fail when the build directory already holds output of an earlier run."""
+    output = Path(source_dir) / output_name
+    if not output.exists():
+        return None
+    if not output.is_dir():
+        raise LockError("the build output path is not a directory: %s" % output)
+    entries = sorted(entry.name for entry in output.iterdir())
+    if entries:
+        raise LockError(
+            "the build output directory already holds files (%s). Build in a clean "
+            "checkout so that an earlier result cannot be reported as this build."
+            % ", ".join(entries)
+        )
+    return output
+
+
+def require_toolchain(lookup=shutil.which, prefix="aarch64-linux-gnu-"):
+    """Fail when the cross compiler is not installed."""
+    compiler = lookup(prefix + "gcc")
+    if not compiler:
+        raise LockError(
+            "the cross compiler %sgcc is not installed. The upstream build script "
+            "exits successfully when the compiler is missing, so the build has to "
+            "be stopped before it runs." % prefix
+        )
+    return compiler
+
+
+def toolchain_identity(lookup=shutil.which, prefix="aarch64-linux-gnu-"):
+    """Record the identity of the toolchain that produced the images."""
+    compiler = require_toolchain(lookup=lookup, prefix=prefix)
+    version = run_output([compiler, "--version"]).splitlines()
+    identity = {
+        "compiler": compiler,
+        "version": version[0] if version else "UNRESOLVED",
+        "compiler_sha256": sha256_of(compiler),
+        "package": "gcc-aarch64-linux-gnu",
+        "package_version": run_output(
+            ["dpkg-query", "-W", "-f=${Version}", "gcc-aarch64-linux-gnu"]
+        )
+        or "UNRESOLVED",
+        "package_candidate": run_output(
+            ["apt-cache", "policy", "gcc-aarch64-linux-gnu"]
+        )
+        or "UNRESOLVED",
+    }
+    return identity
+
+
 def inspect_fip(path, max_size=None):
     """Classify an ATF FIP package by its table of contents."""
     path = Path(path)
@@ -204,11 +360,21 @@ def inspect_fip(path, max_size=None):
 
     components = []
     offset = TOC_HEADER.size
+    terminated = False
     while offset + TOC_ENTRY.size <= len(data):
         uuid, entry_offset, size, _entry_flags = TOC_ENTRY.unpack_from(data, offset)
         offset += TOC_ENTRY.size
         if uuid == b"\x00" * 16:
+            terminated = True
             break
+        if size == 0:
+            raise ArtifactError(
+                "the FIP package holds an entry without payload, it is truncated"
+            )
+        if entry_offset + size > len(data):
+            raise ArtifactError(
+                "the FIP package holds an entry that reaches past the end of the file"
+            )
         payload = data[entry_offset:entry_offset + size]
         if uuid == BL31_UUID:
             name = "BL31"
@@ -234,11 +400,13 @@ def inspect_fip(path, max_size=None):
             }
         )
 
+    if not terminated:
+        raise ArtifactError("the FIP table of contents is not terminated")
     names = [component["name"] for component in components]
     if "BL31" not in names or "BL33" not in names:
         raise ArtifactError(
             "the FIP package does not carry both BL31 and BL33, it carries %s"
-            % ", ".join(names) if names else "no entries"
+            % (", ".join(names) if names else "no entries")
         )
 
     return {
@@ -259,6 +427,11 @@ def inspect_bl2(path, max_size=None, expected_header=SPIM_NAND_HEADER):
         raise ArtifactError(
             "the BL2 image is %d bytes and does not fit its %d byte partition"
             % (len(data), max_size)
+        )
+    if len(data) < BL2_HEADER_SIZE:
+        raise ArtifactError(
+            "the BL2 image is only %d bytes long and carries no preloader payload"
+            % len(data)
         )
     header = data[: len(expected_header)]
     if header != expected_header:
@@ -282,7 +455,7 @@ def inspect_bl2(path, max_size=None, expected_header=SPIM_NAND_HEADER):
     }
 
 
-def build_report(lock, artifacts, toolchain_version, build_env):
+def build_report(lock, artifacts, toolchain, build_env):
     """Assemble the build report of one candidate boot loader build."""
     partition_table = [
         {
@@ -291,6 +464,7 @@ def build_report(lock, artifacts, toolchain_version, build_env):
             "size": entry["size"],
             "offset_hex": "0x%06x" % entry["offset"],
             "size_hex": "0x%x" % entry["size"],
+            "address_space": "nmbm-logical",
         }
         for entry in lock["partition_contract"]["partitions"]
     ]
@@ -315,14 +489,15 @@ def build_report(lock, artifacts, toolchain_version, build_env):
         "source_commit": lock["source"]["commit"],
         "atf_tree": lock["source"]["atf_tree"],
         "uboot_tree": lock["source"]["uboot_tree"],
-        "toolchain_package": lock["toolchain"]["package"],
-        "toolchain_version": toolchain_version,
+        "toolchain": dict(toolchain or {}),
         "build_parameters": dict(build_env or {}),
         "partition_table": partition_table,
         "artifacts": reported,
         "notes": [
             "The images are boot loader candidates. They are not system images and "
             "no image has been verified on hardware.",
+            "The partition offsets are NMBM logical addresses, not physical NAND "
+            "addresses.",
         ],
     }
 
@@ -357,6 +532,51 @@ def apply_device_patch(source_dir, lock):
     }
 
 
+def preflight(lock, source_dir):
+    """Run every check that has to pass before the build may start."""
+    errors = validate_lock(lock)
+    if errors:
+        raise LockError("; ".join(errors))
+
+    source_dir = Path(source_dir)
+    commit = lock["source"]["commit"]
+    result = subprocess.run(
+        ["git", "-C", str(source_dir), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise LockError("the source directory is not a usable git checkout")
+    actual = result.stdout.strip()
+    if actual != commit:
+        raise LockError(
+            "the source checkout is at %s, the lock pins %s" % (actual, commit)
+        )
+
+    uboot_tree, atf_tree = upstream_build_trees(source_dir)
+    if uboot_tree != lock["source"]["uboot_tree"]:
+        raise LockError(
+            "the pinned build script builds the tree %s, the lock names %s"
+            % (uboot_tree, lock["source"]["uboot_tree"])
+        )
+    if atf_tree != lock["source"]["atf_tree"]:
+        raise LockError(
+            "the pinned build script builds the ATF tree %s, the lock names %s"
+            % (atf_tree, lock["source"]["atf_tree"])
+        )
+
+    check_worktree_clean(source_dir)
+    check_output_dir_empty(source_dir)
+    compiler = require_toolchain()
+    return {
+        "source_commit": actual,
+        "uboot_tree": uboot_tree,
+        "atf_tree": atf_tree,
+        "cross_compiler": compiler,
+    }
+
+
 def command_check(args):
     lock = load_lock(args.lock)
     errors = validate_lock(lock)
@@ -365,6 +585,13 @@ def command_check(args):
             print("Error: %s" % error, file=sys.stderr)
         return 1
     print(json.dumps(render_plan(lock), indent=2, sort_keys=True))
+    return 0
+
+
+def command_preflight(args):
+    lock = load_lock(args.lock)
+    result = preflight(lock, args.source_dir)
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
@@ -380,6 +607,14 @@ def command_patch(args):
     return 0
 
 
+def command_effective_config(args):
+    lock = load_lock(args.lock)
+    text = Path(args.config).read_text(encoding="utf-8")
+    validate_effective_config(text, lock)
+    print("The effective configuration carries the 112M partition table.")
+    return 0
+
+
 def command_inspect(args):
     if args.kind == "fip":
         info = inspect_fip(args.path, max_size=args.max_size)
@@ -388,6 +623,14 @@ def command_inspect(args):
     else:
         raise ArtifactError("unknown image kind %r" % (args.kind,))
     print(json.dumps(info, indent=2, sort_keys=True))
+    return 0
+
+
+def command_toolchain(args):
+    identity = toolchain_identity()
+    Path(args.out).write_text(
+        json.dumps(identity, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     return 0
 
 
@@ -410,7 +653,10 @@ def command_report(args):
             }
         )
     build_env = json.loads(args.build_env) if args.build_env else {}
-    report = build_report(lock, artifacts, args.toolchain_version, build_env)
+    toolchain = {}
+    if args.toolchain_file:
+        toolchain = json.loads(Path(args.toolchain_file).read_text(encoding="utf-8"))
+    report = build_report(lock, artifacts, toolchain, build_env)
     Path(args.out).write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -425,10 +671,24 @@ def main(argv=None):
     check.add_argument("--lock", required=True)
     check.set_defaults(handler=command_check)
 
+    preflight = subparsers.add_parser(
+        "preflight", help="run every check that has to pass before the build"
+    )
+    preflight.add_argument("--lock", required=True)
+    preflight.add_argument("--source-dir", required=True)
+    preflight.set_defaults(handler=command_preflight)
+
     patch = subparsers.add_parser("patch", help="apply the device patch to a build copy")
     patch.add_argument("--lock", required=True)
     patch.add_argument("--source-dir", required=True)
     patch.set_defaults(handler=command_patch)
+
+    effective = subparsers.add_parser(
+        "effective-config", help="check the configuration the build produced"
+    )
+    effective.add_argument("--lock", required=True)
+    effective.add_argument("--config", required=True)
+    effective.set_defaults(handler=command_effective_config)
 
     inspect = subparsers.add_parser("inspect", help="classify one image by its content")
     inspect.add_argument("--kind", required=True, choices=("fip", "bl2"))
@@ -436,10 +696,14 @@ def main(argv=None):
     inspect.add_argument("--max-size", type=int, default=None)
     inspect.set_defaults(handler=command_inspect)
 
+    toolchain = subparsers.add_parser("toolchain", help="record the toolchain identity")
+    toolchain.add_argument("--out", required=True)
+    toolchain.set_defaults(handler=command_toolchain)
+
     report = subparsers.add_parser("report", help="write the build report")
     report.add_argument("--lock", required=True)
     report.add_argument("--out", required=True)
-    report.add_argument("--toolchain-version", default="UNRESOLVED")
+    report.add_argument("--toolchain-file", default="")
     report.add_argument("--build-env", default="")
     report.add_argument(
         "--artifact",

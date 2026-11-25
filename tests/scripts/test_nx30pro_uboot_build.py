@@ -115,6 +115,24 @@ class Nx30ProUbootBuildGateTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("image", result.stderr.lower())
 
+    def test_lock_naming_a_tree_that_the_build_does_not_use_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(
+                tmp,
+                **{
+                    "source.uboot_tree": "uboot-mtk-20220606",
+                    "source.vendored_trees": {
+                        "uboot-mtk-20220606": {
+                            "revision": "36916669d0874306638196c5327a20c2ef215bed",
+                            "kind": "vendored-in-upstream-repository",
+                        }
+                    },
+                },
+            )
+            result = run_check(lock)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("tree", result.stderr.lower())
+
     def test_script_refuses_to_flash_anything(self):
         text = SCRIPT.read_text(encoding="utf-8")
         for forbidden in ("flashwrite", "nandwrite", "mtd write", "dd if=", "/dev/mtd"):
@@ -172,6 +190,33 @@ class Nx30ProUbootArtifactTests(unittest.TestCase):
             with self.assertRaises(Exception):
                 self.helper.inspect_bl2(other)
 
+    def test_truncated_bl2_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bl2.bin"
+            path.write_bytes(SPIM_NAND_HEADER)
+            with self.assertRaises(Exception):
+                self.helper.inspect_bl2(path)
+
+    def test_fip_component_that_reaches_past_the_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.build_fip(tmp)
+            data = bytearray(path.read_bytes())
+            # The second entry starts at 16 + 40 and its payload offset lives
+            # 16 bytes into the entry.
+            struct.pack_into("<Q", data, 16 + 40 + 16, len(data) + 4096)
+            path.write_bytes(bytes(data))
+            with self.assertRaises(Exception):
+                self.helper.inspect_fip(path)
+
+    def test_fip_component_without_payload_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.build_fip(tmp)
+            data = bytearray(path.read_bytes())
+            struct.pack_into("<Q", data, 16 + 40 + 24, 0)
+            path.write_bytes(bytes(data))
+            with self.assertRaises(Exception):
+                self.helper.inspect_fip(path)
+
     def test_image_must_fit_its_partition(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self.build_fip(tmp)
@@ -189,19 +234,116 @@ class Nx30ProUbootArtifactTests(unittest.TestCase):
                     {"kind": "fip", "path": str(fip), "partition": "fip", "partition_size": 2097152},
                     {"kind": "bl2", "path": str(bl2), "partition": "bl2", "partition_size": 1048576},
                 ],
-                toolchain_version="aarch64-linux-gnu-gcc (Ubuntu 13.3.0) 13.3.0",
+                toolchain={
+                    "version": "aarch64-linux-gnu-gcc (Ubuntu 13.3.0) 13.3.0",
+                    "compiler_sha256": "0" * 64,
+                    "package_version": "13.3.0-6ubuntu2~24.04",
+                },
                 build_env={"SOC": "mt7981", "BOARD": "h3c_magic-nx30-pro"},
             )
-        for key in ("source_commit", "toolchain_version", "build_parameters", "partition_table", "artifacts"):
+        for key in ("source_commit", "toolchain", "build_parameters", "partition_table", "artifacts"):
             self.assertIn(key, report)
         self.assertEqual(
             "36916669d0874306638196c5327a20c2ef215bed",
             report["source_commit"],
         )
+        self.assertEqual(64, len(report["toolchain"]["compiler_sha256"]))
         self.assertEqual(5, len(report["partition_table"]))
         for artifact in report["artifacts"]:
             self.assertEqual(64, len(artifact["sha256"]))
             self.assertIn("components", artifact)
+
+
+class Nx30ProUbootEffectiveConfigurationTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        self.table = self.lock["compatibility"]["minimal_device_patch"]["value"]
+
+    def config(self, table=None, extra=""):
+        table = self.table if table is None else table
+        return (
+            "CONFIG_TARGET_MT7981=y\n"
+            'CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"\n'
+            "CONFIG_MTK_FIXED_MTD_MTDPARTS=y\n"
+            'CONFIG_MTDPARTS_DEFAULT="%s"\n%s' % (table, extra)
+        )
+
+    def test_effective_configuration_must_carry_the_112m_partition_table(self):
+        self.assertEqual([], self.helper.validate_effective_config(self.config(), self.lock))
+
+    def test_stock_partition_table_in_the_effective_configuration_is_rejected(self):
+        stock = (
+            "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),"
+            "65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)"
+        )
+        with self.assertRaises(Exception):
+            self.helper.validate_effective_config(self.config(stock), self.lock)
+
+    def test_effective_configuration_without_fixed_mtd_parts_is_rejected(self):
+        text = self.config().replace("CONFIG_MTK_FIXED_MTD_MTDPARTS=y\n", "")
+        with self.assertRaises(Exception):
+            self.helper.validate_effective_config(text, self.lock)
+
+    def test_effective_configuration_of_another_board_is_rejected(self):
+        text = self.config().replace(
+            'CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"',
+            'CONFIG_DEFAULT_DEVICE_TREE="mt7981_wr30u"',
+        )
+        with self.assertRaises(Exception):
+            self.helper.validate_effective_config(text, self.lock)
+
+
+class Nx30ProUbootPreflightTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+
+    def make_repo(self, directory):
+        subprocess.run(["git", "init", "-q", str(directory)], check=True)
+        subprocess.run(["git", "-C", str(directory), "config", "user.email", "t@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(directory), "config", "user.name", "Test"], check=True)
+        (Path(directory) / "file.txt").write_text("content\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(directory), "add", "file.txt"], check=True)
+        subprocess.run(["git", "-C", str(directory), "commit", "-q", "-m", "init"], check=True)
+        return directory
+
+    def test_preflight_rejects_a_checkout_with_local_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.make_repo(Path(tmp) / "source")
+            (Path(repo) / "file.txt").write_text("changed\n", encoding="utf-8")
+            with self.assertRaises(Exception):
+                self.helper.check_worktree_clean(repo)
+
+    def test_preflight_accepts_the_device_patch_as_the_only_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.make_repo(Path(tmp) / "source")
+            target = Path(repo) / "configs" / "board_defconfig"
+            target.parent.mkdir(parents=True)
+            target.write_text("CONFIG_X=y\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "configs/board_defconfig"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "config"], check=True)
+            target.write_text("CONFIG_X=y\nCONFIG_Y=y\n", encoding="utf-8")
+            self.helper.check_worktree_clean(repo, allow_paths=("configs/board_defconfig",))
+
+    def test_preflight_rejects_an_existing_build_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.make_repo(Path(tmp) / "source")
+            output = Path(repo) / "output"
+            output.mkdir()
+            (output / "stale.bin").write_bytes(b"old")
+            with self.assertRaises(Exception):
+                self.helper.check_output_dir_empty(repo)
+
+    def test_preflight_requires_the_cross_compiler(self):
+        with self.assertRaises(Exception):
+            self.helper.require_toolchain(lookup=lambda name: None)
+
+    def test_toolchain_identity_records_a_compiler_digest(self):
+        identity = self.helper.toolchain_identity(lookup=lambda name: "/usr/bin/true")
+        self.assertIn("version", identity)
+        self.assertIn("compiler_sha256", identity)
+        self.assertEqual(64, len(identity["compiler_sha256"]))
 
 
 if __name__ == "__main__":

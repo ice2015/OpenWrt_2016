@@ -47,11 +47,24 @@ jobs:
             --source-dir "$RUNNER_TEMP/nx30pro-uboot/source" \
             --artifact-dir "$GITHUB_WORKSPACE/uboot-artifact"
 
-      - name: Upload boot loader candidates, provenance and logs
-        if: always()
+      - name: Upload boot loader candidates and provenance
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nx30pro-uboot-candidate-112m
-          path: uboot-artifact/
+          path: |
+            uboot-artifact/images/
+            uboot-artifact/build-report.json
+            uboot-artifact/uboot-source-lock.json
+            uboot-artifact/FLASH-TARGETS.txt
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build logs and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nx30pro-uboot-candidate-logs
+          path: uboot-artifact/logs/
+          if-no-files-found: warn
           retention-days: 30

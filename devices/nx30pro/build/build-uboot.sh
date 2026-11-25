@@ -73,9 +73,8 @@ fi
 [ -n "$SOURCE_DIR" ] || fail "--source-dir is required"
 [ -n "$ARTIFACT_DIR" ] || fail "--artifact-dir is required"
 [ -d "$SOURCE_DIR" ] || fail "source directory not found: $SOURCE_DIR"
-[ -d "$SOURCE_DIR/.git" ] || fail "source directory is not a git checkout: $SOURCE_DIR"
 
-mkdir -p "$ARTIFACT_DIR/logs" "$ARTIFACT_DIR/images"
+mkdir -p "$ARTIFACT_DIR/logs" "$ARTIFACT_DIR/staging"
 
 PLAN_FILE="$ARTIFACT_DIR/logs/build-plan.json"
 python3 "$HELPER" check --lock "$LOCK" > "$PLAN_FILE" || fail "the source lock is not build ready"
@@ -93,46 +92,42 @@ print(plan)
 PY
 }
 
+partition_size() {
+	python3 - "$PLAN_FILE" "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    plan = json.load(handle)
+for entry in plan["partition_table"]:
+    if entry["label"] == sys.argv[2]:
+        print(entry["size"])
+        break
+PY
+}
+
 EXPECTED_COMMIT=$(plan_value source_commit)
 REPOSITORY=$(plan_value source_repository)
 SOC=$(plan_value build_env.SOC)
 BOARD=$(plan_value build_env.BOARD)
 FIXED_MTDPARTS=$(plan_value build_env.FIXED_MTDPARTS)
 MULTI_LAYOUT=$(plan_value build_env.MULTI_LAYOUT)
-BL2_PARTITION_SIZE=$(python3 - "$PLAN_FILE" <<'PY'
-import json
-import sys
+UBOOT_TREE=$(plan_value uboot_tree)
+BL2_PARTITION_SIZE=$(partition_size BL2)
+FIP_PARTITION_SIZE=$(partition_size FIP)
 
-with open(sys.argv[1], encoding="utf-8") as handle:
-    plan = json.load(handle)
-for entry in plan["partition_table"]:
-    if entry["label"] == "BL2":
-        print(entry["size"])
-        break
-PY
-)
-FIP_PARTITION_SIZE=$(python3 - "$PLAN_FILE" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as handle:
-    plan = json.load(handle)
-for entry in plan["partition_table"]:
-    if entry["label"] == "FIP":
-        print(entry["size"])
-        break
-PY
-)
-
-ACTUAL_COMMIT=$(git -C "$SOURCE_DIR" rev-parse HEAD)
-[ "$ACTUAL_COMMIT" = "$EXPECTED_COMMIT" ] ||
-	fail "the source checkout is at $ACTUAL_COMMIT, the lock pins $EXPECTED_COMMIT"
+# Every check that has to pass before the build may start: the pinned commit,
+# a clean checkout, no output of an earlier run, the trees the pinned build
+# script really uses and an installed cross compiler.
+python3 "$HELPER" preflight --lock "$LOCK" --source-dir "$SOURCE_DIR" \
+	> "$ARTIFACT_DIR/logs/preflight.json" ||
+	fail "the preflight checks failed, the build was not started"
 
 printf 'Pinned source: %s at %s\n' "$REPOSITORY" "$EXPECTED_COMMIT"
 printf 'Build target: %s %s\n' "$SOC" "$BOARD"
 
-python3 "$HELPER" patch --lock "$LOCK" --source-dir "$SOURCE_DIR" \
-	> "$ARTIFACT_DIR/logs/device-patch.json" ||
+PATCH_FILE="$ARTIFACT_DIR/logs/device-patch.json"
+python3 "$HELPER" patch --lock "$LOCK" --source-dir "$SOURCE_DIR" > "$PATCH_FILE" ||
 	fail "the device partition patch could not be applied"
 
 BUILD_LOG="$ARTIFACT_DIR/logs/build.log"
@@ -147,31 +142,51 @@ else
 	fail "the pinned boot loader build failed"
 fi
 
+# The configuration that was really compiled has to carry the 112M partition
+# table. A patch that landed in a tree that the build does not use is caught
+# here.
+python3 "$HELPER" effective-config --lock "$LOCK" \
+	--config "$SOURCE_DIR/$UBOOT_TREE/.config" ||
+	fail "the compiled configuration does not carry the 112M partition table"
+
 OUTPUT_DIR="$SOURCE_DIR/output"
 [ -d "$OUTPUT_DIR" ] || fail "the boot loader build produced no output directory"
 
-FIP_IMAGE=$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*fip*.bin' -size +0c)
-BL2_IMAGE=$(find "$OUTPUT_DIR" -maxdepth 1 -type f -name '*bl2*.bin' -size +0c)
-[ "$(printf '%s\n' "$FIP_IMAGE" | grep -c . || :)" -eq 1 ] ||
-	fail "expected exactly one non-empty FIP image"
-[ "$(printf '%s\n' "$BL2_IMAGE" | grep -c . || :)" -eq 1 ] ||
-	fail "expected exactly one non-empty BL2 image"
+FIP_NAME=$(basename "$(python3 - "$LOCK" <<'PY'
+import json
+import sys
 
-install -m 0644 "$FIP_IMAGE" "$ARTIFACT_DIR/images/"
-install -m 0644 "$BL2_IMAGE" "$ARTIFACT_DIR/images/"
+with open(sys.argv[1], encoding="utf-8") as handle:
+    lock = json.load(handle)
+print(lock["artifacts"]["fip"].split("/")[-1])
+PY
+)")
+BL2_NAME=$(basename "$(python3 - "$LOCK" <<'PY'
+import json
+import sys
 
-FIP_FILE=$(find "$ARTIFACT_DIR/images" -maxdepth 1 -type f -name '*fip*.bin')
-BL2_FILE=$(find "$ARTIFACT_DIR/images" -maxdepth 1 -type f -name '*bl2*.bin')
+with open(sys.argv[1], encoding="utf-8") as handle:
+    lock = json.load(handle)
+print(lock["artifacts"]["bl2"].split("/")[-1])
+PY
+)")
+[ -s "$OUTPUT_DIR/$FIP_NAME" ] || fail "the build did not produce $FIP_NAME"
+[ -s "$OUTPUT_DIR/$BL2_NAME" ] || fail "the build did not produce $BL2_NAME"
 
-python3 "$HELPER" inspect --kind fip --path "$FIP_FILE" --max-size "$FIP_PARTITION_SIZE" \
-	> "$ARTIFACT_DIR/logs/fip-inspection.json" ||
+# The images stay in the staging directory until both inspections and the
+# build report succeeded. A rejected image is never published as a candidate.
+install -m 0644 "$OUTPUT_DIR/$FIP_NAME" "$ARTIFACT_DIR/staging/"
+install -m 0644 "$OUTPUT_DIR/$BL2_NAME" "$ARTIFACT_DIR/staging/"
+
+python3 "$HELPER" inspect --kind fip --path "$ARTIFACT_DIR/staging/$FIP_NAME" \
+	--max-size "$FIP_PARTITION_SIZE" > "$ARTIFACT_DIR/logs/fip-inspection.json" ||
 	fail "the FIP image does not match the expected boot loader package"
-python3 "$HELPER" inspect --kind bl2 --path "$BL2_FILE" --max-size "$BL2_PARTITION_SIZE" \
-	> "$ARTIFACT_DIR/logs/bl2-inspection.json" ||
+python3 "$HELPER" inspect --kind bl2 --path "$ARTIFACT_DIR/staging/$BL2_NAME" \
+	--max-size "$BL2_PARTITION_SIZE" > "$ARTIFACT_DIR/logs/bl2-inspection.json" ||
 	fail "the BL2 image does not match the expected boot loader package"
 
-TOOLCHAIN_VERSION=$(aarch64-linux-gnu-gcc --version 2>/dev/null | head -1 || printf 'UNRESOLVED')
-TOOLCHAIN_PACKAGE=$(dpkg-query -W -f='${Version}' gcc-aarch64-linux-gnu 2>/dev/null || printf 'UNRESOLVED')
+python3 "$HELPER" toolchain --out "$ARTIFACT_DIR/logs/toolchain.json" ||
+	fail "the toolchain identity could not be recorded"
 
 BUILD_ENV_JSON=$(printf '{"SOC":"%s","BOARD":"%s","FIXED_MTDPARTS":"%s","MULTI_LAYOUT":"%s"}' \
 	"$SOC" "$BOARD" "$FIXED_MTDPARTS" "$MULTI_LAYOUT")
@@ -179,11 +194,16 @@ BUILD_ENV_JSON=$(printf '{"SOC":"%s","BOARD":"%s","FIXED_MTDPARTS":"%s","MULTI_L
 python3 "$HELPER" report \
 	--lock "$LOCK" \
 	--out "$ARTIFACT_DIR/build-report.json" \
-	--toolchain-version "$TOOLCHAIN_VERSION (package $TOOLCHAIN_PACKAGE)" \
+	--toolchain-file "$ARTIFACT_DIR/logs/toolchain.json" \
 	--build-env "$BUILD_ENV_JSON" \
-	--artifact "fip:$FIP_FILE:fip:$FIP_PARTITION_SIZE" \
-	--artifact "bl2:$BL2_FILE:bl2:$BL2_PARTITION_SIZE" ||
+	--artifact "fip:$ARTIFACT_DIR/staging/$FIP_NAME:fip:$FIP_PARTITION_SIZE" \
+	--artifact "bl2:$ARTIFACT_DIR/staging/$BL2_NAME:bl2:$BL2_PARTITION_SIZE" ||
 	fail "the build report could not be written"
+
+mkdir -p "$ARTIFACT_DIR/images"
+install -m 0644 "$ARTIFACT_DIR/staging/$FIP_NAME" "$ARTIFACT_DIR/images/"
+install -m 0644 "$ARTIFACT_DIR/staging/$BL2_NAME" "$ARTIFACT_DIR/images/"
+rm -rf "$ARTIFACT_DIR/staging"
 
 (cd "$ARTIFACT_DIR/images" && sha256sum *.bin) > "$ARTIFACT_DIR/images/SHA256SUMS"
 cp "$LOCK" "$ARTIFACT_DIR/uboot-source-lock.json"
@@ -193,16 +213,20 @@ These files are boot loader candidates built from the pinned source. They are
 not system images, they were not tested on hardware and they are not flashed
 by this build.
 
+The addresses below are NMBM logical addresses of the 112M partition contract,
+not physical NAND addresses.
+
 BL2: MediaTek ATF BL2 preloader for SPI-NAND boot. Write target: the bl2
-     partition at 0x000000, 1 MiB, of the 112M partition contract.
+     partition at NMBM logical 0x000000, 1 MiB.
 FIP: ATF FIP package that carries BL31 and BL33 (U-Boot). Write target: the
-     fip partition at 0x380000, 2 MiB, of the 112M partition contract.
+     fip partition at NMBM logical 0x380000, 2 MiB.
 
 The system factory image of the selected system belongs into the ubi
-partition at 0x580000 and is not part of this build. Do not rename either
-boot loader image as a recovery image. The web failsafe entry of the boot
-loader serves http://192.168.1.1/ and accepts the same two images; it does
-not replace an independent recovery path or a backup of the factory device.
+partition at NMBM logical 0x580000 and is not part of this build. Do not
+rename either boot loader image as a recovery image. The web failsafe entry
+of the boot loader serves http://192.168.1.1/ and accepts the same two
+images; it does not replace an independent recovery path or a backup of the
+factory device.
 EOF
 
 printf 'Candidate images are in %s\n' "$ARTIFACT_DIR/images"

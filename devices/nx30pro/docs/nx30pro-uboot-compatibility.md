@@ -37,8 +37,11 @@ release 只在 ATF 目录上更旧（`atf-20231013-0ea67d76a`）。因此 releas
 **上游不提供工具链版本或校验和**。因此：
 
 - 锁文件只记录来源（Ubuntu 24.04 的 `gcc-aarch64-linux-gnu`）与前缀，版本与校验和保持 `UNRESOLVED`；
-- 真正的版本证据只能来自构建报告，由构建脚本在编译时记录 `gcc --version` 与 dpkg 包版本；
-- 换用不同工具链版本会改变产物字节，比较两次构建前必须先比对记录的工具链版本。
+- 真正的版本证据只能来自构建报告，由构建脚本在编译时记录编译器路径、编译器版本、
+  **编译器二进制的 SHA-256（`compiler_sha256`）**、dpkg 包版本与 apt 候选版本；
+- 换用不同工具链版本会改变产物字节，比较两次构建前必须先比对记录的编译器 SHA-256 与包版本；
+- 工作流从发行版仓库安装该包，所以“逐字节可复现”只有在两次构建的工具链标识完全一致时才能主张；
+  在此之前该验收项保持未决。
 
 宿主依赖来自上游 README 与 ATF 文档：`gcc-aarch64-linux-gnu`、`build-essential`、
 `device-tree-compiler`、`flex`、`bison`、`libssl-dev`、`python3`。
@@ -58,7 +61,7 @@ release 只在 ATF 目录上更旧（`atf-20231013-0ea67d76a`）。因此 releas
 | BL2 校验 | `CONFIG_MTK_UPGRADE_BL2_VERIFY=y` | U-Boot defconfig |
 | FIP/系统镜像校验 | `CONFIG_MTK_UPGRADE_IMAGE_VERIFY` 未开启；`CONFIG_MTK_UPGRADE_FIP_VERIFY` 默认 `n` | U-Boot Kconfig |
 | 固定分区表 | `CONFIG_MTK_FIXED_MTD_MTDPARTS`（由 `FIXED_MTDPARTS=1` 追加） | `board/mediatek/Kconfig`、`board/mediatek/common/mtd_helper.c` |
-| DDR 类型 | 由 ATF 预编译 DRAM 初始化块运行时判定，编译期未开 `DRAM_USE_DDR4` | `plat/mediatek/mt7981/drivers/dram/emicfg.c` |
+| DDR 类型 | 编译期选中 DDR3：`DRAM_USE_DDR4` 未开启，`AVAIL_DRAM_SIZE` 为 256/512 | `plat/mediatek/mt7981/drivers/dram/dram-configs.mk` |
 
 `build.sh` 追加的 `CONFIG_MEDIATEK_UBI_FIXED_MTDPARTS=y` 在该 U-Boot 树中**没有对应 Kconfig 符号**，
 `make olddefconfig` 会丢弃它；产物名里的 `-fixed-parts` 只来自 `CONFIG_MTK_FIXED_MTD_MTDPARTS`。
@@ -88,14 +91,23 @@ nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),65536k(ubi),6144k(pd
 ```
 
 四个前置分区的偏移与大小完全一致，分歧只在 UBI 容量和尾部四个 OEM 分区。
-所选系统的工厂镜像是 `IMAGE_SIZE := 110592k`（108 MiB），**装不进上游 64 MiB 的 ubi 分区**；
+所选系统的工厂镜像上限是 `IMAGE_SIZE := 110592k`（108 MiB，`append-ubi | check-size` 的上限），
+**上游 64 MiB 的 ubi 分区装不下这个上限**；
 因此上游原样构建的 U-Boot 与 112M 系统布局不匹配，不能直接作为配套启动链。
 
 同一系统仓库里的非 112M 设备树 `mt7981-h3c-nx30pro.dts` 描述的正是上游这套分区表
 （ubi 64 MiB + 四个 OEM 分区），即：**上游 U-Boot 与上游原厂系统彼此一致，两者同时与 112M 布局不一致**。
 
-112M 布局结束于 `0x7580000`（117.5 MiB），其后到 NMBM 逻辑末端 `0x7800000` 还有 2.5 MiB，
-两端源码都没有给出用途，按计划要求保持未决，不做自行分配。
+以下所有地址都是 **NMBM 逻辑地址**，即启动链与系统共同暴露的逻辑分区空间，
+**不是物理 NAND 地址**，不能直接当作物理写入偏移使用。
+
+112M 布局结束于 `0x7580000`（117.5 MiB）；上游原厂表结束于 `0x7800000`，
+两张表合计分别为 120320 KiB 与 122880 KiB（120 MiB）。
+两者之差 2560 KiB（2.5 MiB）**是由两张表推导出来的，不是实测值**：
+NMBM 驱动按已加载映射的块数给出可用容量（`nmbm-core.c` 的 `data_block_count`），
+真实容量可能更小。因此“逻辑末端 `0x7800000`”只能作为推导结论，
+按计划要求，尾部空间用途与真实容量保持 `UNRESOLVED`；
+必须保证的是**实测逻辑容量不小于 `0x7580000`**。
 
 ## 5. 最小设备补丁
 
@@ -109,7 +121,8 @@ CONFIG_MTDPARTS_DEFAULT="nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(
 - 作用域：仅构建副本中的设备级输入，锁文件里的上游源码保持原样；
 - 依据：BL2 / u-boot-env / Factory / FIP 的偏移与大小沿用合同；ubi 扩到 114688k（112 MiB）；
   尾部四个 OEM 分区在 112M 布局中不存在，故不保留；
-- 该分区表总长 120320k（117.5 MiB），小于上游原厂表的 120832k（118 MiB），不会超出 NMBM 逻辑容量。
+- 该分区表总长 120320 KiB（117.5 MiB），小于上游原厂表的 122880 KiB（120 MiB）；
+  它仍然要求设备的实测 NMBM 逻辑容量不小于 `0x7580000`。
 - 配置项本身可用：`CONFIG_MTDPARTS_DEFAULT` 是普通字符串符号，只依赖 `MTD || SPI_FLASH` 且要求
   `!SYS_MTDPARTS_RUNTIME`；本板 `MTD` 由 `MTK_BOOTMENU_MTD` 选中（`MEDIATEK_BOOTMENU=y` 下的默认 choice），
   `SYS_MTDPARTS_RUNTIME` 只由 `MEDIATEK_MULTI_MTD_LAYOUT` 打开（本板未开启），因此补丁值会被
@@ -136,11 +149,15 @@ CONFIG_MTDPARTS_DEFAULT="nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(
 | 项 | 值 | 来源 |
 |---|---|---|
 | 入口 | 启动菜单 `Start Web failsafe` → U-Boot `httpd` 命令 | `board/mediatek/common/bootmenu_mtd.c` |
+| 复位键入口 | `common/main.c` 在 autoboot 之前执行 `glbtn`；`cmd/glbtn.c` 认领设备树中名为 `reset` 的按键，长按计数到 4 秒后执行 `httpd` | `common/main.c`、`cmd/glbtn.c`、板级 DTS 的 `button-reset` |
 | 自动进入 | `CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE=y`，`mtkboardboot` 启动失败后自动执行 `httpd` | `board/mediatek/common/cmd_mtkboardboot.c` |
 | 地址 | `http://192.168.1.1/`，端口 80 | `CONFIG_IPADDR="192.168.1.1"`，`include/env_default.h` |
 | 启动链上传 | `bl2` → 写入 `bl2` 分区；`fip` → 写入 `fip` 分区 | `board/mediatek/common/bootmenu_mtd.c` 的 `write_bl2`/`write_fip` |
 | 系统上传 | `firmware`、`initramfs` | `failsafe/failsafe.c` 的 `upload_handler` |
 | 写入校验 | 写入后回读校验；BL2 上传前另做 BL2 校验，FIP 与系统镜像上传前**不**做结构校验 | `board/mediatek/common/failsafe.c`、`failsafe/failsafe.c` |
+
+长按复位键进入网页入口的**机制**在源码中确定（`glbtn` → 计数 4 秒 → `httpd`），
+但按键时序与实际进入效果仍需真机观察，保持 `UNRESOLVED`。
 
 `http://192.168.1.1/` 是**启动链的恢复入口**，只覆盖 BL2/FIP/系统镜像，
 不能替代独立的恢复路径，也不能代替原厂备份（见第 8 节与安装恢复文档）。
@@ -156,21 +173,48 @@ CONFIG_MTDPARTS_DEFAULT="nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(
 
 | 产物 | 内容 | 用途 |
 |---|---|---|
-| `mt7981_h3c_magic-nx30-pro-bl2.bin` | ATF BL2 预加载镜像 | 写入 `bl2` 分区（`0x000000`，1 MiB） |
-| `mt7981_h3c_magic-nx30-pro-fip-fixed-parts.bin` | ATF FIP（BL31 + BL33/U-Boot） | 写入 `fip` 分区（`0x380000`，2 MiB） |
-| 系统 factory 镜像 | 内核 + rootfs（108 MiB UBI 镜像） | 写入 `ubi` 分区，**不是** boot loader 镜像 |
+| `mt7981_h3c_magic-nx30-pro-bl2.bin` | ATF BL2 预加载镜像 | 写入 `bl2` 分区（NMBM 逻辑 `0x000000`，1 MiB） |
+| `mt7981_h3c_magic-nx30-pro-fip-fixed-parts.bin` | ATF FIP（BL31 + BL33/U-Boot） | 写入 `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB） |
+| 系统 factory 镜像 | 内核 + rootfs（镜像上限 108 MiB） | 写入 `ubi` 分区，**不是** boot loader 镜像 |
 
 三者不可互相替代；不得把系统 factory 镜像当作 bootloader 镜像，也不得把 BL2 或 FIP
 当作“整机恢复镜像”。写入对象与回退步骤见安装与恢复文档。
 
-## 10. 仍然未决的项（UNRESOLVED）
+## 10. 所选系统对 OEM 分区的依赖（源码级冲突）
+
+所选系统（`jerryhan77/immortalwrt-mt798x`，`nx30pro-112m`）在
+`target/linux/mediatek/mt7981/base-files/etc/board.d/02_network` 的 `h3c,nx30pro` 分支中：
+
+```sh
+wan_mac=$(mtd_get_mac_ascii pdt_data_1 ethaddr)
+lan_mac=$(macaddr_add $wan_mac 1)
+if [ "$(mtk_factory_get_byte "Factory" 4 2)" = "00-0c" ]; then
+        local wifi_mac="$(macaddr_add $wan_mac 2)"
+        mtk_facrory_write_mac "Factory" 4 $wifi_mac
+fi
+```
+
+由此得到两条**已核实**的依赖：
+
+1. 系统从 `pdt_data_1` 读取 WAN MAC（ASCII 键 `ethaddr`）并派生 LAN MAC；
+   **112M 分区合同没有 `pdt_data_1`**，所以在这套布局上系统读不到 WAN MAC。
+   MAC 的具体值仍然未知，但这个源码级冲突是确定的。
+2. 当 `Factory` 偏移 4 的前两个字节是 `00-0c` 时，系统会把派生出的 Wi-Fi MAC
+   **写回** `Factory` 偏移 4；也就是说系统首次启动可能修改出厂数据区。
+
+结论：配套固件的 MAC 供给方式必须先解决（保留 `pdt_data_1`、改从 `Factory` 读取，
+或显式写入），在这之前不能把 112M 布局与所选系统成对投入测试。
+本轮不改固件，只把该冲突记录在源码锁的 `system_dependencies` 与安装恢复清单中。
+
+## 11. 仍然未决的项（UNRESOLVED）
 
 1. NAND 芯片型号、容量与物理块信息 —— 需真机启动日志与 flash id。
-2. DDR 类型与容量 —— 需真机日志中的 `EMI: Using DDRx settings`。
-3. 112M UBI 之后 2.5 MiB 的用途 —— 需原厂设备分区转储。
+2. 物理 DDR 型号与容量 —— 编译期选中的是 DDR3 配置，实际芯片需真机日志确认。
+3. 112M UBI 之后 2.5 MiB 的用途，以及实测 NMBM 逻辑容量 —— 需原厂设备分区转储。
 4. `pdt_data`、`pdt_data_1`、`exp`、`plugin` 的内容与重要性 —— 需原厂备份后检查。
-5. 工具链包的确切版本与校验和 —— 由首次成功构建的构建报告给出。
-6. 真机启动行为、网页恢复入口、MAC 与校准数据在候选镜像下的表现 —— 需真机测试。
-7. 候选 U-Boot 能否启动所选系统的 108 MiB 工厂镜像 —— 分区布局确认后由真机测试给出。
+5. 工具链包的确切版本与校验和 —— 由首次成功构建的构建报告给出（编译器 SHA-256、包版本、apt 候选版本）。
+6. 真机启动行为、网页恢复入口的按键时序、MAC 与校准数据在候选镜像下的表现 —— 需真机测试。
+7. 候选 U-Boot 能否启动所选系统的工厂镜像（上限 108 MiB） —— 分区布局确认后由真机测试给出。
+8. 所选系统的 WAN MAC 供给方式在 112M 布局下的解决方案 —— 需固件侧决定。
 
-在第 6、7 项完成前，本目录中的任何产物都只能标记为“候选、未真机验证”，不得作为可刷写发布包。
+在第 6、7、8 项完成前，本目录中的任何产物都只能标记为“候选、未真机验证”，不得作为可刷写发布包。

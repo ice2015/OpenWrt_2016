@@ -11,6 +11,11 @@
     "commit_ref_note": "The commit is pinned; the ref name is informational only and must never be used to select a build input.",
     "atf_tree": "atf-20240117-bacca82a8",
     "uboot_tree": "uboot-mtk-20230718-09eda825",
+    "build_script_trees": {
+      "uboot": "uboot-mtk-20230718-09eda825",
+      "atf": "atf-20240117-bacca82a8",
+      "note": "The trees are read from the UBOOT_DIR and ATF_DIR assignments of the pinned build.sh. The build script is the only input that decides which tree is compiled, so the lock may not name another tree even when the repository carries one."
+    },
     "vendored_trees": {
       "atf-20240117-bacca82a8": {
         "revision": "36916669d0874306638196c5327a20c2ef215bed",
@@ -47,8 +52,9 @@
     "distribution": "ubuntu-24.04",
     "version": "UNRESOLVED",
     "checksum": "UNRESOLVED",
-    "capture": "The build report records 'aarch64-linux-gnu-gcc --version' and the dpkg package version at build time. Upstream ships no toolchain checksum, so the build report is the only evidence of the exact toolchain revision.",
-    "note": "The upstream build script uses the host cross toolchain found on PATH. A different compiler revision changes the produced bytes, so a rebuild is only comparable when the recorded toolchain matches."
+    "capture": "The build report records the compiler path, the compiler version, the SHA-256 of the compiler binary (compiler_sha256), the dpkg package version and the apt candidate version of gcc-aarch64-linux-gnu. Upstream ships no toolchain checksum, so this record is the only evidence of the toolchain that produced the images.",
+    "note": "The upstream build script uses the host cross toolchain found on PATH. A different compiler revision changes the produced bytes, so a rebuild is only comparable when the recorded toolchain matches. The workflow installs the package from the distribution repository, so the recorded identity is the input that a rebuild has to repeat.",
+    "reproducibility_acceptance": "Byte identical rebuilds stay open until the toolchain identity of both builds matches. The plan forbids claiming byte identical reproducibility before that."
   },
   "host_packages": [
     "build-essential",
@@ -106,7 +112,10 @@
     ],
     "ubi_end_offset": 123207680,
     "trailing_logical_space_bytes": 2621440,
-    "trailing_logical_space_note": "The 112M device tree stops at 0x7580000 and defines no partition behind it. The upstream stock layout ends exactly at 0x7800000, which is consistent with a 128 MiB NAND whose NMBM management area reserves 1/16 of the blocks. The use of the remaining 2.5 MiB is not defined by either source and stays open until the device is inspected."
+    "trailing_logical_space_status": "derived-not-measured",
+    "trailing_logical_space_note": "The 112M device tree stops at 0x7580000 and defines no partition behind it. The upstream stock layout ends at 0x7800000, which is 122880 KiB in total. The remaining 2.5 MiB is therefore derived from the two source tables and not measured: the NMBM driver reports the available size from the block count of the loaded mapping, so the real capacity of a device can be smaller. The required logical end 0x7580000 is fixed; the observed logical capacity has to be at least that large, which stays UNRESOLVED until the device is read.",
+    "address_space": "nmbm-logical",
+    "address_space_note": "All offsets are addresses inside the NMBM logical space that the boot loader and the system expose. They are not physical NAND addresses and must not be used as such."
   },
   "compatibility": {
     "layout_matches_upstream_stock": false,
@@ -192,6 +201,22 @@
     "bl2": "output/mt7981_h3c_magic-nx30-pro-bl2.bin",
     "note": "The boot loader project emits the FIP package and the BL2 preloader separately. Neither file is a system image and neither is a recovery image on its own."
   },
+  "system_dependencies": [
+    {
+      "topic": "WAN MAC source of the selected system",
+      "source": "jerryhan77/immortalwrt-mt798x target/linux/mediatek/mt7981/base-files/etc/board.d/02_network, case h3c,nx30pro",
+      "detail": "The selected system reads the WAN MAC with mtd_get_mac_ascii from the pdt_data_1 partition (key ethaddr) and derives the LAN MAC from it.",
+      "impact": "The 112M partition contract has no pdt_data_1 partition, so the system cannot read the WAN MAC on this layout. The MAC provisioning of the paired system has to be solved before the layout is used.",
+      "status": "UNRESOLVED"
+    },
+    {
+      "topic": "Wi-Fi MAC write of the selected system",
+      "source": "jerryhan77/immortalwrt-mt798x target/linux/mediatek/mt7981/base-files/etc/board.d/02_network, case h3c,nx30pro",
+      "detail": "When the first two bytes at offset 4 of the Factory partition are 00-0c, the system writes a MAC derived from the WAN MAC into the Factory partition at offset 4.",
+      "impact": "The first boot of the selected system can modify the factory data area, so the factory area has to be backed up before the system is started.",
+      "status": "UNRESOLVED"
+    }
+  ],
   "unresolved": [
     {
       "topic": "NAND chip type, density and physical size",

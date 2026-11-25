@@ -158,6 +158,83 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         for forbidden in ("mtd write", "nandwrite", "flash_erase", "dd of="):
             self.assertNotIn(forbidden, text)
 
+    def test_backup_procedure_does_not_assume_the_master_device(self):
+        text = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-install-and-recovery.md"
+        ).read_text(encoding="utf-8")
+        self.assertIsNone(
+            re.search(r"nanddump[^\n]*/dev/mtd", text),
+            "the backup procedure must not name a flash device before it is identified",
+        )
+        self.assertNotIn("/dev/mtd0", text)
+        self.assertIn("master", text)
+        self.assertIn("长度", text)
+        self.assertIn("坏块", text)
+
+    def test_recovery_document_separates_upgrade_first_install_and_recovery(self):
+        text = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-install-and-recovery.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("首次安装", text)
+        self.assertIn("不可启动", text)
+        self.assertIn("独立恢复路径", text)
+        self.assertIn("UNRESOLVED", text)
+        # The candidate boot loader cannot recover itself, so it must not be
+        # presented as the recovery path.
+        self.assertIn("不能替代", text)
+
+    def test_lock_records_the_mac_dependency_of_the_selected_system(self):
+        lock = self.load_lock()
+        dependencies = lock["system_dependencies"]
+        self.assertTrue(dependencies)
+        joined = " ".join(
+            "%s %s %s" % (item.get("topic", ""), item.get("detail", ""), item.get("impact", ""))
+            for item in dependencies
+        )
+        self.assertIn("pdt_data_1", joined)
+        self.assertIn("Factory", joined)
+        self.assertIn("ethaddr", joined)
+        for item in dependencies:
+            self.assertEqual("UNRESOLVED", item.get("status"))
+
+        compatibility = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-compatibility.md"
+        ).read_text(encoding="utf-8")
+        recovery = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-install-and-recovery.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("pdt_data_1", compatibility)
+        self.assertIn("pdt_data_1", recovery)
+
+    def test_documents_use_nmbm_logical_addresses_and_do_not_claim_measured_capacity(self):
+        lock = self.load_lock()
+        contract = lock["partition_contract"]
+        self.assertEqual("derived-not-measured", contract["trailing_logical_space_status"])
+        self.assertIn("UNRESOLVED", contract["trailing_logical_space_note"])
+
+        compatibility = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-compatibility.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("NMBM 逻辑", compatibility)
+        self.assertIn("122880", compatibility)
+        self.assertNotIn("实测容量", compatibility)
+
+    def test_documents_record_the_reset_button_entry_and_the_compiled_dram_setting(self):
+        compatibility = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-compatibility.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("glbtn", compatibility)
+        self.assertIn("DDR3", compatibility)
+        self.assertIn("编译期", compatibility)
+
+    def test_toolchain_digest_is_part_of_the_accepted_evidence(self):
+        lock = self.load_lock()
+        self.assertIn("compiler_sha256", lock["toolchain"]["capture"])
+        helper = (
+            ROOT / "devices" / "nx30pro" / "build" / "uboot_lock.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("compiler_sha256", helper)
+
 
 if __name__ == "__main__":
     unittest.main()

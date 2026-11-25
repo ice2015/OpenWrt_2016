@@ -112,6 +112,12 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("devices/nx30pro/uboot/uboot-source-lock.json", workflow)
         self.assertIn("actions/upload-artifact@", workflow)
         self.assertNotIn("secrets:", workflow)
+        # Images are published only when the build and both inspections
+        # succeeded; the logs are always kept for diagnosis.
+        self.assertRegex(workflow, r"(?s)- name: Upload boot loader candidates.*?if: success\(\)")
+        self.assertRegex(workflow, r"(?s)- name: Upload build logs.*?if: always\(\)")
+        self.assertIn("uboot-artifact/images/", workflow)
+        self.assertIn("uboot-artifact/logs/", workflow)
 
     def test_full_workflow_has_typed_options_and_pinned_build_inputs(self) -> None:
         workflow = self.workflow("build-full.yml")
