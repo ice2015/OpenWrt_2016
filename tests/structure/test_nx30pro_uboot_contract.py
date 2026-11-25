@@ -141,5 +141,23 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertIn("114688k(ubi)", text)
 
 
+    def test_install_and_recovery_document_designs_without_authorizing_a_flash(self):
+        document = (
+            ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-install-and-recovery.md"
+        )
+        self.assertTrue(
+            document.is_file(),
+            "missing NX30 Pro U-Boot install and recovery document: %s" % document,
+        )
+        text = document.read_text(encoding="utf-8")
+        for topic in ("备份", "回退", "验证", "UNRESOLVED", "192.168.1.1"):
+            self.assertIn(topic, text)
+        self.assertIn("授权", text)
+        # Write commands stay out of the document; read only backup commands
+        # are part of the required procedure.
+        for forbidden in ("mtd write", "nandwrite", "flash_erase", "dd of="):
+            self.assertNotIn(forbidden, text)
+
+
 if __name__ == "__main__":
     unittest.main()

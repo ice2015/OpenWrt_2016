@@ -109,7 +109,13 @@ CONFIG_MTDPARTS_DEFAULT="nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(
 - 作用域：仅构建副本中的设备级输入，锁文件里的上游源码保持原样；
 - 依据：BL2 / u-boot-env / Factory / FIP 的偏移与大小沿用合同；ubi 扩到 114688k（112 MiB）；
   尾部四个 OEM 分区在 112M 布局中不存在，故不保留；
-- 该表总长 120320k（117.5 MiB），小于上游原厂表的 120832k（118 MiB），不会超出 NMBM 逻辑容量。
+- 该分区表总长 120320k（117.5 MiB），小于上游原厂表的 120832k（118 MiB），不会超出 NMBM 逻辑容量。
+- 配置项本身可用：`CONFIG_MTDPARTS_DEFAULT` 是普通字符串符号，只依赖 `MTD || SPI_FLASH` 且要求
+  `!SYS_MTDPARTS_RUNTIME`；本板 `MTD` 由 `MTK_BOOTMENU_MTD` 选中（`MEDIATEK_BOOTMENU=y` 下的默认 choice），
+  `SYS_MTDPARTS_RUNTIME` 只由 `MEDIATEK_MULTI_MTD_LAYOUT` 打开（本板未开启），因此补丁值会被
+  `make olddefconfig` 保留。
+- 上游 `build.sh` 的执行顺序保证了补丁生效：它先把 `configs/<board>_defconfig` 复制成 `.config`，
+  再追加固定分区开关，最后执行 `olddefconfig`。因此补丁必须落在 defconfig 上，而不是 `.config` 上。
 
 **风险**：被回收进 UBI 的区域在原厂布局中属于 `pdt_data`、`pdt_data_1`、`exp`、`plugin`，
 其中 `pdt_data`/`pdt_data_1` 在原厂设备树里是只读分区，可能保存原厂分区/出厂数据。
