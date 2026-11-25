@@ -54,7 +54,7 @@
     "checksum": "UNRESOLVED",
     "capture": "The build report records the compiler path, the compiler version, the SHA-256 of the compiler binary (compiler_sha256), the dpkg package version and the apt candidate version of gcc-aarch64-linux-gnu. Upstream ships no toolchain checksum, so this record is the only evidence of the toolchain that produced the images.",
     "note": "The upstream build script uses the host cross toolchain found on PATH. A different compiler revision changes the produced bytes, so a rebuild is only comparable when the recorded toolchain matches. The workflow installs the package from the distribution repository, so the recorded identity is the input that a rebuild has to repeat.",
-    "reproducibility_acceptance": "Byte identical rebuilds stay open until the toolchain identity of both builds matches. The plan forbids claiming byte identical reproducibility before that."
+    "reproducibility_acceptance": "Two clean runner builds from the same lock (Actions runs 45562479770 and 45562763520) produced different hashes with an identical toolchain identity. The difference is the embedded build timestamp: 33 bytes in the BL2 image and 3 bytes in the FIP image. Byte identical rebuilds stay open until the timestamps are fixed."
   },
   "host_packages": [
     "build-essential",
@@ -247,6 +247,11 @@
       "topic": "Boot behaviour, recovery entry and MAC handling on real hardware",
       "status": "UNRESOLVED",
       "needed": "Device test with the candidate image"
+    },
+    {
+      "topic": "Byte identical rebuilds of the boot loader images",
+      "status": "UNRESOLVED",
+      "needed": "A fixed build timestamp (for example SOURCE_DATE_EPOCH) that the upstream build honours, or an accepted difference record"
     },
     {
       "topic": "Whether the candidate boot loader boots the 108 MiB factory image of the selected system",
