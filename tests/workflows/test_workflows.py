@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import re
 import unittest
 
@@ -67,6 +68,7 @@ class WorkflowContractTests(unittest.TestCase):
                 "reusable-build.yml",
                 "build-lite.yml",
                 "build-uboot.yml",
+                "build-nx30pro-uboot.yml",
             )
         )
 
@@ -94,6 +96,22 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("devices/tr3000/build/build-uboot.sh", workflow)
         self.assertIn("MULTI_LAYOUT=1", (ROOT / "devices/tr3000/build/build-uboot.sh").read_text(encoding="utf-8"))
         self.assertNotIn("256mb", workflow.lower())
+
+    def test_nx30pro_uboot_workflow_builds_the_locked_candidate(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+        lock = json.loads(
+            (ROOT / "devices/nx30pro/uboot/uboot-source-lock.json").read_text(encoding="utf-8")
+        )
+
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
+        self.assertIn("concurrency:", workflow)
+        self.assertIn(lock["source"]["repository"], workflow)
+        self.assertIn(lock["source"]["commit"], workflow)
+        self.assertIn("devices/nx30pro/build/build-uboot.sh", workflow)
+        self.assertIn("devices/nx30pro/uboot/uboot-source-lock.json", workflow)
+        self.assertIn("actions/upload-artifact@", workflow)
+        self.assertNotIn("secrets:", workflow)
 
     def test_full_workflow_has_typed_options_and_pinned_build_inputs(self) -> None:
         workflow = self.workflow("build-full.yml")
