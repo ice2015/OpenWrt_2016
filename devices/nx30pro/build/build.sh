@@ -148,7 +148,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 with open(sys.argv[2], "w", encoding="utf-8") as handle:
     for feed in lock["feeds"]:
         handle.write(
-            "src-git-full %s %s;%s\n" % (feed["id"], feed["repository"], feed["revision"])
+            "src-git-full %s %s^%s\n" % (feed["id"], feed["repository"], feed["revision"])
         )
 PY
 cp "$FEED_DIR/feeds.conf" "$SOURCE_DIR/feeds.conf"
