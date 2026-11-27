@@ -18,8 +18,8 @@
    `docs/superpowers/plans/2026-11-27-nx30pro-uboot-redesign.md`。
 7. 固件实施计划：
    `docs/superpowers/plans/2026-11-27-nx30pro-firmware-redesign.md`。
-8. `devices/nx30pro/docs/Command_fix.md`；注意它还是旧需求文本，必须按固件计划 Task 1
-   同步，不能把其中 HomeProxy/sing-box、排除 Docker 等内容继续当作最终要求。
+8. `devices/nx30pro/docs/Command_fix.md`；它已同步为批准后的中文需求源，固件计划
+   Task 1 需要增加契约测试，防止它再次与设计稿漂移。
 
 ## 已批准决策
 
@@ -104,8 +104,9 @@ Linux 5.4 上若无可验证实现，保持 `UNRESOLVED`。
 
 ## 当前文件状态
 
-- 新设计、两份实施计划、本交接文件以及 `devices/nx30pro/docs/Command_fix.md` 当前均
-  可能是未跟踪文件；实施前先运行 `git status --short`，不得覆盖用户其他改动。
+- 新设计、两份实施计划、本交接文件以及已同步的
+  `devices/nx30pro/docs/Command_fix.md` 当前均可能是未跟踪文件；实施前先运行
+  `git status --short`，不得覆盖用户其他改动。
 - 本轮只创建/修订文档，没有修改构建脚本、配置、workflow 或测试。
 - 本轮没有运行固件/U-Boot 编译，也没有触发 GitHub Actions。
 

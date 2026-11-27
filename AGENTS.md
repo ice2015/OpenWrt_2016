@@ -4,6 +4,8 @@ This repository describes reproducible OpenWrt and ImmortalWrt builds. Read the 
 
 For OpenWrt/ImmortalWrt firmware configuration changes involving devices, packages, feeds, patches, overlays, or known repository configuration failures, read `.agents/skills/openwrt-firmware-config/SKILL.md` before editing.
 
+When preparing or updating a handoff for another Agent, read `.agents/skills/agent-handoff/SKILL.md` and keep completed work, remaining work, verification evidence, and authorization boundaries separate.
+
 ## Rules
 
 - Keep precedence as `common → distribution → device → local`.

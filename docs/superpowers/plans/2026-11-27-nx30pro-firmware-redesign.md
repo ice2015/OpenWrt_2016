@@ -34,7 +34,7 @@
 ### Task 1: Synchronize requirements and select a build-ready source/feed set
 
 **Files:**
-- Modify: `devices/nx30pro/docs/Command_fix.md`
+- Verify and add to the task commit: `devices/nx30pro/docs/Command_fix.md`
 - Modify: `devices/nx30pro/source-lock.json`
 - Modify: `manifests/sources.json`
 - Modify: `devices/nx30pro/feeds.conf`
@@ -46,9 +46,9 @@
 - Consumes: approved design and U-Boot plan Task 2 layout contract.
 - Produces: `source-lock.json` source/feed/package schema; `firmware_lock.py check --lock PATH`; corrected `Command_fix.md` as the human-readable requirement source.
 
-- [ ] **Step 1: Correct the human-readable requirement source**
+- [ ] **Step 1: Add a failing requirement-synchronization test**
 
-  Replace HomeProxy/sing-box and no-Docker statements with the approved PassWall 4.68 + Xray, Docker, core hard gates, optional reported tools, Yuzhii U-Boot, restricted Web UI, and manual-only Actions boundary. Preserve the 112M/NMBM and no-automatic-flash requirements.
+  Assert `Command_fix.md` contains PassWall 4.68 + Xray, Docker, cloudflared, Yuzhii U-Boot, the restricted two-layout Web selector, manual-only Actions, and the no-automatic-flash boundary. Assert it does not require HomeProxy/sing-box or exclude Docker.
 
 - [ ] **Step 2: Add failing source/feed lock tests**
 
