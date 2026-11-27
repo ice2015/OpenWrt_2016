@@ -16,6 +16,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import shutil
 import struct
@@ -183,6 +184,7 @@ def load_lock(path):
         raise LockError("the source lock cannot be read: %s" % error)
     if not isinstance(lock, dict):
         raise LockError("the source lock is not a JSON object")
+    lock["__path__"] = str(path)
     return lock
 
 
@@ -972,17 +974,51 @@ def apply_device_patches(lock, source_dir, repo_root=None):
     return applied
 
 
-def upstream_build_trees(source_dir):
-    """Return the trees that the pinned build script really builds."""
+def upstream_build_trees(source_dir, version=EXPECTED_VERSION):
+    """Return the trees the pinned build script really builds for one version.
+
+    build.sh maps VERSION to UBOOT_DIR/ATF_DIR through shell variables, so the
+    mapping of the locked version has to be read from the script itself. A lock
+    that names a tree the script does not build for that version is rejected.
+    """
     build_script = Path(source_dir) / "build.sh"
     if not build_script.is_file():
         raise LockError("the pinned build script is missing: %s" % build_script)
     text = build_script.read_text(encoding="utf-8")
-    uboot = re.search(r"^UBOOT_DIR=(\S+)$", text, re.M)
-    atf = re.search(r"^ATF_DIR=(\S+)$", text, re.M)
-    if not uboot or not atf:
-        raise LockError("the pinned build script does not name its trees")
-    return uboot.group(1), atf.group(1)
+
+    variables = dict(re.findall(r'^([A-Za-z_][A-Za-z0-9_]*)="([^"]*)"\s*$', text, re.M))
+    case = re.search(r'case "\$\{VERSION\}" in(.*?)^esac', text, re.M | re.S)
+    if not case:
+        raise LockError("the pinned build script does not map VERSION to its trees")
+
+    branch = None
+    for block in re.split(r"\n\s*(?=[A-Za-z0-9|)]+\)\n)", case.group(1)):
+        header = block.strip().split(")", 1)[0]
+        names = [name.strip().lower() for name in header.split("|")]
+        if str(version).lower() in names:
+            branch = block
+            break
+    if branch is None:
+        raise LockError(
+            "the pinned build script has no branch for version %r" % (version,)
+        )
+
+    trees = {}
+    for name in ("UBOOT_DIR", "ATF_DIR"):
+        match = re.search(r'%s="\$\{([A-Za-z0-9_]+)\}"' % name, branch)
+        if not match:
+            raise LockError(
+                "the %s branch of the pinned build script does not set %s"
+                % (version, name)
+            )
+        value = variables.get(match.group(1))
+        if not value:
+            raise LockError(
+                "the pinned build script does not define the tree variable %s"
+                % match.group(1)
+            )
+        trees[name] = value
+    return trees["UBOOT_DIR"], trees["ATF_DIR"]
 
 
 def check_worktree_clean(source_dir, allow_paths=()):
@@ -1029,8 +1065,15 @@ def check_output_dir_empty(source_dir, output_name="output"):
     return output
 
 
-def require_toolchain(lookup=shutil.which, prefix="aarch64-linux-gnu-"):
-    """Fail when the cross compiler is not installed."""
+def require_toolchain(lookup=shutil.which, prefix=None):
+    """Fail when the cross compiler is not installed.
+
+    The prefix follows the TOOLCHAIN variable the upstream build script itself
+    honours, so a distribution that names its cross compiler differently can be
+    used without editing the lock.
+    """
+    if prefix is None:
+        prefix = toolchain_prefix()
     compiler = lookup(prefix + "gcc")
     if not compiler:
         raise LockError(
@@ -1041,12 +1084,20 @@ def require_toolchain(lookup=shutil.which, prefix="aarch64-linux-gnu-"):
     return compiler
 
 
-def toolchain_identity(lookup=shutil.which, prefix="aarch64-linux-gnu-"):
+def toolchain_prefix():
+    """Return the compiler prefix the upstream build script will use."""
+    return os.environ.get("TOOLCHAIN", "aarch64-linux-gnu-")
+
+
+def toolchain_identity(lookup=shutil.which, prefix=None):
     """Record the identity of the toolchain that produced the images."""
+    if prefix is None:
+        prefix = toolchain_prefix()
     compiler = require_toolchain(lookup=lookup, prefix=prefix)
     version = run_output([compiler, "--version"]).splitlines()
     identity = {
         "compiler": compiler,
+        "prefix": prefix,
         "version": version[0] if version else "UNRESOLVED",
         "compiler_sha256": sha256_of(compiler),
         "package": "gcc-aarch64-linux-gnu",
@@ -1176,6 +1227,141 @@ def inspect_bl2(path, max_size=None, expected_header=SPIM_NAND_HEADER):
     }
 
 
+def partition_sizes(lock):
+    """Return the partition sizes of the locked 112M contract, keyed lower case."""
+    sizes = {}
+    for entry in (lock.get("partition_contract") or {}).get("partitions") or []:
+        sizes[str(entry.get("label", "")).lower()] = entry.get("size")
+    return sizes
+
+
+def resolve_artifacts(lock, output_dir):
+    """Resolve and inspect the produced boot loader images.
+
+    The upstream build script embeds the md5 of each image in its name, so the
+    locked pattern is resolved against the real output directory. A missing,
+    empty, ambiguous, oversized or structurally invalid image stops the build
+    before anything is published, and a system image never matches a boot
+    loader pattern.
+    """
+    output_dir = Path(output_dir)
+    if not output_dir.is_dir():
+        raise ArtifactError(
+            "the boot loader build produced no output directory: %s" % output_dir
+        )
+    sizes = partition_sizes(lock)
+    resolved = []
+    for kind in ("fip", "bl2"):
+        entry = (lock.get("artifacts") or {}).get(kind) or {}
+        pattern = entry.get("pattern")
+        if not pattern:
+            raise LockError("the lock names no %s artifact" % kind.upper())
+        matches = sorted(
+            path for path in output_dir.iterdir()
+            if path.is_file() and fnmatch.fnmatchcase(path.name, pattern)
+        )
+        if not matches:
+            raise ArtifactError(
+                "the build produced no %s image matching %s in %s"
+                % (kind.upper(), pattern, output_dir)
+            )
+        if len(matches) > 1:
+            raise ArtifactError(
+                "the %s artifact pattern %s is ambiguous, the output directory holds "
+                "%s. Build in a clean checkout so that an earlier image cannot be "
+                "published as this one."
+                % (kind.upper(), pattern, ", ".join(path.name for path in matches))
+            )
+        path = matches[0]
+        if path.stat().st_size == 0:
+            raise ArtifactError(
+                "the %s image %s is empty" % (kind.upper(), path.name)
+            )
+        partition = entry.get("target_partition") or kind
+        max_size = sizes.get(str(partition).lower())
+        if not max_size:
+            raise LockError(
+                "the partition contract names no size for the %s partition" % partition
+            )
+        match_artifact_name(lock, kind, path.name)
+        if kind == "fip":
+            info = inspect_fip(path, max_size=max_size)
+        else:
+            info = inspect_bl2(path, max_size=max_size)
+        info["partition"] = partition
+        info["partition_size"] = max_size
+        info["name"] = path.name
+        info["path"] = str(path)
+        info["image"] = info.pop("kind")
+        info["kind"] = kind
+        resolved.append(info)
+    return resolved
+
+
+def publish_candidate(lock, artifact_dir, output_dir, toolchain, build_env):
+    """Publish the inspected images together with their provenance."""
+    artifact_dir = Path(artifact_dir)
+    artifacts = resolve_artifacts(lock, output_dir)
+    report = build_report(lock, artifacts, toolchain, build_env)
+
+    images = artifact_dir / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for item in artifacts:
+        target = images / item["name"]
+        shutil.copyfile(item["path"], target)
+        target.chmod(0o644)
+        lines.append("%s  %s" % (item["sha256"], item["name"]))
+    (images / "SHA256SUMS").write_text("\n".join(sorted(lines)) + "\n", encoding="utf-8")
+
+    (artifact_dir / "build-report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    shutil.copyfile(lock_path_of(lock), artifact_dir / "uboot-source-lock.json")
+    (artifact_dir / "FLASH-TARGETS.txt").write_text(flash_targets_text(lock), encoding="utf-8")
+    return report
+
+
+def lock_path_of(lock):
+    """Return the path the lock was loaded from, when it is known."""
+    path = lock.get("__path__")
+    if not path:
+        raise LockError("the lock does not record the file it was loaded from")
+    return path
+
+
+def flash_targets_text(lock):
+    layouts = lock.get("layouts") or {}
+    default = layouts.get("default_label")
+    return """These files are boot loader candidates built from the pinned source. They are
+not system images, they were not tested on hardware and they are not flashed by
+this build.
+
+The addresses below are NMBM logical addresses of the %s layout, not physical
+NAND addresses.
+
+BL2: MediaTek ATF BL2 preloader for SPI-NAND boot. Write target: the bl2
+     partition at NMBM logical 0x000000, 1 MiB.
+FIP: ATF FIP package that carries BL31 and BL33 (U-Boot). Write target: the
+     fip partition at NMBM logical 0x380000, 2 MiB.
+
+The system factory image of the paired firmware belongs into the ubi partition
+at NMBM logical 0x580000 and is not part of this build. Do not rename either
+boot loader image as a recovery image. The recovery web interface of the boot
+loader serves http://192.168.1.1/ and accepts the same two images; it does not
+replace an independent recovery path or a backup of the factory device.
+
+The boot loader offers exactly two partition layouts, %s. The default is %s.
+Switching away from the stock layout reclaims the OEM areas pdt_data,
+pdt_data_1, exp and plugin, so a read-only backup of the whole flash has to
+exist first. No command in this artifact directory writes to a flash device.
+""" % (
+        default,
+        " and ".join(sorted(layouts.get("entries") or {})),
+        default,
+    )
+
+
 def build_report(lock, artifacts, toolchain, build_env):
     """Assemble the build report of one candidate boot loader build."""
     partition_table = [
@@ -1223,12 +1409,13 @@ def build_report(lock, artifacts, toolchain, build_env):
     }
 
 
-def preflight(lock, source_dir):
+def preflight(lock, source_dir, repo_root=None):
     """Run every check that has to pass before the build may start."""
     errors = validate_lock(lock)
     if errors:
         raise LockError("; ".join(errors))
 
+    repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
     source_dir = Path(source_dir)
     commit = lock["source"]["commit"]
     result = subprocess.run(
@@ -1245,26 +1432,58 @@ def preflight(lock, source_dir):
             "the source checkout is at %s, the lock pins %s" % (actual, commit)
         )
 
-    uboot_tree, atf_tree = upstream_build_trees(source_dir)
+    uboot_tree, atf_tree = upstream_build_trees(source_dir, lock["source"].get("version"))
     if uboot_tree != lock["source"]["uboot_tree"]:
         raise LockError(
-            "the pinned build script builds the tree %s, the lock names %s"
-            % (uboot_tree, lock["source"]["uboot_tree"])
+            "the pinned build script builds the tree %s for version %s, the lock names %s"
+            % (uboot_tree, lock["source"].get("version"), lock["source"]["uboot_tree"])
         )
     if atf_tree != lock["source"]["atf_tree"]:
         raise LockError(
-            "the pinned build script builds the ATF tree %s, the lock names %s"
-            % (atf_tree, lock["source"]["atf_tree"])
+            "the pinned build script builds the ATF tree %s for version %s, the lock names %s"
+            % (atf_tree, lock["source"].get("version"), lock["source"]["atf_tree"])
         )
+
+    board = lock.get("board") or {}
+    required_files = {
+        "multi layout defconfig": board.get("multi_layout_defconfig"),
+        "defconfig": board.get("defconfig"),
+        "device tree": board.get("dts"),
+        "ATF defconfig": board.get("atf_defconfig"),
+    }
+    for description, relative in required_files.items():
+        if not relative:
+            raise LockError("the lock does not name the %s of this board" % description)
+        tree = atf_tree if description == "ATF defconfig" else uboot_tree
+        path = source_dir / tree / relative
+        if not path.is_file():
+            raise LockError(
+                "the pinned source carries no %s at %s. build.sh would silently fall "
+                "back to the single layout defconfig and build the stock partition "
+                "table, so the build is stopped here." % (description, path)
+            )
+
+    for record in (lock.get("source") or {}).get("patches") or []:
+        if not (repo_root / record["path"]).is_file():
+            raise LockError(
+                "the recorded device patch is missing: %s" % (repo_root / record["path"])
+            )
+
+    dts_text = (source_dir / uboot_tree / board["dts"]).read_text(encoding="utf-8")
+    verify_layout_source(lock, dts_text)
 
     check_worktree_clean(source_dir)
     check_output_dir_empty(source_dir)
-    compiler = require_toolchain()
     return {
         "source_commit": actual,
+        "version": lock["source"].get("version"),
         "uboot_tree": uboot_tree,
         "atf_tree": atf_tree,
-        "cross_compiler": compiler,
+        "board": board.get("name"),
+        "layouts": sorted(
+            (lock.get("layouts") or {}).get("entries") or {}
+        ),
+        "default_layout": (lock.get("layouts") or {}).get("default_label"),
     }
 
 
@@ -1295,8 +1514,41 @@ def command_verify_layout_source(args):
 
 def command_preflight(args):
     lock = load_lock(args.lock)
-    result = preflight(lock, args.source_dir)
+    result = preflight(lock, args.source_dir, repo_root=args.repo_root)
     print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_artifacts(args):
+    lock = load_lock(args.lock)
+    errors = validate_lock(lock)
+    if errors:
+        return report_lock_errors(errors)
+    result = resolve_artifacts(lock, args.output_dir)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_publish(args):
+    lock = load_lock(args.lock)
+    errors = validate_lock(lock)
+    if errors:
+        return report_lock_errors(errors)
+    toolchain = {}
+    if args.toolchain_file:
+        toolchain = json.loads(Path(args.toolchain_file).read_text(encoding="utf-8"))
+    build_env = json.loads(args.build_env) if args.build_env else {}
+    report = publish_candidate(lock, args.artifact_dir, args.output_dir, toolchain, build_env)
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "published": [item["file"] for item in report["artifacts"]],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -1396,7 +1648,25 @@ def main(argv=None):
     )
     preflight.add_argument("--lock", required=True)
     preflight.add_argument("--source-dir", required=True)
+    preflight.add_argument("--repo-root", default="")
     preflight.set_defaults(handler=command_preflight)
+
+    artifacts = subparsers.add_parser(
+        "artifacts", help="resolve and inspect the produced boot loader images"
+    )
+    artifacts.add_argument("--lock", required=True)
+    artifacts.add_argument("--output-dir", required=True)
+    artifacts.set_defaults(handler=command_artifacts)
+
+    publish = subparsers.add_parser(
+        "publish", help="publish the inspected images with their provenance"
+    )
+    publish.add_argument("--lock", required=True)
+    publish.add_argument("--artifact-dir", required=True)
+    publish.add_argument("--output-dir", required=True)
+    publish.add_argument("--toolchain-file", default="")
+    publish.add_argument("--build-env", default="")
+    publish.set_defaults(handler=command_publish)
 
     patch = subparsers.add_parser("patch", help="apply the device patches to a build copy")
     patch.add_argument("--lock", required=True)

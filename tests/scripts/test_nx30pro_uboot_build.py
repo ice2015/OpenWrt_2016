@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import struct
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,39 @@ def run_check(lock_path):
         capture_output=True,
         text=True,
     )
+
+
+def build_fip_image(path, bl33_payload=b"U-Boot 2025.07 compiled"):
+    """Write a structurally valid ATF FIP package carrying BL31 and BL33."""
+    entries = [(BL31_UUID, b"\x00" * 32), (BL33_UUID, bl33_payload)]
+    header = struct.pack("<IIQ", TOC_HEADER_NAME, 0x12345678, 0)
+    offset = len(header) + 40 * (len(entries) + 1)
+    toc = b""
+    payloads = b""
+    for uuid, payload in entries:
+        toc += uuid + struct.pack("<QQQ", offset, len(payload), 0)
+        offset += len(payload)
+        payloads += payload
+    toc += b"\x00" * 16 + struct.pack("<QQQ", offset, 0, 0)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(header + toc + payloads)
+    return path
+
+
+def build_bl2_image(path):
+    """Write a structurally valid MediaTek SPI-NAND BL2 preloader header."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        SPIM_NAND_HEADER + b"\x01\x00\x00\x00\x10\x00\x00\x00" + b"\x00" * 64
+    )
+    return path
+
+
+# The orchestration tests drive the stub build with the host compiler;
+# GitHub Actions installs the real cross compiler.
+HOST_COMPILER = shutil.which("gcc")
 
 
 class Nx30ProUbootBuildGateTests(unittest.TestCase):
@@ -824,6 +858,436 @@ class Nx30ProUbootPreflightTests(unittest.TestCase):
         self.assertIn("version", identity)
         self.assertIn("compiler_sha256", identity)
         self.assertEqual(64, len(identity["compiler_sha256"]))
+
+
+FAKE_BUILD_SH = '''#!/bin/bash
+AUTHOR="Yuzhii"
+ATF24="atf-20240117-bacca82a8"
+ATF25="atf-20250711"
+ATF26="atf-20260123"
+UBOOT25="uboot-mtk-20250711"
+VERSION="${VERSION:-2025}"
+VARIANT="${VARIANT:-default}"
+case "${VERSION}" in
+\t2025)
+\t\tUBOOT_DIR="${UBOOT25}"
+\t\tATF_DIR="${ATF25}"
+\t\t;;
+\tSP1|sp1)
+\t\tVERSION="SP1"
+\t\tUBOOT_DIR="${UBOOT25}"
+\t\tATF_DIR="${ATF24}"
+\t\t;;
+\tSP2|sp2)
+\t\tVERSION="SP2"
+\t\tUBOOT_DIR="${UBOOT25}"
+\t\tATF_DIR="${ATF26}"
+\t\t;;
+esac
+{
+\techo "SOC=$SOC"
+\techo "BOARD=$BOARD"
+\techo "VERSION=$VERSION"
+\techo "VARIANT=$VARIANT"
+\techo "FIXED_MTDPARTS=$FIXED_MTDPARTS"
+\techo "MULTI_LAYOUT=$MULTI_LAYOUT"
+\techo "SILENT=$SILENT"
+} > build-env.txt
+mkdir -p "$UBOOT_DIR" output
+cp "$FIXTURE_CONFIG" "$UBOOT_DIR/.config"
+cp "$FIXTURE_FIP" "output/$FIXTURE_FIP_NAME"
+cp "$FIXTURE_BL2" "output/$FIXTURE_BL2_NAME"
+'''
+
+EFFECTIVE_CONFIG = """CONFIG_TARGET_MT7981=y
+CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"
+CONFIG_MEDIATEK_MULTI_MTD_LAYOUT=y
+CONFIG_MTK_FIXED_MTD_MTDPARTS=y
+CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"
+CONFIG_ENABLE_NAND_NMBM=y
+CONFIG_MTK_WEB_FAILSAFE=y
+CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE=y
+CONFIG_WEBUI_FAILSAFE=y
+CONFIG_WEBUI_FAILSAFE_BACKUP=y
+CONFIG_MTK_DHCPD=y
+CONFIG_MTK_UBI_SUPPORT=y
+CONFIG_MTK_UPGRADE_BL2_VERIFY=y
+CONFIG_CMD_TFTPPUT=y
+CONFIG_DEBUG_UART=y
+CONFIG_MTK_SERIAL=y
+# CONFIG_WEBUI_FAILSAFE_FACTORY is not set
+# CONFIG_WEBUI_FAILSAFE_FLASH is not set
+# CONFIG_WEBUI_FAILSAFE_ENV is not set
+# CONFIG_WEBUI_FAILSAFE_CONSOLE is not set
+# CONFIG_WEBUI_FAILSAFE_UBI is not set
+# CONFIG_WEBUI_FAILSAFE_SIMG is not set
+# CONFIG_WEBUI_FAILSAFE_NAND_RAW is not set
+# CONFIG_MTK_TELNETD is not set
+"""
+
+DANGEROUS_CONFIG = EFFECTIVE_CONFIG.replace(
+    "# CONFIG_WEBUI_FAILSAFE_CONSOLE is not set",
+    "CONFIG_WEBUI_FAILSAFE_CONSOLE=y",
+)
+
+BOARD_DTS = """/dts-v1/;
+/ {
+\tmodel = "mt7981-h3c_magic-nx30-pro";
+\tmtd-layout {
+\t\tlayout@0 {
+\t\t\tlabel = "default";
+\t\t\tmtdids = "nmbm0=nmbm0";
+\t\t\tmtdparts = "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)";
+\t\t};
+\t\tlayout@1 {
+\t\t\tlabel = "immortalwrt-112m";
+\t\t\tmtdids = "nmbm0=nmbm0";
+\t\t\tmtdparts = "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)";
+\t\t};
+\t};
+};
+"""
+
+MULTI_LAYOUT_DEFCONFIG = """CONFIG_TARGET_MT7981=y
+CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"
+CONFIG_MEDIATEK_MULTI_MTD_LAYOUT=y
+"""
+
+
+class Nx30ProUbootOrchestrationTests(unittest.TestCase):
+    """End to end gates of build-uboot.sh against a stub of the pinned source.
+
+    The stub carries the structure the real build.sh has, so the orchestration
+    is exercised without compiling anything. The steps that need the cross
+    compiler are skipped when it is absent; GitHub Actions installs it.
+    """
+
+    FIP_NAME = "fip-mt7981_h3c_magic-nx30-pro_SP1-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-%s.bin" % (
+        "a" * 32
+    )
+    BL2_NAME = "bl2-mt7981_h3c_magic-nx30-pro_SP1_md5-%s.img" % ("b" * 32)
+
+    def make_source(self, directory, drop_multi_layout=False):
+        source = Path(directory) / "source"
+        tree = source / "uboot-mtk-20250711"
+        atf = source / "atf-20240117-bacca82a8"
+        (tree / "configs").mkdir(parents=True)
+        (tree / "arch/arm/dts").mkdir(parents=True)
+        (atf / "configs").mkdir(parents=True)
+        (source / "build.sh").write_text(FAKE_BUILD_SH, encoding="utf-8")
+        (source / "build.sh").chmod(0o755)
+        (tree / "configs/mt7981_h3c_magic-nx30-pro_defconfig").write_text(
+            MULTI_LAYOUT_DEFCONFIG, encoding="utf-8"
+        )
+        if not drop_multi_layout:
+            (tree / "configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig").write_text(
+                MULTI_LAYOUT_DEFCONFIG, encoding="utf-8"
+            )
+        (atf / "configs/mt7981_h3c_magic-nx30-pro_defconfig").write_text(
+            "_PLAT_MT7981=y\n", encoding="utf-8"
+        )
+        (tree / "arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts").write_text(
+            BOARD_DTS, encoding="utf-8"
+        )
+        subprocess.run(["git", "init", "-q", str(source)], check=True)
+        subprocess.run(["git", "-C", str(source), "config", "user.email", "t@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(source), "config", "user.name", "Test"], check=True)
+        subprocess.run(["git", "-C", str(source), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(source), "commit", "-q", "-m", "pinned"], check=True)
+        commit = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return source, commit
+
+    def make_patch(self, source):
+        """Create a device patch that satisfies the recovery contract."""
+        target = source / "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig"
+        target.write_text(
+            MULTI_LAYOUT_DEFCONFIG
+            + 'CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"\n'
+            + "# CONFIG_WEBUI_FAILSAFE_FACTORY is not set\n"
+            + "# CONFIG_WEBUI_FAILSAFE_FLASH is not set\n"
+            + "# CONFIG_WEBUI_FAILSAFE_CONSOLE is not set\n"
+            + "# CONFIG_WEBUI_FAILSAFE_ENV is not set\n"
+            + "# CONFIG_WEBUI_FAILSAFE_SIMG is not set\n"
+            + "# CONFIG_WEBUI_FAILSAFE_UBI is not set\n"
+            + "# CONFIG_MTK_TELNETD is not set\n"
+            + "// if (!window.confirm(\"pdt_data, pdt_data_1, exp and plugin are reclaimed\")) return;\n",
+            encoding="utf-8",
+        )
+        patch = subprocess.run(
+            ["git", "-C", str(source), "diff"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        subprocess.run(["git", "-C", str(source), "checkout", "--", "."], check=True)
+        return patch
+
+    def prepare(self, tmp, config=None, patch_record=True, drop_multi_layout=False):
+        source, commit = self.make_source(tmp, drop_multi_layout=drop_multi_layout)
+        patch_text = "" if drop_multi_layout else self.make_patch(source)
+        patch_dir = Path(tmp) / "patches"
+        patch_dir.mkdir()
+        patch_file = patch_dir / "0001-nx30pro-restrict-recovery-ui.patch"
+        patch_file.write_text(patch_text, encoding="utf-8")
+        changes = {"source.commit": commit}
+        if patch_record:
+            changes["source.patches"] = [
+                {
+                    "path": "patches/0001-nx30pro-restrict-recovery-ui.patch",
+                    "applies_to_commit": commit,
+                    "order": 1,
+                    "purpose": "restrict the recovery interface of this device",
+                    "upstream_files": [
+                        "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig"
+                    ],
+                }
+            ]
+        lock = write_lock(tmp, **changes)
+        fixtures = Path(tmp) / "fixtures"
+        fixtures.mkdir()
+        build_fip_image(fixtures / "fip.bin")
+        build_bl2_image(fixtures / "bl2.img")
+        (fixtures / "config").write_text(
+            EFFECTIVE_CONFIG if config is None else config, encoding="utf-8"
+        )
+        env = dict(os.environ)
+        env.update(
+            {
+                "FIXTURE_CONFIG": str(fixtures / "config"),
+                "FIXTURE_FIP": str(fixtures / "fip.bin"),
+                "FIXTURE_BL2": str(fixtures / "bl2.img"),
+                "FIXTURE_FIP_NAME": self.FIP_NAME,
+                "FIXTURE_BL2_NAME": self.BL2_NAME,
+                # The stub build does not cross compile, so the toolchain gate
+                # resolves the host compiler instead of the locked prefix.
+                "TOOLCHAIN": "",
+            }
+        )
+        return source, lock, env
+
+    def run_build(self, lock, source, artifact_dir, env, repo_root=None):
+        command = [
+            "sh", str(SCRIPT),
+            "--lock", str(lock),
+            "--source-dir", str(source),
+            "--artifact-dir", str(artifact_dir),
+        ]
+        if repo_root:
+            command += ["--repo-root", str(repo_root)]
+        return subprocess.run(command, capture_output=True, text=True, env=env)
+
+    def test_check_only_publishes_nothing_and_never_runs_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(tmp)
+            artifact = Path(tmp) / "artifact"
+            result = subprocess.run(
+                ["sh", str(SCRIPT), "--lock", str(lock), "--check-only",
+                 "--artifact-dir", str(artifact)],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertFalse((source / "build-env.txt").exists())
+            self.assertFalse((artifact / "images").exists())
+
+    def test_a_source_at_the_wrong_revision_is_refused_before_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, _lock, env = self.prepare(tmp)
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(LOCK, source, artifact, env)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("pins", result.stderr)
+            self.assertFalse((source / "build-env.txt").exists())
+            self.assertFalse((artifact / "images").exists())
+
+    def test_a_dirty_source_is_refused_before_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(tmp)
+            (source / "build.sh").write_text(FAKE_BUILD_SH + "echo tampered\n", encoding="utf-8")
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(lock, source, artifact, env, repo_root=Path(tmp))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("local changes", result.stderr)
+            self.assertFalse((source / "build-env.txt").exists())
+
+    def test_a_source_without_the_multi_layout_defconfig_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(tmp, drop_multi_layout=True)
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(lock, source, artifact, env, repo_root=Path(tmp))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("multi layout", result.stderr.lower())
+            self.assertFalse((source / "build-env.txt").exists())
+
+    def test_a_device_patch_that_does_not_apply_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(tmp)
+            # The recorded patch expects a file the checkout does not carry.
+            (source / "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig").write_text(
+                "CONFIG_TARGET_MT7981=y\n", encoding="utf-8"
+            )
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(lock, source, artifact, env, repo_root=Path(tmp))
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse((source / "build-env.txt").exists())
+
+    @unittest.skipUnless(HOST_COMPILER, "a host compiler is not installed")
+    def test_a_successful_build_publishes_the_candidate_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(tmp)
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(lock, source, artifact, env, repo_root=Path(tmp))
+            self.assertEqual(0, result.returncode, result.stderr)
+
+            recorded = dict(
+                line.split("=", 1)
+                for line in (source / "build-env.txt").read_text(encoding="utf-8").splitlines()
+            )
+            self.assertEqual("mt7981", recorded["SOC"])
+            self.assertEqual("h3c_magic-nx30-pro", recorded["BOARD"])
+            self.assertEqual("SP1", recorded["VERSION"])
+            self.assertEqual("default", recorded["VARIANT"])
+            self.assertEqual("1", recorded["FIXED_MTDPARTS"])
+            self.assertEqual("1", recorded["MULTI_LAYOUT"])
+            self.assertEqual("Y", recorded["SILENT"])
+
+            images = sorted(path.name for path in (artifact / "images").iterdir())
+            self.assertEqual(sorted([self.FIP_NAME, self.BL2_NAME, "SHA256SUMS"]), images)
+            for name in ("build-report.json", "uboot-source-lock.json", "FLASH-TARGETS.txt"):
+                self.assertTrue((artifact / name).is_file(), name)
+            for name in (
+                "preflight.json", "layout-source.json", "device-patch-verify.json",
+                "device-patch.json", "build.log", "effective-config.json",
+                "artifacts.json", "toolchain.json",
+            ):
+                self.assertTrue((artifact / "logs" / name).is_file(), name)
+
+            report = json.loads((artifact / "build-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                json.loads(lock.read_text(encoding="utf-8"))["source"]["commit"],
+                report["source_commit"],
+            )
+            self.assertEqual(64, len(report["toolchain"]["compiler_sha256"]))
+            self.assertEqual(5, len(report["partition_table"]))
+            self.assertEqual(2, len(report["artifacts"]))
+            for entry in report["artifacts"]:
+                self.assertEqual(64, len(entry["sha256"]))
+            flash_targets = (artifact / "FLASH-TARGETS.txt").read_text(encoding="utf-8")
+            self.assertIn("NMBM", flash_targets)
+            self.assertNotIn("mtd write", flash_targets)
+
+    @unittest.skipUnless(HOST_COMPILER, "a host compiler is not installed")
+    def test_a_dangerous_effective_configuration_stops_the_build_before_publishing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(tmp, config=DANGEROUS_CONFIG)
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(lock, source, artifact, env, repo_root=Path(tmp))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("CONFIG_WEBUI_FAILSAFE_CONSOLE", result.stderr)
+            self.assertTrue((source / "build-env.txt").exists())
+            self.assertFalse((artifact / "images").exists())
+
+    @unittest.skipUnless(HOST_COMPILER, "a host compiler is not installed")
+    def test_an_overclock_setting_in_the_built_configuration_stops_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, lock, env = self.prepare(
+                tmp, config=EFFECTIVE_CONFIG + "CONFIG_MTK_DDR_OVERCLOCK=y\n"
+            )
+            artifact = Path(tmp) / "artifact"
+            result = self.run_build(lock, source, artifact, env, repo_root=Path(tmp))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("overclock", result.stderr.lower())
+            self.assertFalse((artifact / "images").exists())
+
+
+class Nx30ProUbootArtifactGateTests(unittest.TestCase):
+    """The output directory is resolved before anything is published.
+
+    A missing, empty, oversized, duplicated or misnamed image stops the build;
+    a system image can never be published as a boot loader image.
+    """
+
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        self.fip_name = "fip-mt7981_h3c_magic-nx30-pro_SP1-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-%s.bin" % (
+            "a" * 32
+        )
+        self.bl2_name = "bl2-mt7981_h3c_magic-nx30-pro_SP1_md5-%s.img" % ("b" * 32)
+
+    def fill(self, directory, fip=True, bl2=True):
+        output = Path(directory)
+        output.mkdir(parents=True, exist_ok=True)
+        if fip:
+            build_fip_image(output / self.fip_name)
+        if bl2:
+            build_bl2_image(output / self.bl2_name)
+        return output
+
+    def resolve(self, output):
+        return self.helper.resolve_artifacts(self.lock, output)
+
+    def test_both_locked_images_are_resolved_by_their_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.fill(tmp)
+            found = {item["kind"]: item for item in self.resolve(output)}
+        self.assertEqual({"fip", "bl2"}, set(found))
+        self.assertEqual(self.fip_name, found["fip"]["name"])
+        self.assertEqual("fip", found["fip"]["partition"])
+        self.assertEqual(2097152, found["fip"]["partition_size"])
+        self.assertEqual("bl2", found["bl2"]["partition"])
+        self.assertEqual(1048576, found["bl2"]["partition_size"])
+        self.assertEqual(64, len(found["bl2"]["sha256"]))
+
+    def test_a_missing_image_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.fill(tmp, bl2=False)
+            with self.assertRaises(Exception) as caught:
+                self.resolve(output)
+        self.assertIn("bl2", str(caught.exception).lower())
+
+    def test_an_empty_image_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.fill(tmp)
+            (output / self.fip_name).write_bytes(b"")
+            with self.assertRaises(Exception) as caught:
+                self.resolve(output)
+        self.assertIn("empty", str(caught.exception).lower())
+
+    def test_a_second_matching_image_is_rejected_as_ambiguous(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.fill(tmp)
+            other = "fip-mt7981_h3c_magic-nx30-pro_SP1-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-%s.bin" % (
+                "c" * 32
+            )
+            build_fip_image(output / other)
+            with self.assertRaises(Exception) as caught:
+                self.resolve(output)
+        self.assertIn("ambiguous", str(caught.exception).lower())
+
+    def test_an_oversized_image_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.fill(tmp)
+            build_fip_image(output / self.fip_name, bl33_payload=b"U" * (1048576 * 3))
+            with self.assertRaises(Exception) as caught:
+                self.resolve(output)
+        self.assertIn("fit", str(caught.exception).lower())
+
+    def test_a_system_image_is_not_accepted_as_a_boot_loader_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            (output / "immortalwrt-mediatek-mt7981-h3c_nx30pro_112M-sysupgrade.bin").write_bytes(
+                b"\x00" * 4096
+            )
+            with self.assertRaises(Exception):
+                self.resolve(output)
+
+    def test_a_structurally_invalid_fip_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = self.fill(tmp)
+            (output / self.fip_name).write_bytes(b"not a fip package at all" * 8)
+            with self.assertRaises(Exception):
+                self.resolve(output)
 
 
 if __name__ == "__main__":
