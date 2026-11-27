@@ -1,10 +1,13 @@
 #!/bin/sh
 # Prepare and validate the NX30 Pro firmware configuration.
 #
-# The script merges the device layer into the source tree, applies the device
-# patches, runs the real defconfig and checks the configuration that the
-# build produced. It never touches another device and never changes the
-# common or the distribution layer.
+# Order matters: the lock gate first, then the device patches, then the
+# source level verifiers that read what the patches created, then the layer
+# merge in the repository precedence common -> distribution -> device, then
+# the real `make defconfig`, and only then the audit of the FINAL .config.
+# Nothing here compiles firmware; a missing hard gate stops the build before
+# build.sh is allowed to start one. The script never touches another device
+# and never edits the common or the distribution layer.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -88,17 +91,10 @@ grep -Fq 'CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y' "$DEVICE_CONF
 	fail "the device configuration does not select the 112M profile"
 
 DTS="$SOURCE_DIR/target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts"
-[ -f "$DTS" ] || fail "the 112M device tree is missing: $DTS"
-python3 "$HELPER" verify-device-tree --lock "$LOCK" --dts "$DTS" ||
-	fail "the 112M device tree does not carry the partition contract"
-
 IMAGE_RULES="$SOURCE_DIR/target/linux/mediatek/image/mt7981.mk"
-grep -Fq 'define Device/h3c_nx30pro_112M' "$IMAGE_RULES" ||
-	fail "the image rules do not define h3c_nx30pro_112M"
-grep -Fq 'IMAGE_SIZE := 110592k' "$IMAGE_RULES" ||
-	fail "the image rules do not carry the 108 MiB image limit"
 
-# Device patches. They apply to the locked source only.
+# Device patches. They apply to the locked source only, and they are what
+# creates the ported profile, so every source level verifier runs after them.
 if [ -d "$PATCH_DIR" ]; then
 	for patch in "$PATCH_DIR"/*.patch; do
 		[ -f "$patch" ] || continue
@@ -110,43 +106,73 @@ if [ -d "$PATCH_DIR" ]; then
 	done
 fi
 
-# The device layer is merged over the configuration of the source tree. Only
-# the device layer symbols are replaced, every other symbol of the source
-# stays as it is.
+# The ported device tree and the ported profile exist only after the patch
+# loop, so both are compared with the lock here and not before.
+[ -f "$DTS" ] || fail "the 112M device tree is missing: $DTS"
+python3 "$HELPER" verify-device-tree --lock "$LOCK" --dts "$DTS" ||
+	fail "the 112M device tree does not carry the partition contract"
+[ -f "$IMAGE_RULES" ] || fail "the image rules are missing: $IMAGE_RULES"
+python3 "$HELPER" verify-image-rules --lock "$LOCK" --image-rules "$IMAGE_RULES" ||
+	fail "the image rules do not carry the locked profile, image limit and image roles"
+
+# The configuration layers are the ones the repository manifest declares for
+# this device, merged in the documented precedence common -> distribution ->
+# device. The device layer comes last so it overrides both earlier layers,
+# and the merged seed is what the real `make defconfig` expands.
+CONFIG_LAYERS=$(python3 - "$REPO_ROOT" "$LOCK" <<'PY'
+import json
+import subprocess
+import sys
+
+repo_root, lock_path = sys.argv[1], sys.argv[2]
+with open(lock_path, encoding="utf-8") as handle:
+    lock = json.load(handle)
+resolved = subprocess.run(
+    [
+        sys.executable,
+        repo_root + "/tools/manifest.py",
+        "resolve",
+        "--distribution",
+        lock["distribution"],
+        "--device",
+        lock["device"],
+    ],
+    capture_output=True,
+    text=True,
+)
+if resolved.returncode != 0:
+    sys.stderr.write(resolved.stderr)
+    sys.exit(resolved.returncode)
+for layer in json.loads(resolved.stdout)["config_layers"]:
+    print(layer if layer.startswith("/") else repo_root + "/" + layer)
+PY
+) || fail "the repository manifest names no configuration layer for this device"
+[ -n "$CONFIG_LAYERS" ] || fail "the repository manifest names no configuration layer"
+
+# --config replaces the device layer, which the manifest lists last.
+if [ "$(printf '%s\n' "$CONFIG_LAYERS" | tail -n 1)" != "$DEVICE_CONFIG" ]; then
+	CONFIG_LAYERS=$(printf '%s\n' "$CONFIG_LAYERS" | sed '$d')
+	CONFIG_LAYERS=$(printf '%s\n%s\n' "$CONFIG_LAYERS" "$DEVICE_CONFIG")
+fi
+
+merge_layers() {
+	_out=$1
+	shift
+	for _layer in $CONFIG_LAYERS; do
+		[ -f "$_layer" ] || fail "a configuration layer is missing: $_layer"
+		set -- "$@" "$_layer"
+	done
+	[ "$#" -ge 2 ] || fail "the device layer cannot be merged on its own"
+	printf 'Merging configuration layers (common -> distribution -> device):\n'
+	for _layer in "$@"; do
+		printf '  %s\n' "$_layer"
+	done
+	python3 "$HELPER" merge-config --out "$_out" "$@"
+}
+
 TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.nx30pro.XXXXXX")
 trap 'rm -f "$TEMP_CONFIG"' EXIT HUP INT TERM
-[ -f "$SOURCE_DIR/.config" ] || : > "$SOURCE_DIR/.config"
-awk '
-	function key(line) {
-		if (line ~ /^# CONFIG_[A-Za-z0-9_-]+ is not set$/) {
-			sub(/^# /, "", line)
-			sub(/ is not set$/, "", line)
-			return line
-		}
-		if (line ~ /^CONFIG_[A-Za-z0-9_-]+=/) {
-			sub(/=.*/, "", line)
-			return line
-		}
-		return ""
-	}
-	FNR == NR {
-		symbol = key($0)
-		if (symbol != "") {
-			replacement[symbol] = $0
-			order[++count] = symbol
-		}
-		next
-	}
-	{
-		symbol = key($0)
-		if (symbol == "" || !(symbol in replacement))
-			print
-	}
-	END {
-		for (i = 1; i <= count; i++)
-			print replacement[order[i]]
-	}
-' "$DEVICE_CONFIG" "$SOURCE_DIR/.config" > "$TEMP_CONFIG"
+merge_layers "$TEMP_CONFIG"
 cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 
 (
@@ -160,6 +186,7 @@ cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 
 python3 "$HELPER" verify-config --lock "$LOCK" --config "$SOURCE_DIR/.config" ||
 	fail "the built configuration does not match the source lock"
+
 
 # The device overlay belongs into the image. It holds no secret.
 if [ -d "$OVERLAY_DIR" ]; then

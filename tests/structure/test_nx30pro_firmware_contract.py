@@ -1019,6 +1019,206 @@ class Nx30ProFirmwareDevicePortTests(unittest.TestCase):
         self.assertIn("IMAGE_NAME", image["artifact_naming"]["rule"])
 
 
+class Nx30ProDeviceConfigLayerTests(unittest.TestCase):
+    """The device layer selects exactly what the lock can account for.
+
+    `devices/nx30pro/config.config` is a seed fragment: it is merged over the
+    common and the distribution layer, fed to the real `make defconfig`, and
+    only the final `.config` is audited. It still has to be honest, because
+    every symbol in it becomes a claim about the pinned source and feeds. A
+    symbol the lock cannot account for is a guess, and a hard gate the seed
+    does not select can never survive `defconfig`.
+    """
+
+    def setUp(self):
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        self.text = CONFIG.read_text(encoding="utf-8")
+        self.enabled = set(re.findall(r"^(CONFIG_[A-Za-z0-9_-]+)=y$", self.text, re.M))
+        self.disabled = set(
+            re.findall(r"^# (CONFIG_[A-Za-z0-9_-]+) is not set$", self.text, re.M)
+        )
+        self.packages = {
+            entry["package"]: entry for entry in self.lock["packages"]
+        }
+        self.excluded = {
+            entry["package"]: entry for entry in self.lock["excluded_packages"]
+        }
+
+    def test_device_config_selects_every_hard_gate_symbol(self):
+        for name in HARD_GATE_PACKAGES:
+            entry = self.packages[name]
+            self.assertEqual("hard", entry["gate"], name)
+            self.assertTrue(entry["symbols"], name)
+            for symbol in entry["symbols"]:
+                self.assertIn(symbol, self.enabled, "%s of %s" % (symbol, name))
+                self.assertNotIn(symbol, self.disabled, symbol)
+
+    def test_device_config_selects_the_simplified_chinese_language_switch(self):
+        """The i18n packages are HIDDEN and default to the language symbol.
+
+        luci.mk defines `config LUCI_LANG_$(lang)` inside `Package/luci-base/
+        config` and generates `luci-i18n-<base>-zh-cn` with
+        `DEFAULT:=LUCI_LANG_zh_Hans||(ALL&&m)`, so the translation of every
+        installed LuCI package follows the language switch.
+        """
+        entry = self.packages["luci-i18n-base-zh-cn"]
+        self.assertIn("CONFIG_LUCI_LANG_zh_Hans", entry["symbols"])
+        self.assertIn("CONFIG_LUCI_LANG_zh_Hans=y", self.text)
+
+    def test_device_config_passwall_symbols_are_the_xray_contract(self):
+        entry = self.packages["luci-app-passwall"]
+        self.assertEqual(
+            [
+                "CONFIG_PACKAGE_luci-app-passwall",
+                "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray",
+                "CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Xray_Plugin",
+            ],
+            entry["symbols"],
+        )
+        self.assertEqual("4.68-1", entry["version"])
+        self.assertTrue(entry["version_pinned"])
+        self.assertIn("PKG_VERSION", entry["version_evidence"])
+        for symbol in ("CONFIG_PACKAGE_xray-core", "CONFIG_PACKAGE_xray-plugin"):
+            self.assertIn(symbol, self.enabled)
+
+    def test_device_config_attempts_every_reported_optional_tool(self):
+        """The design requires the optional tools to be attempted and reported.
+
+        An optional tool that is present in the pinned feeds is selected here,
+        so `defconfig` gets the chance to drop it and the report can state the
+        real outcome instead of a package nobody asked for.
+        """
+        for entry in self.lock["packages"]:
+            if entry["gate"] != "optional" or not entry["symbols"]:
+                continue
+            if entry["status"] in ("unavailable", "UNRESOLVED"):
+                continue
+            for symbol in entry["symbols"]:
+                self.assertIn(
+                    symbol,
+                    self.enabled,
+                    "%s is reported but never attempted" % entry["package"],
+                )
+
+    def test_device_config_switches_off_every_unproven_package(self):
+        """An unproven package may not ride along into the image.
+
+        WireGuard stays UNRESOLVED on Linux 5.4 and sing-box is not in the
+        pinned packages feed, so their symbols are explicit overrides instead
+        of being left to whatever the upstream baseline enables.
+        """
+        for entry in self.lock["packages"]:
+            if entry["status"] not in ("unavailable", "UNRESOLVED"):
+                continue
+            for symbol in entry["symbols"]:
+                self.assertIn(
+                    symbol,
+                    self.disabled,
+                    "%s is %s but not switched off" % (symbol, entry["status"]),
+                )
+                self.assertNotIn(symbol, self.enabled)
+
+    def test_device_config_explicitly_overrides_every_excluded_package(self):
+        for name, entry in self.excluded.items():
+            symbol = "CONFIG_PACKAGE_%s" % name
+            self.assertIn(
+                symbol,
+                self.disabled,
+                "%s is excluded but not switched off" % name,
+            )
+            self.assertNotIn(symbol, self.enabled)
+            self.assertTrue(entry["reason"], name)
+
+    def test_device_config_resolves_both_documented_rootfs_clashes(self):
+        """tcpdump and dnsmasq each install a file their full variant also installs.
+
+        The repository documents the `check_data_file_clashes` failure for
+        /usr/bin/tcpdump; `Package/dnsmasq-full` PROVIDES dnsmasq and both
+        install /usr/sbin/dnsmasq, so the same clash applies. The mini/full
+        variant is selected, the baseline one is switched off, and the lock
+        records the replacement so a dropped replacement fails the audit
+        instead of silently leaving the image without the tool.
+        """
+        self.assertIn("CONFIG_PACKAGE_tcpdump-mini", self.enabled)
+        self.assertIn("CONFIG_PACKAGE_tcpdump", self.disabled)
+        self.assertIn("CONFIG_PACKAGE_dnsmasq-full", self.enabled)
+        self.assertIn("CONFIG_PACKAGE_dnsmasq", self.disabled)
+        for provider, replacement in (("tcpdump", "tcpdump-mini"), ("dnsmasq", "dnsmasq-full")):
+            entry = self.excluded[provider]
+            self.assertEqual("CONFIG_PACKAGE_%s" % replacement, entry["replaced_by"])
+            self.assertIn(replacement, entry["reason"])
+
+    def test_device_config_names_no_symbol_the_lock_cannot_account_for(self):
+        """No invented packages: every package symbol has lock evidence.
+
+        A symbol is accounted for when it belongs to a package entry, to an
+        excluded package, or to the dependency index that names its provider
+        path at a pinned feed commit.
+        """
+        accounted = set()
+        for entry in self.lock["packages"]:
+            accounted.update(entry["symbols"])
+        for name in self.excluded:
+            accounted.add("CONFIG_PACKAGE_%s" % name)
+        for dependency in self.lock["dependency_index"]:
+            accounted.add("CONFIG_PACKAGE_%s" % dependency)
+        accounted.update(
+            {
+                "CONFIG_TARGET_mediatek",
+                "CONFIG_TARGET_mediatek_mt7981",
+                self.lock["target"]["profile_symbol"].split("=")[0],
+                "CONFIG_LUCI_LANG_zh_Hans",
+            }
+        )
+        for symbol in sorted(self.enabled | self.disabled):
+            self.assertIn(
+                symbol,
+                accounted,
+                "%s has no evidence in the source lock" % symbol,
+            )
+
+    def test_device_config_stays_inside_the_device_target(self):
+        for line in self.text.splitlines():
+            if line.startswith("CONFIG_TARGET_") or line.startswith("# CONFIG_TARGET_"):
+                self.assertTrue(
+                    line.startswith("CONFIG_TARGET_mediatek")
+                    or line.startswith("# CONFIG_TARGET_mediatek"),
+                    line,
+                )
+        self.assertIn(self.lock["target"]["profile_symbol"], self.text)
+        self.assertNotIn("tr3000", self.text.lower())
+
+    def test_device_config_carries_no_secret_and_no_deployment_value(self):
+        for forbidden in ("password", "passwd", "token", "secret", "private_key"):
+            self.assertNotIn(forbidden, self.text.lower())
+        self.assertNotRegex(self.text, r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+    def test_device_config_explains_its_intentional_overrides(self):
+        """Native CONFIG_ syntax, and a reason next to every override."""
+        for line in self.text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            self.assertRegex(
+                line,
+                r"^(CONFIG_[A-Za-z0-9_-]+)=(y|m|\"[^\"]*\"|[0-9]+)$",
+                "not native OpenWrt syntax: %r" % line,
+            )
+        # Every `is not set` override sits under a comment that says why.
+        lines = self.text.splitlines()
+        for index, line in enumerate(lines):
+            if not line.startswith("# CONFIG_"):
+                continue
+            explaining = [
+                item
+                for item in lines[max(0, index - 12):index]
+                if item.startswith("#") and not item.startswith("# CONFIG_")
+            ]
+            self.assertTrue(
+                explaining,
+                "the override %r has no explaining comment above it" % line,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

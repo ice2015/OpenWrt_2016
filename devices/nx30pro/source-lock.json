@@ -220,7 +220,7 @@
       "package": "luci-i18n-base-zh-cn",
       "gate": "hard",
       "status": "candidate",
-      "symbols": ["CONFIG_PACKAGE_luci-i18n-base-zh-cn"],
+      "symbols": ["CONFIG_PACKAGE_luci-i18n-base-zh-cn", "CONFIG_LUCI_LANG_zh_Hans"],
       "feed": "luci",
       "feed_revision": "5829eabba50ec0afa17d2ee486bc90dc15180c34",
       "provider_path": "modules/luci-base/po/zh_Hans",
@@ -229,7 +229,7 @@
       "version_evidence": "Generated package: luci.mk defines Package/luci-i18n-$(LUCI_BASENAME)-$(1) with LUCI_LANG.zh_Hans=简体中文 and LUCI_LC_ALIAS.zh_Hans=zh-cn, so no PKG_VERSION exists for it.",
       "dependencies": [],
       "enabled_by_default": false,
-      "detail": "Per application translations are separate luci-i18n-*-zh-cn packages and are selected in devices/nx30pro/config.config."
+      "detail": "The translation packages are HIDDEN with DEFAULT:=LUCI_LANG_zh_Hans||(ALL&&m) (luci.mk LuciTranslation, called with LUCI_LC_ALIAS.zh_Hans=zh-cn), so the language switch CONFIG_LUCI_LANG_zh_Hans pulls the zh-cn translation of every installed LuCI package; the per application luci-i18n-*-zh-cn packages are therefore not listed individually in devices/nx30pro/config.config. Both symbols are audited in the final .config."
     },
     {
       "requirement": "Argon theme",
@@ -761,7 +761,9 @@
     {"package": "luci-app-openclash", "reason": "Present in the pinned luci feed, so it has to be excluded explicitly: PassWall stays the only transparent proxy manager."},
     {"package": "luci-app-passwall2", "reason": "Not present in the pinned luci feed; the design requires PassWall 4.68, not its successor."},
     {"package": "luci-app-adguardhome", "reason": "Not present in the pinned luci feed and not required by the approved design."},
-    {"package": "tcpdump", "reason": "The full variant installs the same /usr/bin/tcpdump as tcpdump-mini and clashes in the rootfs. Only tcpdump-mini is selected."},
+    {"package": "luci-app-wireguard", "reason": "Present in the pinned luci feed at applications/luci-app-wireguard with LUCI_DEPENDS:=+wireguard-tools +kmod-wireguard +luci-proto-wireguard, so selecting it would pull the two WireGuard symbols back in. The WireGuard server stays UNRESOLVED on this Linux 5.4 base, and a LuCI page for a module that may not build is worse than no page."},
+    {"package": "tcpdump", "replaced_by": "CONFIG_PACKAGE_tcpdump-mini", "reason": "The full variant installs the same /usr/bin/tcpdump as tcpdump-mini and clashes in the rootfs (check_data_file_clashes, Error 255). Only tcpdump-mini is selected, and the final configuration has to keep it: losing the replacement while the full variant stays excluded would leave the image without packet capture."},
+    {"package": "dnsmasq", "replaced_by": "CONFIG_PACKAGE_dnsmasq-full", "reason": "define Package/dnsmasq-full sets PROVIDES:=dnsmasq and its install rule copies the same /usr/sbin/dnsmasq as define Package/dnsmasq, so both variants cannot be installed together. dnsmasq-full is the selected variant and the final configuration has to keep it enabled, otherwise the image would have no DNS/DHCP server at all."},
     {"package": "luci-app-dockerman", "reason": "A second container manager next to luci-app-docker. luci-app-docker is the management entry of this base."},
     {"package": "ruby", "reason": "Pulls the Rust toolchain and pushes the build past the runner limit. No requirement needs it."},
     {"package": "libruby", "reason": "Pulls the Rust toolchain and pushes the build past the runner limit. No requirement needs it."}

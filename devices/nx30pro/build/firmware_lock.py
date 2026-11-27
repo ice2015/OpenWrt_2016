@@ -15,7 +15,10 @@ build plan is rendered for it: nothing may download or compile a source that
 failed this gate.
 
 The configuration check runs against the final .config that the build
-produced, never against the fragment that was fed into it.
+produced, never against the fragment that was fed into it. `merge-config`
+merges the config layers in the repository precedence common -> distribution
+-> device, so the merge that produces that fragment is testable without a
+source tree and cannot drop a hyphenated device layer override again.
 
 Two further checks read the patched source tree instead of the lock alone:
 `verify-device-tree` compares the NMBM partition table of the ported 112M
@@ -424,6 +427,99 @@ def config_symbols(text):
     return symbols
 
 
+# The merge regex may not narrow the symbol alphabet again: OpenWrt package
+# symbols carry hyphens (`luci-i18n-base-zh-cn`, `dnsmasq-full`), and a merge
+# that only accepted letters, digits and underscores silently dropped the
+# device layer override of exactly those packages.
+CONFIG_ASSIGNMENT_RE = re.compile(r"^(CONFIG_[A-Za-z0-9_-]+)=")
+CONFIG_NOT_SET_RE = re.compile(r"^# (CONFIG_[A-Za-z0-9_-]+) is not set$")
+
+
+def config_key(line):
+    """Return the symbol a config line assigns, or None for any other line.
+
+    An explicit `# CONFIG_x is not set` override is an assignment: it has to
+    win over the `CONFIG_x=y` of an earlier layer exactly like a value does.
+    """
+    match = CONFIG_NOT_SET_RE.match(line)
+    if match:
+        return match.group(1)
+    match = CONFIG_ASSIGNMENT_RE.match(line)
+    if match:
+        return match.group(1)
+    return None
+
+
+def merge_config_layers(layers):
+    """Merge config layer texts in precedence order, the last layer wins.
+
+    `layers` is ordered common -> distribution -> device. A symbol keeps the
+    position of its first appearance so the comments of the layer that
+    introduced it stay next to it; only its value is replaced.
+    """
+    merged = []
+    position = {}
+    for text in layers:
+        for line in (text or "").splitlines():
+            key = config_key(line)
+            if key is None:
+                merged.append(line)
+                continue
+            if key in position:
+                merged[position[key]] = line
+            else:
+                position[key] = len(merged)
+                merged.append(line)
+    if not merged:
+        return ""
+    return "\n".join(merged) + "\n"
+
+
+def symbol_state(symbols, name):
+    """Classify one symbol of a final configuration.
+
+    `absent` and `disabled` are kept apart: `make defconfig` writes the
+    `is not set` override itself when it drops a package whose dependency is
+    unmet, and that decision is evidence, not a missing line.
+    """
+    if name not in symbols:
+        return "absent"
+    value = symbols[name]
+    if value is None:
+        return "disabled"
+    if value == "y":
+        return "enabled"
+    if value == "m":
+        return "module"
+    return "value:%s" % value
+
+
+def entry_state(symbols, names):
+    """Summarise the symbols of one package entry of the lock."""
+    states = {name: symbol_state(symbols, name) for name in names}
+    enabled = sorted(name for name, state in states.items() if state == "enabled")
+    missing = sorted(name for name, state in states.items() if state != "enabled")
+    if not missing:
+        state = "enabled"
+    elif not enabled:
+        off = [states[name] for name in missing]
+        state = "disabled" if set(off) == {"disabled"} else "absent"
+    else:
+        state = "partial"
+    return {
+        "state": state,
+        "enabled_symbols": enabled,
+        "missing_symbols": [
+            {"symbol": name, "state": states[name]} for name in missing
+        ],
+    }
+
+
+def package_symbol(dependency):
+    """The config symbol of a package the dependency index names."""
+    return "CONFIG_PACKAGE_%s" % dependency
+
+
 def device_tree_partitions(text):
     """Return (label, offset, size) of every partition node, in file order.
 
@@ -610,46 +706,155 @@ def verify_image_rules(text, lock):
 
 
 def verify_config(text, lock):
-    """Check the configuration that the build really produced."""
+    """Audit the configuration the build really produced.
+
+    The input is a final `.config`, the output of a real `make defconfig`,
+    never the seed fragment that was merged into it. Three groups are audited
+    separately and returned as one report:
+
+    * hard gates - every symbol of every hard gate package has to be `=y`,
+      and so has every dependency the lock enumerates for it. This gate does
+      not depend on the `status` of the lock entry: an unproven candidate is
+      exactly the configuration a probe produces, and a hard gate that
+      `defconfig` dropped has to fail before anything is compiled.
+    * optional packages - reported with their lock status. A package recorded
+      `available` has to be enabled, a package recorded `unavailable` or
+      `UNRESOLVED` may not be, and a candidate is simply reported.
+    * exclusions - never enabled. An exclusion that names `replaced_by` also
+      requires the replacement to be enabled, so a documented rootfs clash
+      may not be resolved by losing both variants.
+
+    Every miss is collected, so one report names the whole group that
+    disappeared instead of only its first member.
+    """
     symbols = config_symbols(text)
     errors = []
+    audited = {}
 
-    if symbols.get("CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M") != "y":
-        errors.append("the configuration does not select the NX30 Pro 112M profile")
-    profiles = [
+    def audit(name):
+        audited[name] = symbols.get(name)
+
+    profile_symbol = EXPECTED_PROFILE_SYMBOL.split("=")[0]
+    audit(profile_symbol)
+    if symbols.get(profile_symbol) != "y":
+        errors.append(
+            "the configuration does not select the NX30 Pro 112M profile %s"
+            % EXPECTED_PROFILE_SYMBOL
+        )
+    profiles = sorted(
         name
         for name, value in symbols.items()
         if name.startswith("CONFIG_TARGET_mediatek_mt7981_DEVICE_") and value == "y"
-    ]
+    )
+    for name in profiles:
+        audit(name)
     if len(profiles) != 1:
         errors.append(
-            "the configuration selects %d device profiles, exactly one is required"
-            % len(profiles)
+            "the configuration selects %d device profiles (%s), exactly one is "
+            "required" % (len(profiles), ", ".join(profiles) or "none")
         )
 
+    hard_gates = []
+    optional = []
     for entry in lock.get("packages") or []:
-        if entry.get("status") != "available":
-            continue
-        for key in entry.get("symbols") or []:
-            if symbols.get(key) != "y":
+        name = entry.get("package") or "<unnamed>"
+        requirement = entry.get("requirement") or name
+        status = entry.get("status")
+        names = entry.get("symbols") or []
+        for symbol in names:
+            audit(symbol)
+        summary = entry_state(symbols, names)
+        record = {
+            "package": name,
+            "requirement": requirement,
+            "status": status,
+            "symbols": names,
+            "state": summary["state"],
+            "enabled_symbols": summary["enabled_symbols"],
+            "missing_symbols": summary["missing_symbols"],
+        }
+        if entry.get("gate") == "hard":
+            hard_gates.append(record)
+            for miss in summary["missing_symbols"]:
                 errors.append(
-                    "the required package %s of %s is not enabled"
-                    % (key, entry.get("requirement"))
+                    "the hard gate %s is not enabled in the final "
+                    "configuration: %s is %s (requirement: %s)"
+                    % (name, miss["symbol"], miss["state"], requirement)
                 )
+            for dependency in entry.get("dependencies") or []:
+                symbol = package_symbol(dependency)
+                audit(symbol)
+                state = symbol_state(symbols, symbol)
+                if state not in ("enabled", "module"):
+                    errors.append(
+                        "the dependency %s of the hard gate %s is %s in the "
+                        "final configuration, so the feed that indexes %s does "
+                        "not provide its closure (requirement: %s)"
+                        % (dependency, name, state, name, requirement)
+                    )
+            continue
+        optional.append(record)
+        if status == "available" and summary["state"] != "enabled":
+            errors.append(
+                "the package %s is recorded available with `make defconfig` "
+                "evidence but is %s in this final configuration"
+                % (name, summary["state"])
+            )
+        elif status in UNPROVEN_STATUSES and summary["enabled_symbols"]:
+            errors.append(
+                "the package %s is recorded %s and may not enter the image, "
+                "but %s is enabled"
+                % (name, status, ", ".join(summary["enabled_symbols"]))
+            )
 
+    excluded = []
     for entry in lock.get("excluded_packages") or []:
         name = entry.get("package")
         if not name:
             continue
-        if symbols.get("CONFIG_PACKAGE_%s" % name) == "y":
+        symbol = package_symbol(name)
+        audit(symbol)
+        state = symbol_state(symbols, symbol)
+        replacement = entry.get("replaced_by")
+        if replacement:
+            audit(replacement)
+        excluded.append(
+            {
+                "package": name,
+                "state": state,
+                "reason": entry.get("reason"),
+                "replaced_by": replacement,
+                "replacement_state": symbol_state(symbols, replacement)
+                if replacement
+                else None,
+            }
+        )
+        if state == "enabled":
             errors.append(
-                "the excluded package %s stayed enabled: %s"
-                % (name, entry.get("reason"))
+                "the excluded package %s stayed enabled: %s" % (name, entry.get("reason"))
+            )
+        if replacement and symbol_state(symbols, replacement) != "enabled":
+            errors.append(
+                "the excluded package %s is replaced by %s, but that "
+                "replacement is %s in the final configuration, so the image "
+                "would lose %s entirely"
+                % (
+                    name,
+                    replacement,
+                    symbol_state(symbols, replacement),
+                    name,
+                )
             )
 
     if errors:
         raise ConfigError("; ".join(errors))
-    return symbols
+    return {
+        "profile": EXPECTED_PROFILE,
+        "hard_gates": hard_gates,
+        "optional": optional,
+        "excluded": excluded,
+        "symbols": audited,
+    }
 
 
 def build_report(lock, artifacts, build_env, extra=None):
@@ -739,9 +944,31 @@ def read_locked_source(lock, kind, explicit, source_dir):
 
 def command_verify_config(args):
     lock = load_lock(args.lock)
-    text = Path(args.config).read_text(encoding="utf-8")
-    verify_config(text, lock)
-    print("The built configuration matches the source lock.")
+    path = Path(args.config)
+    if not path.is_file():
+        raise LockError("the final configuration is missing: %s" % path)
+    text = path.read_text(encoding="utf-8")
+    report = verify_config(text, lock)
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
+def command_merge_config(args):
+    layers = []
+    for path in args.layer:
+        layer = Path(path)
+        if not layer.is_file():
+            raise LockError("the configuration layer is missing: %s" % layer)
+        layers.append(layer.read_text(encoding="utf-8"))
+    if not layers:
+        raise LockError("merge-config needs at least one configuration layer")
+    merged = merge_config_layers(layers)
+    out = Path(args.out)
+    out.write_text(merged, encoding="utf-8")
+    print(
+        "Merged %d configuration layers into %s; the last layer wins."
+        % (len(layers), out)
+    )
     return 0
 
 
@@ -824,6 +1051,14 @@ def main(argv=None):
     verify.add_argument("--lock", required=True)
     verify.add_argument("--config", required=True)
     verify.set_defaults(handler=command_verify_config)
+
+    merge = subparsers.add_parser(
+        "merge-config",
+        help="merge config layers in precedence order, the last layer wins",
+    )
+    merge.add_argument("--out", required=True)
+    merge.add_argument("layer", nargs="+", help="common, distribution, device")
+    merge.set_defaults(handler=command_merge_config)
 
     verify_tree = subparsers.add_parser(
         "verify-device-tree", help="check the partition contract of the device tree"
