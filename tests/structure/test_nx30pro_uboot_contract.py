@@ -21,6 +21,17 @@ COMPATIBILITY_DOC = (
 
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 
+# The boot loader source is the Yuzhii DHCPD fork. The old hanwckf tree is
+# rejected evidence, never a build input.
+SOURCE_REPOSITORY = "https://github.com/Yuzhii0718/bl-mt798x-dhcpd"
+SOURCE_COMMIT = "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4"
+REJECTED_REPOSITORY = "https://github.com/hanwckf/bl-mt798x"
+UBOOT_TREE = "uboot-mtk-20250711"
+ATF_TREE = "atf-20240117-bacca82a8"
+SOC = "mt7981"
+BOARD = "h3c_magic-nx30-pro"
+VERSIONS = ("2025", "SP1", "SP2")
+
 # The partition contract comes from the device tree of the selected
 # nx30pro-112m system, not from the boot loader project.
 EXPECTED_PARTITIONS = [
@@ -40,17 +51,75 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
     def test_lock_pins_a_full_upstream_commit_and_the_real_board_name(self):
         lock = self.load_lock()
         source = lock["source"]
-        self.assertEqual("https://github.com/hanwckf/bl-mt798x", source["repository"])
+        self.assertEqual(SOURCE_REPOSITORY, source["repository"])
+        self.assertEqual(SOURCE_COMMIT, source["commit"])
         self.assertRegex(source["commit"], COMMIT)
-        self.assertEqual("mt7981", source["build_env"]["SOC"])
-        self.assertEqual("h3c_magic-nx30-pro", source["build_env"]["BOARD"])
-        self.assertEqual("1", source["build_env"]["FIXED_MTDPARTS"])
-        self.assertEqual("0", source["build_env"]["MULTI_LAYOUT"])
-        self.assertTrue(source["atf_tree"])
-        self.assertTrue(source["uboot_tree"])
+        self.assertEqual(UBOOT_TREE, source["uboot_tree"])
+        self.assertEqual(ATF_TREE, source["atf_tree"])
         for tree in (source["atf_tree"], source["uboot_tree"]):
             self.assertIn(tree, source["vendored_trees"])
             self.assertEqual(source["commit"], source["vendored_trees"][tree]["revision"])
+
+        board = lock["board"]
+        self.assertEqual(SOC, board["soc"])
+        self.assertEqual(BOARD, board["name"])
+        self.assertEqual("configs/%s_%s_defconfig" % (SOC, BOARD), board["defconfig"])
+        self.assertEqual(
+            "configs/%s_%s_multi_layout_defconfig" % (SOC, BOARD),
+            board["multi_layout_defconfig"],
+        )
+        self.assertEqual("arch/arm/dts/%s-%s.dts" % (SOC, BOARD), board["dts"])
+
+        build_env = source["build_env"]
+        self.assertEqual(SOC, build_env["SOC"])
+        self.assertEqual(BOARD, build_env["BOARD"])
+        self.assertEqual("SP1", build_env["VERSION"])
+        self.assertEqual("default", build_env["VARIANT"])
+        self.assertEqual("1", build_env["FIXED_MTDPARTS"])
+        self.assertEqual("1", build_env["MULTI_LAYOUT"])
+
+    def test_lock_rejects_the_old_boot_loader_repository_as_a_source(self):
+        lock = self.load_lock()
+        source = lock["source"]
+        self.assertNotEqual(REJECTED_REPOSITORY, source["repository"])
+        rejected = {item["repository"]: item for item in source["rejected_sources"]}
+        self.assertIn(REJECTED_REPOSITORY, rejected)
+        self.assertTrue(rejected[REJECTED_REPOSITORY]["reason"].strip())
+
+    def test_lock_records_the_evidence_that_selected_the_sp1_version(self):
+        lock = self.load_lock()
+        selection = lock["source"]["version_selection"]
+        self.assertEqual("SP1", selection["selected"])
+        self.assertEqual(sorted(VERSIONS), sorted(selection["candidates"]))
+        self.assertEqual(ATF_TREE, selection["atf_tree"])
+        self.assertEqual(UBOOT_TREE, selection["uboot_tree"])
+        # The selection is evidence based: the pinned fork documents SP1 as the
+        # pairing for a 5.4 kernel system, which is what the firmware plan builds.
+        self.assertIn("5.4", selection["evidence"])
+        self.assertIn("README.md", selection["evidence_source"])
+        for rejected in selection["rejected"]:
+            self.assertIn(rejected["version"], VERSIONS)
+            self.assertTrue(rejected["reason"].strip())
+
+    def test_lock_names_the_artifacts_the_pinned_build_script_emits(self):
+        lock = self.load_lock()
+        artifacts = lock["artifacts"]
+        for kind in ("fip", "bl2"):
+            entry = artifacts[kind]
+            self.assertEqual("output", entry["directory"])
+            self.assertIn("md5-", entry["pattern"])
+            self.assertIn("*", entry["pattern"])
+        self.assertTrue(artifacts["fip"]["pattern"].endswith(".bin"))
+        self.assertTrue(artifacts["bl2"]["pattern"].endswith(".img"))
+        self.assertIn("SP1-Yuzhii-dhcpd-fixed-parts-multi-layout", artifacts["fip"]["pattern"])
+        self.assertIn("bl2-mt7981_h3c_magic-nx30-pro_SP1", artifacts["bl2"]["pattern"])
+
+    def test_lock_records_the_host_dependencies_of_the_pinned_build_script(self):
+        lock = self.load_lock()
+        host_packages = lock["host_packages"]
+        # build.sh compiles the failsafe web assets with npm before it builds.
+        for package in ("npm", "python3", "gcc-aarch64-linux-gnu", "build-essential"):
+            self.assertIn(package, host_packages)
 
     def test_lock_partition_contract_matches_the_112m_layout(self):
         lock = self.load_lock()
@@ -61,11 +130,11 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         ]
         self.assertEqual(EXPECTED_PARTITIONS, actual)
         self.assertEqual(0x7580000, contract["ubi_end_offset"])
-        self.assertEqual(
-            "jerryhan77/immortalwrt-mt798x",
-            contract["source_repository"],
-        )
-        self.assertRegex(contract["source_commit"], COMMIT)
+        # The partition contract is read from the pinned boot loader source, not
+        # from the rejected firmware source of the earlier candidate.
+        self.assertEqual("Yuzhii0718/bl-mt798x-dhcpd", contract["source_repository"])
+        self.assertEqual(SOURCE_COMMIT, contract["source_commit"])
+        self.assertIn("mt7981-h3c_magic-nx30-pro.dts", contract["source_file"])
 
     def test_lock_records_the_stock_layout_mismatch_and_the_minimal_patch(self):
         lock = self.load_lock()
@@ -89,15 +158,20 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
             "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),114688k(ubi)",
             patch["value"],
         )
-        self.assertIn("mt7981_h3c_magic-nx30-pro_defconfig", patch["target"])
+        self.assertIn("mt7981-h3c_magic-nx30-pro.dts", patch["target"])
 
     def test_lock_keeps_nmbm_geometry_and_web_failsafe_facts(self):
         lock = self.load_lock()
         nmbm = lock["nmbm"]
         self.assertTrue(nmbm["enabled"])
+        self.assertEqual("CONFIG_ENABLE_NAND_NMBM=y", nmbm["u_boot_config"])
         self.assertEqual(1, nmbm["max_ratio"])
         self.assertEqual(256, nmbm["max_reserved_blocks"])
-        self.assertTrue(nmbm["geometry_matches_across_bootloader_and_system"])
+        # The bootloader side of the geometry is verified in the pinned tree;
+        # the system side belongs to the firmware source, which is not locked
+        # yet, so the comparison stays unresolved instead of being asserted.
+        self.assertEqual("UNRESOLVED", nmbm["geometry_matches_across_bootloader_and_system"])
+        self.assertIn(UBOOT_TREE, nmbm["evidence_source"])
 
         failsafe = lock["web_failsafe"]
         self.assertTrue(failsafe["enabled"])
@@ -107,6 +181,7 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertEqual(["firmware", "initramfs"], sorted(failsafe["system_uploads"]))
         self.assertEqual("fip", failsafe["fip_target_partition"])
         self.assertEqual("bl2", failsafe["bl2_target_partition"])
+        self.assertIn("CONFIG_MTK_WEB_FAILSAFE=y", failsafe["u_boot_config"])
 
     def test_lock_does_not_guess_toolchain_or_hardware_facts(self):
         lock = self.load_lock()

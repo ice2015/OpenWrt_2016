@@ -1,48 +1,84 @@
 {
-  "schema": 1,
+  "schema": 2,
   "device": "nx30pro",
   "product": "H3C Magic NX30 Pro",
-  "purpose": "Web recovery capable U-Boot/ATF boot loader for the selected nx30pro-112m system layout",
-  "status": "candidate-source-locked-not-verified-on-device",
+  "purpose": "Restricted recovery U-Boot/ATF boot loader for the nx30pro immortalwrt-112m system layout",
+  "status": "source-locked-not-built",
   "source": {
-    "repository": "https://github.com/hanwckf/bl-mt798x",
-    "commit": "36916669d0874306638196c5327a20c2ef215bed",
+    "repository": "https://github.com/Yuzhii0718/bl-mt798x-dhcpd",
+    "commit": "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4",
     "commit_ref": "master",
     "commit_ref_note": "The commit is pinned; the ref name is informational only and must never be used to select a build input.",
+    "version": "SP1",
+    "version_selection": {
+      "selected": "SP1",
+      "candidates": ["2025", "SP1", "SP2"],
+      "atf_tree": "atf-20240117-bacca82a8",
+      "uboot_tree": "uboot-mtk-20250711",
+      "evidence": "The pinned fork documents SP1 as the pairing for a 5.4 kernel system, which is the kernel of the firmware this boot loader is built for.",
+      "evidence_source": "README.md of commit e4cf4dc72d451dc7a86c9508390ad5a2e50743c4: 'If you are using the 5.4 kernel or encounter issues such as hwrng wrong, try using the SP1 version or enable _MT7986_TRNG_NS_ACCESS in the ATF configuration.'",
+      "evidence_note": "This is upstream documentation, not a boot log of this device. Real boot compatibility with the 5.4 firmware stays UNRESOLVED until a device test.",
+      "rejected": [
+        {
+          "version": "2025",
+          "atf_tree": "atf-20250711",
+          "reason": "The pinned fork steers 5.4 kernel systems to SP1; the 2025 ATF pairing carries the hwrng problem the README names."
+        },
+        {
+          "version": "SP2",
+          "atf_tree": "atf-20260123",
+          "reason": "SP2 is the newest ATF pairing and has no documented 5.4 kernel compatibility statement."
+        }
+      ]
+    },
     "atf_tree": "atf-20240117-bacca82a8",
-    "uboot_tree": "uboot-mtk-20230718-09eda825",
+    "uboot_tree": "uboot-mtk-20250711",
     "build_script_trees": {
-      "uboot": "uboot-mtk-20230718-09eda825",
+      "uboot": "uboot-mtk-20250711",
       "atf": "atf-20240117-bacca82a8",
-      "note": "The trees are read from the UBOOT_DIR and ATF_DIR assignments of the pinned build.sh. The build script is the only input that decides which tree is compiled, so the lock may not name another tree even when the repository carries one."
+      "note": "build.sh maps VERSION to UBOOT_DIR/ATF_DIR: 2025 -> atf-20250711, SP1 -> atf-20240117-bacca82a8, SP2 -> atf-20260123; UBOOT_DIR is always uboot-mtk-20250711. The build script is the only input that decides which tree is compiled, so the lock may not name another tree even when the repository carries one."
     },
     "vendored_trees": {
       "atf-20240117-bacca82a8": {
-        "revision": "36916669d0874306638196c5327a20c2ef215bed",
+        "revision": "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4",
         "kind": "vendored-in-upstream-repository",
         "note": "The ATF and U-Boot trees are vendored directories of the upstream repository, not submodules. Their revision is therefore the repository commit."
       },
-      "uboot-mtk-20230718-09eda825": {
-        "revision": "36916669d0874306638196c5327a20c2ef215bed",
+      "uboot-mtk-20250711": {
+        "revision": "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4",
         "kind": "vendored-in-upstream-repository"
       }
     },
+    "rejected_sources": [
+      {
+        "repository": "https://github.com/hanwckf/bl-mt798x",
+        "commit": "36916669d0874306638196c5327a20c2ef215bed",
+        "reason": "Upstream of this fork, but it carries neither the DHCPD web failsafe nor a multi layout defconfig for this board, so it cannot offer the locked layout whitelist. The 2023 U-Boot tree it builds was the base of the rejected earlier candidate.",
+        "status": "rejected-evidence-only"
+      }
+    ],
     "build_entry": "build.sh",
     "build_env": {
       "SOC": "mt7981",
       "BOARD": "h3c_magic-nx30-pro",
+      "VERSION": "SP1",
+      "VARIANT": "default",
       "FIXED_MTDPARTS": "1",
-      "MULTI_LAYOUT": "0"
+      "MULTI_LAYOUT": "1",
+      "SIMG": "0",
+      "UBIMNG": "0",
+      "TELNETD": "0",
+      "NAND_RAW": "0",
+      "FSTHEME": "bootstrap",
+      "COPY_BL2": "1",
+      "FIP_COMPRESS": "0",
+      "SILENT": "Y"
     },
     "build_env_notes": {
-      "MULTI_LAYOUT": "No mt7981_h3c_magic-nx30-pro_multi_layout_defconfig exists upstream, so the multi layout variant cannot be built for this board.",
-      "FIXED_MTDPARTS": "build.sh defaults to fixed mtd parts for NAND. The resulting file name suffix -fixed-parts comes from CONFIG_MTK_FIXED_MTD_MTDPARTS, which forces the compile time partition table and blocks user changes to it.",
-      "MEDIATEK_UBI_FIXED_MTDPARTS": "build.sh also appends CONFIG_MEDIATEK_UBI_FIXED_MTDPARTS=y, but no such Kconfig symbol exists in the locked U-Boot tree, so olddefconfig discards it. The suffix does not depend on it."
-    },
-    "reference_release": {
-      "tag": "20241115",
-      "commit": "15ad0ed949043bcbbcb5ef501ba156b1f25e676f",
-      "note": "Release quoted by upstream issue #106 as the boot loader used in a field test. Its U-Boot board defconfig is byte identical to the locked commit; it used the older ATF tree atf-20231013-0ea67d76a. It is a lead, not proof of 112M layout compatibility."
+      "MULTI_LAYOUT": "MULTI_LAYOUT=1 makes build.sh use configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig, which enables CONFIG_MEDIATEK_MULTI_MTD_LAYOUT and carries no CONFIG_MTDPARTS_DEFAULT: the partition table then comes from the /mtd-layout node of the board device tree.",
+      "FIXED_MTDPARTS": "build.sh appends CONFIG_MEDIATEK_UBI_FIXED_MTDPARTS=y and CONFIG_MTK_FIXED_MTD_MTDPARTS=y. Upstream refuses MULTI_LAYOUT=1 together with FIXED_MTDPARTS=0, so the locked combination is the only supported one.",
+      "SILENT": "SILENT=Y answers the interactive fallback prompts of build.sh so that a missing multi layout defconfig fails the build instead of silently downgrading to the single layout defconfig.",
+      "VARIANT": "VARIANT=default keeps the raw mtd layout of this board. The ubootmod, ubi and openwrt variants force FIXED_MTDPARTS=0 and therefore cannot carry the multi layout whitelist."
     }
   },
   "toolchain": {
@@ -54,7 +90,7 @@
     "checksum": "UNRESOLVED",
     "capture": "The build report records the compiler path, the compiler version, the SHA-256 of the compiler binary (compiler_sha256), the dpkg package version and the apt candidate version of gcc-aarch64-linux-gnu. Upstream ships no toolchain checksum, so this record is the only evidence of the toolchain that produced the images.",
     "note": "The upstream build script uses the host cross toolchain found on PATH. A different compiler revision changes the produced bytes, so a rebuild is only comparable when the recorded toolchain matches. The workflow installs the package from the distribution repository, so the recorded identity is the input that a rebuild has to repeat.",
-    "reproducibility_acceptance": "Two clean runner builds from the same lock (Actions runs 45562479770 and 45562763520) produced different hashes with an identical toolchain identity. The difference is the embedded build timestamp: 33 bytes in the BL2 image and 3 bytes in the FIP image. Byte identical rebuilds stay open until the timestamps are fixed."
+    "reproducibility_acceptance": "UNRESOLVED for this source. The earlier hanwckf based candidate produced different hashes on two clean runner builds because of an embedded build timestamp; the same question has to be answered again for this fork, whose artifact names also embed an md5 of the image."
   },
   "host_packages": [
     "build-essential",
@@ -63,25 +99,36 @@
     "bison",
     "libssl-dev",
     "python3",
-    "gcc-aarch64-linux-gnu"
+    "gcc-aarch64-linux-gnu",
+    "npm"
   ],
+  "host_package_notes": {
+    "npm": "build.sh runs 'npm install' inside uboot-mtk-20250711/failsafe/embedded and minifies the web failsafe assets before it compiles U-Boot. Without npm the build stops in the environment check.",
+    "gcc-aarch64-linux-gnu": "build.sh selects TOOLCHAIN_AARCH64 for every SoC except mt7629 and requires ${TOOLCHAIN}gcc on PATH."
+  },
   "board": {
     "soc": "mt7981",
-    "board": "h3c_magic-nx30-pro",
-    "atf_defconfig": "atf-20240117-bacca82a8/configs/mt7981_h3c_magic-nx30-pro_defconfig",
-    "uboot_defconfig": "uboot-mtk-20230718-09eda825/configs/mt7981_h3c_magic-nx30-pro_defconfig",
-    "uboot_dts": "uboot-mtk-20230718-09eda825/arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts",
+    "name": "h3c_magic-nx30-pro",
+    "defconfig": "configs/mt7981_h3c_magic-nx30-pro_defconfig",
+    "multi_layout_defconfig": "configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig",
+    "atf_defconfig": "configs/mt7981_h3c_magic-nx30-pro_defconfig",
+    "dts": "arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts",
+    "tree_note": "defconfig, multi_layout_defconfig and dts are paths inside uboot-mtk-20250711; atf_defconfig is a path inside atf-20240117-bacca82a8.",
     "memory_bytes": 268435456,
     "boot_media": "spim-nand",
     "nand_flash": "UNRESOLVED",
     "dram_type": "UNRESOLVED",
-    "dram_note": "The ATF DRAM initialisation is a prebuilt MediaTek object. emicfg.c prints 'EMI: Using DDR3/DDR4 settings' at run time and the compile time flag DRAM_USE_DDR4 is not set. The concrete DDR type and density must be read from the device boot log.",
-    "boot_media_note": "The board device tree enables spi_nand on spi0 and sets bl2_verify compatible = spim-nand, so the BL2 image is verified against the SPI-NAND boot medium."
+    "dram_note": "The ATF DRAM initialisation is a prebuilt MediaTek object. The concrete DDR type and density must be read from the device boot log of this fork, the value recorded for the earlier candidate is not carried over.",
+    "boot_media_note": "The board device tree enables spi_nand on spi0 and carries a bl2_verify node with bl2_compatible = \"spim-nand\", so the BL2 image is verified against the SPI-NAND boot medium."
+  },
+  "features": {
+    "status": "UNRESOLVED",
+    "note": "Task 3 of the U-Boot plan records the enabled and disabled feature symbols together with the effective configuration check."
   },
   "partition_contract": {
-    "source_repository": "jerryhan77/immortalwrt-mt798x",
-    "source_commit": "78cf22edddf07443d8f0506c9f361d3498475189",
-    "source_file": "target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts",
+    "source_repository": "Yuzhii0718/bl-mt798x-dhcpd",
+    "source_commit": "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4",
+    "source_file": "uboot-mtk-20250711/arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts, /mtd-layout/layout@1 (label immortalwrt-112m)",
     "unit": "bytes",
     "partitions": [
       {
@@ -113,20 +160,20 @@
     "ubi_end_offset": 123207680,
     "trailing_logical_space_bytes": 2621440,
     "trailing_logical_space_status": "derived-not-measured",
-    "trailing_logical_space_note": "The 112M device tree stops at 0x7580000 and defines no partition behind it. The upstream stock layout ends at 0x7800000, which is 122880 KiB in total. The remaining 2.5 MiB is therefore derived from the two source tables and not measured: the NMBM driver reports the available size from the block count of the loaded mapping, so the real capacity of a device can be smaller. The required logical end 0x7580000 is fixed; the observed logical capacity has to be at least that large, which stays UNRESOLVED until the device is read.",
+    "trailing_logical_space_note": "The 112M layout of the pinned device tree ends at 0x7580000 and defines no partition behind it. The stock layout of the same device tree ends at 0x7800000, which is 122880 KiB in total. The remaining 2.5 MiB is therefore derived from the two source tables and not measured: the NMBM driver reports the available size from the block count of the loaded mapping, so the real capacity of a device can be smaller. The required logical end 0x7580000 is fixed; the observed logical capacity has to be at least that large, which stays UNRESOLVED until the device is read.",
     "address_space": "nmbm-logical",
     "address_space_note": "All offsets are addresses inside the NMBM logical space that the boot loader and the system expose. They are not physical NAND addresses and must not be used as such."
   },
   "compatibility": {
     "layout_matches_upstream_stock": false,
     "upstream_stock_mtdparts": "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)",
-    "upstream_stock_source": "uboot-mtk-20230718-09eda825/configs/mt7981_h3c_magic-nx30-pro_defconfig CONFIG_MTDPARTS_DEFAULT, identical in the 20241115 release",
+    "upstream_stock_source": "uboot-mtk-20250711/arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts, /mtd-layout/layout@0 (label default), identical to CONFIG_MTDPARTS_DEFAULT of the single layout defconfig",
     "mismatches": [
       {
         "partition": "ubi",
         "upstream_stock_size_bytes": 67108864,
         "required_size_bytes": 117440512,
-        "impact": "The stock boot loader would treat the 112 MiB UBI area as a 64 MiB partition and could not install the 108 MiB factory image of the selected system."
+        "impact": "The stock layout would treat the 112 MiB UBI area as a 64 MiB partition and could not install the factory image of the 112M system."
       },
       {
         "partition": "pdt_data",
@@ -138,7 +185,7 @@
         "partition": "pdt_data_1",
         "upstream_stock_size_bytes": 6291456,
         "required_size_bytes": 0,
-        "impact": "Same as pdt_data."
+        "impact": "Same as pdt_data. The paired firmware has to read the WAN MAC without it."
       },
       {
         "partition": "exp",
@@ -154,30 +201,31 @@
       }
     ],
     "minimal_device_patch": {
-      "target": "uboot-mtk-20230718-09eda825/configs/mt7981_h3c_magic-nx30-pro_defconfig",
-      "action": "replace CONFIG_MTDPARTS_DEFAULT with the 112M partition table",
+      "target": "uboot-mtk-20250711/arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts",
+      "action": "none-required-for-the-partition-tables",
       "value": "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),114688k(ubi)",
       "scope": "device-local build input only; the upstream tree stays unmodified in the source lock",
-      "rationale": "BL2, u-boot-env, Factory and FIP keep the offsets and sizes of the partition contract. Only the UBI partition grows to 114688k (112 MiB) and the four OEM partitions are dropped, because the selected system layout does not define them. No parameter of another device is reused."
+      "rationale": "The pinned device tree already carries both required layouts: label default with the stock table and label immortalwrt-112m with the 112 MiB UBI table. No partition table has to be patched in. The remaining device patch of this build selects immortalwrt-112m as the default layout and disables the dangerous web failsafe features."
     },
-    "mtd_layout_note": "The upstream stock layout is also the layout of the system device tree mt7981-h3c-nx30pro.dts of the same source commit, with a 64 MiB UBI partition and the same four OEM partitions. The stock boot loader and the stock system therefore agree with each other and both disagree with the 112M layout."
+    "mtd_layout_note": "Both layouts live in the same pinned device tree, so the boot loader and the stock system agree on bl2, u-boot-env, Factory and fip and differ only in the UBI area and the four OEM partitions behind it."
   },
   "nmbm": {
     "enabled": true,
     "u_boot_config": "CONFIG_ENABLE_NAND_NMBM=y",
-    "system_binding": "compatible = generic,nmbm with forced-create on the nmbm_spim_nand node",
+    "system_binding": "UNRESOLVED",
     "max_ratio": 1,
     "max_reserved_blocks": 256,
-    "geometry_matches_across_bootloader_and_system": true,
-    "note": "Both sides use the same defaults: 1/16 of the blocks reserved for management, at most 256 blocks. The U-Boot side reads them from CONFIG_NMBM_MAX_RATIO and CONFIG_NMBM_MAX_BLOCKS, the system side from the NMBM_MAX_RATIO_DEFAULT and NMBM_MAX_BLOCKS_DEFAULT of the kernel driver. The logical to physical mapping therefore matches."
+    "evidence_source": "uboot-mtk-20250711/board/mediatek/Kconfig: NMBM_MAX_RATIO defaults to 1 and NMBM_MAX_BLOCKS defaults to 256 under ENABLE_NAND_NMBM; the board defconfigs do not override either value.",
+    "geometry_matches_across_bootloader_and_system": "UNRESOLVED",
+    "note": "The bootloader side of the geometry is verified in the pinned tree. The system side belongs to the firmware source, which is not locked yet, so the comparison stays unresolved instead of being asserted."
   },
   "web_failsafe": {
     "enabled": true,
     "u_boot_config": "CONFIG_MTK_WEB_FAILSAFE=y, CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE=y",
     "url": "http://192.168.1.1/",
     "port": 80,
-    "address_source": "CONFIG_IPADDR=\"192.168.1.1\" and CONFIG_NETMASK=\"255.255.255.0\" in the board defconfig, exposed as the default ipaddr environment variable",
-    "entry": "The boot menu item 'Start Web failsafe' runs the httpd command. With CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE the httpd is started automatically when mtkboardboot cannot boot a system.",
+    "address_source": "CONFIG_IPADDR=\"192.168.1.1\" and CONFIG_NETMASK=\"255.255.255.0\" in the board defconfigs, exposed as the default ipaddr environment variable",
+    "entry": "The boot menu item for the web failsafe runs the httpd; with CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE the httpd also starts automatically when mtkboardboot cannot boot a system.",
     "bootloader_uploads": [
       "bl2",
       "fip"
@@ -188,32 +236,44 @@
     ],
     "fip_target_partition": "fip",
     "bl2_target_partition": "bl2",
-    "write_behaviour": "Both images are written with read back verification into the partition of the same name.",
+    "partition_name_source": "uboot-mtk-20250711/board/mediatek/common/bootmenu_common.h defines PART_BL2_NAME \"bl2\" and PART_FIP_NAME \"fip\".",
+    "upload_handler_source": "uboot-mtk-20250711/failsafe/modules/upgrade.c accepts the form fields gpt, fip, bl2, firmware, simg, factory and initramfs. The gpt, simg and factory uploads belong to features this build disables.",
+    "write_behaviour": "UNRESOLVED until the effective configuration and a device test confirm the read back verification of this fork.",
     "image_verification": {
       "bl2": true,
       "fip": false,
       "firmware": false
     },
-    "verification_note": "CONFIG_MTK_UPGRADE_BL2_VERIFY is enabled and the device tree carries a bl2_verify node, so a BL2 upload is checked before it is written. CONFIG_MTK_UPGRADE_FIP_VERIFY and CONFIG_MTK_UPGRADE_IMAGE_VERIFY are disabled, so a FIP upload is only verified by reading it back after writing."
+    "verification_note": "CONFIG_MTK_UPGRADE_BL2_VERIFY is set in the board defconfigs and the device tree carries a bl2_verify node, so a BL2 upload is checked before it is written. CONFIG_MTK_UPGRADE_IMAGE_VERIFY is explicitly unset in the board defconfigs; CONFIG_MTK_UPGRADE_FIP_VERIFY exists in board/mediatek/Kconfig and is not set by the board defconfigs, so a FIP upload is only verified by reading it back after writing."
   },
   "artifacts": {
-    "fip": "output/mt7981_h3c_magic-nx30-pro-fip-fixed-parts.bin",
-    "bl2": "output/mt7981_h3c_magic-nx30-pro-bl2.bin",
-    "note": "The boot loader project emits the FIP package and the BL2 preloader separately. Neither file is a system image and neither is a recovery image on its own."
+    "fip": {
+      "directory": "output",
+      "pattern": "fip-mt7981_h3c_magic-nx30-pro_SP1-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-*.bin",
+      "role": "atf-fip",
+      "target_partition": "fip"
+    },
+    "bl2": {
+      "directory": "output",
+      "pattern": "bl2-mt7981_h3c_magic-nx30-pro_SP1_md5-*.img",
+      "role": "atf-bl2",
+      "target_partition": "bl2"
+    },
+    "note": "build.sh names both images with the md5 of the image itself, so the names change with every rebuild. The lock therefore records the name pattern of the locked BOARD/VERSION/VARIANT/FIXED_MTDPARTS/MULTI_LAYOUT combination, and the build has to resolve the pattern against the real output directory. Neither file is a system image and neither is a recovery image on its own."
   },
   "system_dependencies": [
     {
       "topic": "WAN MAC source of the selected system",
-      "source": "jerryhan77/immortalwrt-mt798x target/linux/mediatek/mt7981/base-files/etc/board.d/02_network, case h3c,nx30pro",
-      "detail": "The selected system reads the WAN MAC with mtd_get_mac_ascii from the pdt_data_1 partition (key ethaddr) and derives the LAN MAC from it.",
-      "impact": "The 112M partition contract has no pdt_data_1 partition, so the system cannot read the WAN MAC on this layout. The MAC provisioning of the paired system has to be solved before the layout is used.",
+      "source": "UNRESOLVED: the firmware source of the redesign is not locked yet",
+      "detail": "The earlier candidate read the WAN MAC with mtd_get_mac_ascii from the pdt_data_1 partition (key ethaddr), which the 112M layout does not define.",
+      "impact": "The paired firmware has to read the WAN MAC without pdt_data_1 and without writing to the Factory partition.",
       "status": "UNRESOLVED"
     },
     {
-      "topic": "Wi-Fi MAC write of the selected system",
-      "source": "jerryhan77/immortalwrt-mt798x target/linux/mediatek/mt7981/base-files/etc/board.d/02_network, case h3c,nx30pro",
-      "detail": "When the first two bytes at offset 4 of the Factory partition are 00-0c, the system writes a MAC derived from the WAN MAC into the Factory partition at offset 4.",
-      "impact": "The first boot of the selected system can modify the factory data area, so the factory area has to be backed up before the system is started.",
+      "topic": "Wi-Fi MAC and calibration data of the selected system",
+      "source": "UNRESOLVED: the firmware source of the redesign is not locked yet",
+      "detail": "The earlier candidate wrote a derived MAC into the Factory partition on first boot when the first two bytes at offset 4 were 00-0c.",
+      "impact": "A first boot that modifies the factory data area has to be ruled out before the layout is used, and the Factory partition has to be backed up first.",
       "status": "UNRESOLVED"
     }
   ],
@@ -226,7 +286,12 @@
     {
       "topic": "DDR type and density",
       "status": "UNRESOLVED",
-      "needed": "Device boot log line 'EMI: Using DDRx settings'"
+      "needed": "Device boot log line of the SP1 ATF of this fork"
+    },
+    {
+      "topic": "Boot compatibility of the SP1 ATF pairing with the 5.4 firmware",
+      "status": "UNRESOLVED",
+      "needed": "A device boot with the paired firmware; upstream documentation is a lead, not proof"
     },
     {
       "topic": "Use of the 2.5 MiB behind the 112 MiB UBI partition",
@@ -244,19 +309,14 @@
       "needed": "Build report of the first successful build"
     },
     {
+      "topic": "Byte identical rebuilds of the boot loader images",
+      "status": "UNRESOLVED",
+      "needed": "A fixed build timestamp that the upstream build honours, or an accepted difference record"
+    },
+    {
       "topic": "Boot behaviour, recovery entry and MAC handling on real hardware",
       "status": "UNRESOLVED",
       "needed": "Device test with the candidate image"
-    },
-    {
-      "topic": "Byte identical rebuilds of the boot loader images",
-      "status": "UNRESOLVED",
-      "needed": "A fixed build timestamp (for example SOURCE_DATE_EPOCH) that the upstream build honours, or an accepted difference record"
-    },
-    {
-      "topic": "Whether the candidate boot loader boots the 108 MiB factory image of the selected system",
-      "status": "UNRESOLVED",
-      "needed": "Device test after the partition layout is confirmed"
     }
   ]
 }

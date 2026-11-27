@@ -13,6 +13,7 @@ BL2 preloader by the SPI-NAND boot header that the U-Boot itself checks.
 """
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import re
@@ -25,13 +26,27 @@ from pathlib import Path
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
-EXPECTED_REPOSITORY = "https://github.com/hanwckf/bl-mt798x"
+# The status code the repository uses for a target that is not build ready,
+# the same code tools/manifest.py returns for an unresolved manifest.
+BUILD_NOT_READY = 3
+
+EXPECTED_REPOSITORY = "https://github.com/Yuzhii0718/bl-mt798x-dhcpd"
+REJECTED_REPOSITORY = "https://github.com/hanwckf/bl-mt798x"
 EXPECTED_SOC = "mt7981"
 EXPECTED_BOARD = "h3c_magic-nx30-pro"
 
-# The trees that the pinned upstream build script really builds.
-EXPECTED_UBOOT_TREE = "uboot-mtk-20230718-09eda825"
+# The trees that the pinned upstream build script really builds for VERSION=SP1.
+EXPECTED_UBOOT_TREE = "uboot-mtk-20250711"
 EXPECTED_ATF_TREE = "atf-20240117-bacca82a8"
+EXPECTED_VERSION = "SP1"
+
+# Host tools the pinned build script requires before it compiles anything.
+REQUIRED_HOST_PACKAGES = (
+    "build-essential",
+    "python3",
+    "gcc-aarch64-linux-gnu",
+    "npm",
+)
 
 # The partition contract of the selected system, from the device tree of
 # jerryhan77/immortalwrt-mt798x at the locked commit. The offsets are NMBM
@@ -48,8 +63,6 @@ EXPECTED_MTDPARTS = (
     "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),114688k(ubi)"
 )
 
-EXPECTED_FIP_ARTIFACT = "mt7981_h3c_magic-nx30-pro-fip-fixed-parts.bin"
-EXPECTED_BL2_ARTIFACT = "mt7981_h3c_magic-nx30-pro-bl2.bin"
 
 TOC_HEADER_NAME = 0xAA640001
 TOC_HEADER = struct.Struct("<IIQ")
@@ -149,11 +162,54 @@ def validate_lock(lock):
             "the build must use fixed mtd parts, the lock sets FIXED_MTDPARTS=%r"
             % (build_env.get("FIXED_MTDPARTS"),)
         )
-    if str(build_env.get("MULTI_LAYOUT")) != "0":
+    if str(build_env.get("MULTI_LAYOUT")) != "1":
         errors.append(
-            "this board has no multi layout defconfig, the lock sets MULTI_LAYOUT=%r"
-            % (build_env.get("MULTI_LAYOUT"),)
+            "the locked layout whitelist needs the multi layout defconfig, "
+            "the lock sets MULTI_LAYOUT=%r" % (build_env.get("MULTI_LAYOUT"),)
         )
+
+    version = source.get("version")
+    if version == "UNRESOLVED":
+        errors.append(
+            "the boot loader version is UNRESOLVED: select 2025, SP1 or SP2 from "
+            "evidence before the build may start"
+        )
+    elif version != EXPECTED_VERSION:
+        errors.append(
+            "the lock selects boot loader version %r, the trees it names are "
+            "built by version %s" % (version, EXPECTED_VERSION)
+        )
+    if build_env.get("VERSION") != version:
+        errors.append(
+            "the build environment selects version %r, the lock records %r"
+            % (build_env.get("VERSION"), version)
+        )
+    selection = source.get("version_selection") or {}
+    if selection.get("selected") != version:
+        errors.append(
+            "the recorded version selection does not select %r" % (version,)
+        )
+    if selection.get("atf_tree") != EXPECTED_ATF_TREE:
+        errors.append(
+            "the version selection does not name the ATF tree %s"
+            % (EXPECTED_ATF_TREE,)
+        )
+    if selection.get("uboot_tree") != EXPECTED_UBOOT_TREE:
+        errors.append(
+            "the version selection does not name the U-Boot tree %s"
+            % (EXPECTED_UBOOT_TREE,)
+        )
+
+    board = lock.get("board") or {}
+    if board.get("soc") != EXPECTED_SOC or board.get("name") != EXPECTED_BOARD:
+        errors.append(
+            "board mismatch: the lock describes board %r/%r, this build only "
+            "supports %s/%s"
+            % (board.get("soc"), board.get("name"), EXPECTED_SOC, EXPECTED_BOARD)
+        )
+    for key in ("defconfig", "multi_layout_defconfig", "dts"):
+        if not board.get(key):
+            errors.append("the board description does not name its %s" % key)
 
     contract = lock.get("partition_contract") or {}
     actual = [
@@ -178,19 +234,35 @@ def validate_lock(lock):
         )
 
     artifacts = lock.get("artifacts") or {}
-    if not artifacts.get("fip"):
-        errors.append("image type not confirmed: the lock names no FIP artifact")
-    elif EXPECTED_FIP_ARTIFACT not in str(artifacts["fip"]):
+    for kind, suffix in (("fip", ".bin"), ("bl2", ".img")):
+        entry = artifacts.get(kind) or {}
+        pattern = entry.get("pattern") if isinstance(entry, dict) else None
+        if not pattern:
+            errors.append("image type not confirmed: the lock names no %s artifact" % kind.upper())
+            continue
+        if not pattern.endswith(suffix):
+            errors.append(
+                "image type not confirmed: the %s artifact pattern %r is not a %s file"
+                % (kind.upper(), pattern, suffix)
+            )
+        if "*" not in pattern:
+            errors.append(
+                "image type not confirmed: the %s artifact pattern %r does not account "
+                "for the build digest the upstream build script embeds in the name"
+                % (kind.upper(), pattern)
+            )
+        if EXPECTED_BOARD not in pattern:
+            errors.append(
+                "image type not confirmed: the %s artifact pattern %r is not an artifact "
+                "of this board" % (kind.upper(), pattern)
+            )
+
+    host_packages = lock.get("host_packages") or []
+    missing = [package for package in REQUIRED_HOST_PACKAGES if package not in host_packages]
+    if missing:
         errors.append(
-            "image type not confirmed: the lock names an unexpected FIP artifact %r"
-            % (artifacts["fip"],)
-        )
-    if not artifacts.get("bl2"):
-        errors.append("image type not confirmed: the lock names no BL2 artifact")
-    elif EXPECTED_BL2_ARTIFACT not in str(artifacts["bl2"]):
-        errors.append(
-            "image type not confirmed: the lock names an unexpected BL2 artifact %r"
-            % (artifacts["bl2"],)
+            "the lock does not record the host packages the pinned build script "
+            "requires: %s" % ", ".join(missing)
         )
 
     toolchain = lock.get("toolchain") or {}
@@ -205,6 +277,33 @@ def validate_lock(lock):
     return errors
 
 
+def artifact_pattern(lock, kind):
+    """Return the locked name pattern of one boot loader artifact."""
+    artifacts = lock.get("artifacts") or {}
+    entry = artifacts.get(kind) or {}
+    if not isinstance(entry, dict) or not entry.get("pattern"):
+        raise LockError("the lock names no %s artifact" % kind.upper())
+    return entry["pattern"]
+
+
+def match_artifact_name(lock, kind, filename):
+    """Resolve one produced file name against the locked artifact pattern.
+
+    The upstream build script embeds the md5 of the image in its name, so the
+    lock records a pattern. A name that does not match is either an artifact of
+    another board, version or variant, or a system image that must never be
+    published as a boot loader image.
+    """
+    pattern = artifact_pattern(lock, kind)
+    name = Path(str(filename)).name
+    if not fnmatch.fnmatchcase(name, pattern):
+        raise ArtifactError(
+            "the produced %s image %r does not match the locked artifact pattern %r"
+            % (kind.upper(), name, pattern)
+        )
+    return name
+
+
 def render_plan(lock):
     source = lock["source"]
     contract = lock["partition_contract"]
@@ -215,8 +314,11 @@ def render_plan(lock):
         "source_commit": source.get("commit"),
         "atf_tree": source.get("atf_tree"),
         "uboot_tree": source.get("uboot_tree"),
+        "version": source.get("version"),
         "build_env": source.get("build_env"),
+        "board": lock.get("board"),
         "toolchain": lock.get("toolchain"),
+        "host_packages": lock.get("host_packages"),
         "partition_table": contract.get("partitions"),
         "artifacts": lock.get("artifacts"),
     }
@@ -577,13 +679,17 @@ def preflight(lock, source_dir):
     }
 
 
+def report_lock_errors(errors):
+    for error in errors:
+        print("Error: %s" % error, file=sys.stderr)
+    return BUILD_NOT_READY
+
+
 def command_check(args):
     lock = load_lock(args.lock)
     errors = validate_lock(lock)
     if errors:
-        for error in errors:
-            print("Error: %s" % error, file=sys.stderr)
-        return 1
+        return report_lock_errors(errors)
     print(json.dumps(render_plan(lock), indent=2, sort_keys=True))
     return 0
 
@@ -599,9 +705,7 @@ def command_patch(args):
     lock = load_lock(args.lock)
     errors = validate_lock(lock)
     if errors:
-        for error in errors:
-            print("Error: %s" % error, file=sys.stderr)
-        return 1
+        return report_lock_errors(errors)
     result = apply_device_patch(args.source_dir, lock)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
@@ -638,9 +742,7 @@ def command_report(args):
     lock = load_lock(args.lock)
     errors = validate_lock(lock)
     if errors:
-        for error in errors:
-            print("Error: %s" % error, file=sys.stderr)
-        return 1
+        return report_lock_errors(errors)
     artifacts = []
     for spec in args.artifact:
         kind, path, partition, size = spec.split(":", 3)
@@ -718,7 +820,7 @@ def main(argv=None):
         return args.handler(args)
     except (LockError, ArtifactError) as error:
         print("Error: %s" % error, file=sys.stderr)
-        return 1
+        return BUILD_NOT_READY
 
 
 if __name__ == "__main__":

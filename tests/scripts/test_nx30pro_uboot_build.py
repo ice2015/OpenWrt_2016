@@ -25,6 +25,14 @@ SCRIPT = BUILD_DIR / "build-uboot.sh"
 HELPER = BUILD_DIR / "uboot_lock.py"
 LOCK = ROOT / "devices" / "nx30pro" / "uboot" / "uboot-source-lock.json"
 
+SOURCE_REPOSITORY = "https://github.com/Yuzhii0718/bl-mt798x-dhcpd"
+SOURCE_COMMIT = "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4"
+REJECTED_REPOSITORY = "https://github.com/hanwckf/bl-mt798x"
+
+# `check` reports a lock that is not build ready with the repository wide
+# build-not-ready status, the same code tools/manifest.py uses.
+BUILD_NOT_READY = 3
+
 TOC_HEADER_NAME = 0xAA640001
 BL31_UUID = bytes.fromhex("47d4086d4cfe98469b952950cbbd5a00")
 BL33_UUID = bytes.fromhex("d6d0eea7fcead54b97829934f234b6e4")
@@ -67,27 +75,55 @@ class Nx30ProUbootBuildGateTests(unittest.TestCase):
         result = run_check(LOCK)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("h3c_magic-nx30-pro", result.stdout)
-        self.assertIn("36916669d0874306638196c5327a20c2ef215bed", result.stdout)
+        self.assertIn(SOURCE_COMMIT, result.stdout)
+        self.assertIn(SOURCE_REPOSITORY, result.stdout)
 
     def test_missing_commit_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock = write_lock(tmp, **{"source.commit": None})
             result = run_check(lock)
-        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
         self.assertIn("commit", result.stderr)
 
     def test_branch_name_instead_of_commit_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock = write_lock(tmp, **{"source.commit": "master"})
             result = run_check(lock)
-        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
         self.assertIn("commit", result.stderr)
+
+    def test_the_old_boot_loader_repository_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(
+                tmp,
+                **{
+                    "source.repository": REJECTED_REPOSITORY,
+                    "source.commit": "36916669d0874306638196c5327a20c2ef215bed",
+                },
+            )
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn(SOURCE_REPOSITORY, result.stderr)
+
+    def test_an_unresolved_version_blocks_build_readiness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(tmp, **{"source.version": "UNRESOLVED"})
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("version", result.stderr.lower())
+
+    def test_a_version_that_does_not_match_the_locked_trees_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(tmp, **{"source.version": "2025"})
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("version", result.stderr.lower())
 
     def test_wrong_board_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock = write_lock(tmp, **{"source.build_env.BOARD": "wr30u"})
             result = run_check(lock)
-        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
         self.assertIn("board", result.stderr.lower())
 
     def test_layout_mismatch_is_rejected(self):
@@ -123,15 +159,55 @@ class Nx30ProUbootBuildGateTests(unittest.TestCase):
                     "source.uboot_tree": "uboot-mtk-20220606",
                     "source.vendored_trees": {
                         "uboot-mtk-20220606": {
-                            "revision": "36916669d0874306638196c5327a20c2ef215bed",
+                            "revision": SOURCE_COMMIT,
                             "kind": "vendored-in-upstream-repository",
                         }
                     },
                 },
             )
             result = run_check(lock)
-        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
         self.assertIn("tree", result.stderr.lower())
+
+
+class Nx30ProUbootArtifactNameTests(unittest.TestCase):
+    """The pinned build script embeds an md5 in every artifact name.
+
+    A lock that stored one fixed file name would describe a build that can
+    never be reproduced, so the helper matches the recorded pattern instead.
+    """
+
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+
+    def test_the_recorded_fip_and_bl2_names_are_accepted(self):
+        fip = "fip-mt7981_h3c_magic-nx30-pro_SP1-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-%s.bin" % (
+            "a" * 32
+        )
+        bl2 = "bl2-mt7981_h3c_magic-nx30-pro_SP1_md5-%s.img" % ("b" * 32)
+        self.assertEqual(fip, self.helper.match_artifact_name(self.lock, "fip", fip))
+        self.assertEqual(bl2, self.helper.match_artifact_name(self.lock, "bl2", bl2))
+
+    def test_a_name_of_another_version_or_variant_is_rejected(self):
+        wrong_version = "fip-mt7981_h3c_magic-nx30-pro_2025-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-%s.bin" % (
+            "a" * 32
+        )
+        with self.assertRaises(Exception):
+            self.helper.match_artifact_name(self.lock, "fip", wrong_version)
+
+    def test_a_system_image_cannot_be_labelled_a_boot_loader_image(self):
+        sysupgrade = "immortalwrt-21.02.7-mediatek-mt7981-h3c_nx30pro_112M-sysupgrade.bin"
+        with self.assertRaises(Exception):
+            self.helper.match_artifact_name(self.lock, "fip", sysupgrade)
+        with self.assertRaises(Exception):
+            self.helper.match_artifact_name(self.lock, "bl2", sysupgrade)
+
+    def test_a_fixed_name_without_the_build_digest_is_rejected(self):
+        with self.assertRaises(Exception):
+            self.helper.match_artifact_name(
+                self.lock, "bl2", "bl2-mt7981_h3c_magic-nx30-pro_SP1.img"
+            )
 
     def test_script_refuses_to_flash_anything(self):
         text = SCRIPT.read_text(encoding="utf-8")
@@ -243,10 +319,7 @@ class Nx30ProUbootArtifactTests(unittest.TestCase):
             )
         for key in ("source_commit", "toolchain", "build_parameters", "partition_table", "artifacts"):
             self.assertIn(key, report)
-        self.assertEqual(
-            "36916669d0874306638196c5327a20c2ef215bed",
-            report["source_commit"],
-        )
+        self.assertEqual(SOURCE_COMMIT, report["source_commit"])
         self.assertEqual(64, len(report["toolchain"]["compiler_sha256"]))
         self.assertEqual(5, len(report["partition_table"]))
         for artifact in report["artifacts"]:
