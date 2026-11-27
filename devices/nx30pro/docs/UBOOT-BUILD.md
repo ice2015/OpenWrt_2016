@@ -108,8 +108,12 @@ UART、整机与分区的只读备份。关闭的功能：`CONFIG_WEBUI_FAILSAFE
 
 工作流 `.github/workflows/build-nx30pro-uboot.yml` 只有 `workflow_dispatch` 手动入口，
 `permissions: contents: read`，不使用 Secrets，不含任何刷写、擦除或设备命令。它的步骤是：
-安装锁中列出的主机依赖 → 运行仓库静态校验与锁门禁 → 克隆并检出锁定 commit →
+安装锁中列出的主机依赖 → 运行 `scripts/validate.sh`、**设备限定**的 NX30PRO U-Boot 测试
+与 workflow 合同测试、`uboot_lock.py check` 锁门禁 → 克隆并检出锁定 commit →
 调用上表的构建入口 → 仅在成功时上传候选产物，`if: always()` 上传日志。
+
+静态前置检查刻意不跑仓库全量套件：其他设备的测试状态不得决定本启动链能否构建，
+仓库全量检查由 `validate.yml` 承担。
 
 **触发该工作流需要用户单独、明确的授权。** 静态测试通过不等于构建成功，
 候选构建成功不等于真机可用。运行结果、run ID 与产物证据记录在

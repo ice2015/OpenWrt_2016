@@ -613,6 +613,23 @@ CONFIG_MTK_SERIAL=y
                     self.helper.verify_effective_config(self.enable(self.CONFIG, symbol), self.lock)
                 self.assertIn(symbol, str(caught.exception))
 
+    def test_a_configuration_without_the_patched_bootstrap_theme_is_rejected(self):
+        # The device patch adds the data loss warning to the bootstrap assets;
+        # another theme would ship a layout selector without any warning.
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_effective_config(
+                self.drop(self.CONFIG, "CONFIG_WEBUI_FAILSAFE_UI_BOOTSTRAP"), self.lock
+            )
+        self.assertIn("CONFIG_WEBUI_FAILSAFE_UI_BOOTSTRAP", str(caught.exception))
+
+    def test_a_configuration_without_the_advanced_gate_is_rejected(self):
+        # The read-only backup page lives behind WEBUI_FAILSAFE_ADVANCED.
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_effective_config(
+                self.drop(self.CONFIG, "CONFIG_WEBUI_FAILSAFE_ADVANCED"), self.lock
+            )
+        self.assertIn("CONFIG_WEBUI_FAILSAFE_ADVANCED", str(caught.exception))
+
     def test_a_configuration_that_lost_the_read_only_backup_is_rejected(self):
         text = self.enable(self.CONFIG, "CONFIG_WEBUI_FAILSAFE_FLASH")
         text = text.replace("CONFIG_WEBUI_FAILSAFE_BACKUP=y\n", "")
@@ -773,6 +790,28 @@ class Nx30ProUbootPatchContractTests(unittest.TestCase):
             self.verify(text)
         self.assertIn("immortalwrt-112m", str(caught.exception))
 
+    def test_a_patch_that_removes_the_custom_mtdparts_guard_is_rejected(self):
+        # A deletion changes the selector too: dropping the guard around
+        # mtd_layout_custom would hand back free-form mtdparts editing.
+        text = self.patch + '\n-\tif (custom_parts && custom_parts[0] && !custom_seen)\n'
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("mtdparts", str(caught.exception).lower())
+
+    def test_a_patch_that_removes_an_environment_write_is_rejected(self):
+        text = self.patch + '\n-\t\tenv_set(name, value);\n'
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("environment", str(caught.exception).lower())
+
+    def test_a_patch_that_removes_a_feature_guard_is_rejected(self):
+        for guard in ("CONFIG_WEBUI_FAILSAFE_CONSOLE", "CONFIG_MTK_TELNETD"):
+            text = self.patch + "\n-#ifdef %s\n" % guard
+            with self.subTest(guard=guard):
+                with self.assertRaises(Exception) as caught:
+                    self.verify(text)
+                self.assertIn(guard, str(caught.exception))
+
     def test_a_patch_that_does_not_warn_before_leaving_the_stock_layout_is_rejected(self):
         without_warning = "\n".join(
             line for line in self.patch.splitlines()
@@ -908,6 +947,8 @@ CONFIG_ENABLE_NAND_NMBM=y
 CONFIG_MTK_WEB_FAILSAFE=y
 CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE=y
 CONFIG_WEBUI_FAILSAFE=y
+CONFIG_WEBUI_FAILSAFE_UI_BOOTSTRAP=y
+CONFIG_WEBUI_FAILSAFE_ADVANCED=y
 CONFIG_WEBUI_FAILSAFE_BACKUP=y
 CONFIG_MTK_DHCPD=y
 CONFIG_MTK_UBI_SUPPORT=y

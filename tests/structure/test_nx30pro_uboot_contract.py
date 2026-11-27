@@ -297,9 +297,22 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertEqual(SOURCE_COMMIT, patch["applies_to_commit"])
         self.assertTrue(patch["purpose"].strip())
         touched = patch["upstream_files"]
-        self.assertTrue(touched)
+        # The list is pinned: a patch that silently grows to another upstream
+        # file (for example the failsafe upload handler) changes the recovery
+        # surface and has to be reviewed as a new patch.
+        self.assertEqual(
+            [
+                "uboot-mtk-20250711/board/mediatek/Kconfig",
+                "uboot-mtk-20250711/board/mediatek/common/mtd_layout.c",
+                "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_defconfig",
+                "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig",
+                "uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/index.html",
+                "uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/main.js",
+            ],
+            touched,
+        )
         for path in touched:
-            self.assertTrue(path.startswith("uboot-mtk-20250711/"), path)
+            self.assertTrue(path.startswith(UBOOT_TREE + "/"), path)
         self.assertTrue((ROOT / patch["path"]).is_file(), "missing device patch %s" % patch["path"])
 
     def test_lock_does_not_guess_toolchain_or_hardware_facts(self):
@@ -522,6 +535,18 @@ class Nx30ProUbootDocumentationTests(unittest.TestCase):
                 self.assertNotIn(claim, text, "%s claims %s" % (key, claim))
             for command in self.FORBIDDEN_COMMANDS:
                 self.assertNotIn(command, text, "%s contains %s" % (key, command))
+
+    def test_the_pre_flash_checklist_does_not_state_unverified_system_behaviour_as_fact(self):
+        text = self.text("recovery")
+        rows = [
+            line for line in text.splitlines()
+            if line.startswith("| \u7cfb\u7edf\u4fa7\u526f\u4f5c\u7528") or line.startswith("| MAC \u4f9b\u7ed9")
+        ]
+        self.assertEqual(2, len(rows), rows)
+        for row in rows:
+            # The paired firmware is not locked yet, so what it does to Factory
+            # and where it reads the WAN MAC from stays unresolved.
+            self.assertIn("UNRESOLVED", row)
 
     def test_the_test_report_records_only_what_actually_happened(self):
         text = self.text("report")

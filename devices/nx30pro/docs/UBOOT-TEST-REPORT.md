@@ -30,11 +30,20 @@
 
 | 命令 | 实际结果 |
 |---|---|
-| `python3 -m unittest tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build tests.workflows.test_workflows` | `Ran 126 tests ... OK` |
+| `python3 -m unittest tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build tests.workflows.test_workflows` | `Ran 132 tests ... OK`（复审修复后） |
 | `bash scripts/validate.sh` | 退出 0，输出 `Manifest catalog is valid.` |
-| `python3 -m unittest discover -s tests -v` | `Ran 506 tests ... FAILED (failures=30, skipped=13)` |
+| `python3 -m unittest discover -s tests -v` | `Ran 506 tests ... FAILED (failures=30, skipped=13)`（全量只在阶段末尾跑一次） |
+| `uboot_lock.py preflight --source-dir <锁定 commit 的只读克隆>` | 退出 0；输出 `version: SP1`、`uboot_tree: uboot-mtk-20250711`、`atf_tree: atf-20240117-bacca82a8`、`default_layout: immortalwrt-112m`，证明 `upstream_build_trees` 对**真实** `build.sh` 的 VERSION→树映射解析正确 |
 | `uboot_lock.py verify-layout-source --dts <锁定 commit 的真实设备树>` | 退出 0，只列出 `default` 与 `immortalwrt-112m` |
 | `uboot_lock.py verify-patch --source-dir <锁定 commit 的纯净检出>` | 退出 0，`git apply --check` 通过 |
+
+上述针对真实源码的三项检查使用的是 `e4cf4dc72d451dc7a86c9508390ad5a2e50743c4` 的
+只读 blob-filtered 克隆（未编译、未触发任何工作流）。
+
+注意：工作流的静态前置检查已改为**设备限定**（两个 NX30PRO U-Boot 测试模块 +
+workflow 合同测试），不再跑 `discover -s tests`：其他设备的测试状态不得决定本启动链
+能否构建，仓库全量套件由 `validate.yml` 负责。固件计划实施期间该目录里存在故意
+未通过的 RED 测试，这也是设备限定的原因之一。
 
 全量测试的 30 项失败全部是既存的 TR3000/Lite 失败，与本次改动无关：实施前在基线
 工作区（commit `2748192`）运行同一命令得到 `Ran 429 tests ... FAILED (failures=30,

@@ -93,6 +93,8 @@ REQUIRED_EFFECTIVE_SYMBOLS = (
     "CONFIG_MTK_WEB_FAILSAFE",
     "CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE",
     "CONFIG_WEBUI_FAILSAFE",
+    "CONFIG_WEBUI_FAILSAFE_UI_BOOTSTRAP",
+    "CONFIG_WEBUI_FAILSAFE_ADVANCED",
     "CONFIG_WEBUI_FAILSAFE_BACKUP",
     "CONFIG_MTK_UBI_SUPPORT",
     "CONFIG_MTK_UPGRADE_BL2_VERIFY",
@@ -851,7 +853,40 @@ def verify_patch(patch_text, lock, source_dir=None):
         line[1:] for line in text.splitlines()
         if line.startswith("+") and not line.startswith("+++")
     ]
+    removed = [
+        line[1:] for line in text.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
     errors = []
+
+    # A deletion changes the recovery surface as much as an addition does:
+    # removing the guard around the custom mtdparts entry, an environment write
+    # or the compile time gate of a dangerous page re-opens it without any
+    # symbol changing, so verify-config alone would not notice.
+    for line in removed:
+        stripped = line.strip()
+        if any(
+            token in stripped
+            for token in ("mtd_layout_custom", "MTD_LAYOUT_CUSTOM_ENV", "custom_parts")
+        ) or stripped.startswith("CONFIG_MTDPARTS_DEFAULT="):
+            errors.append(
+                "the device patch removes a guard of the free form mtdparts input, "
+                "the selector may only offer the locked layout whitelist"
+            )
+        if "env_set(" in stripped or "setenv " in stripped:
+            errors.append(
+                "the device patch removes an environment write, generic environment "
+                "editing is disabled on this device"
+            )
+        if stripped.startswith("#if") and (
+            "CONFIG_WEBUI_FAILSAFE_" in stripped or "CONFIG_MTK_TELNETD" in stripped
+        ):
+            symbol = re.search(r"CONFIG_[A-Za-z0-9_]+", stripped)
+            errors.append(
+                "the device patch removes the compile time guard of %s, which would "
+                "build the feature unconditionally"
+                % (symbol.group(0) if symbol else "a forbidden feature")
+            )
     default_layout = None
     disabled = []
     warns = False

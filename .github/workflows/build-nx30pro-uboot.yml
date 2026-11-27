@@ -46,8 +46,13 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash scripts/validate.sh
-          python3 -m unittest discover -s tests -p 'test_nx30pro*' -v
-          python3 -m unittest tests.workflows.test_workflows -v
+          # Device scoped on purpose: another device's test set must not decide
+          # whether this boot loader may be built. The repository wide suite runs
+          # in validate.yml.
+          python3 -m unittest \
+            tests.structure.test_nx30pro_uboot_contract \
+            tests.scripts.test_nx30pro_uboot_build \
+            tests.workflows.test_workflows -v
           python3 devices/nx30pro/build/uboot_lock.py check --lock "$UBOOT_LOCK" \
             | tee "$RUNNER_TEMP/uboot-build-plan.json"
           # The plan is the only description of what this job is allowed to build.

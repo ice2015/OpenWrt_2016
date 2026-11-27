@@ -139,7 +139,12 @@ class WorkflowContractTests(unittest.TestCase):
 
         build_at = workflow.index("devices/nx30pro/build/build-uboot.sh")
         validate_at = workflow.index("bash scripts/validate.sh")
-        tests_at = workflow.index("python3 -m unittest discover -s tests")
+        # The preflight is device scoped: another device's test set must not
+        # decide whether this boot loader may be built.
+        tests_at = workflow.index("tests.structure.test_nx30pro_uboot_contract")
+        self.assertIn("tests.scripts.test_nx30pro_uboot_build", workflow)
+        self.assertIn("tests.workflows.test_workflows", workflow)
+        self.assertNotIn("discover -s tests", workflow)
         self.assertLess(validate_at, build_at)
         self.assertLess(tests_at, build_at)
         # The static gate of the lock itself runs before any source is fetched.
