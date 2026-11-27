@@ -1,0 +1,173 @@
+diff --git a/uboot-mtk-20250711/board/mediatek/Kconfig b/uboot-mtk-20250711/board/mediatek/Kconfig
+index 3f7f213c..3074472a 100644
+--- a/uboot-mtk-20250711/board/mediatek/Kconfig
++++ b/uboot-mtk-20250711/board/mediatek/Kconfig
+@@ -331,6 +331,18 @@ config MEDIATEK_MTD_LAYOUT_PRINT
+ 	depends on MEDIATEK_MULTI_MTD_LAYOUT
+ 	default n
+ 
++config MTK_DEFAULT_MTD_LAYOUT
++	string "Default MTD layout label"
++	depends on MEDIATEK_MULTI_MTD_LAYOUT
++	default "default"
++	help
++	  Layout label that is used when the environment does not select one.
++	  The label has to exist in the /mtd-layout node of the board device
++	  tree; when it does not, the layout labelled "default" and otherwise the
++	  first layout of that node is used. A board whose shipped system needs
++	  another partition table than the stock one sets this to that label, so
++	  a device with an empty environment still boots the intended layout.
++
+ config MTD_LAYOUT_SPI_NAND
+ 	bool "Replace nmbm0 with spi-nand0 in MTD layout"
+ 	depends on MEDIATEK_MULTI_MTD_LAYOUT
+diff --git a/uboot-mtk-20250711/board/mediatek/common/mtd_layout.c b/uboot-mtk-20250711/board/mediatek/common/mtd_layout.c
+index 83bf89ec..70ae8ce2 100644
+--- a/uboot-mtk-20250711/board/mediatek/common/mtd_layout.c
++++ b/uboot-mtk-20250711/board/mediatek/common/mtd_layout.c
+@@ -12,6 +12,17 @@
+ #define MTD_LAYOUT_CUSTOM_LABEL	"custom"
+ #define MTD_LAYOUT_CUSTOM_ENV	"mtd_layout_custom"
+ 
++/*
++ * Label of the layout that is used when the environment selects none. A board
++ * overrides it with CONFIG_MTK_DEFAULT_MTD_LAYOUT; the label has to be one of
++ * the labels of the /mtd-layout node of the board device tree.
++ */
++#ifdef CONFIG_MTK_DEFAULT_MTD_LAYOUT
++#define MTD_LAYOUT_FALLBACK_LABEL	CONFIG_MTK_DEFAULT_MTD_LAYOUT
++#else
++#define MTD_LAYOUT_FALLBACK_LABEL	"default"
++#endif
++
+ #ifdef CONFIG_MTD_LAYOUT_SPI_NAND
+ static char mtd_layout_ids_buf[256];
+ static char mtd_layout_parts_buf[512];
+@@ -79,7 +90,7 @@ static ofnode ofnode_get_default_mtd_layout(void)
+ {
+ 	ofnode node, layout;
+ 
+-	layout = ofnode_get_mtd_layout("default");
++	layout = ofnode_get_mtd_layout(MTD_LAYOUT_FALLBACK_LABEL);
+ 	if (ofnode_valid(layout))
+ 		return layout;
+ 
+@@ -117,7 +128,7 @@ const char *get_mtd_layout_label(void)
+ 			layout_label = legacy_label;
+ 
+ 		if (!layout_label || !layout_label[0])
+-			layout_label = "default";
++			layout_label = MTD_LAYOUT_FALLBACK_LABEL;
+ 
+ 		if (!legacy_label || strcmp(legacy_label, layout_label))
+ 			env_set(MTD_LAYOUT_ENV_LEGACY, layout_label);
+@@ -132,7 +143,7 @@ const char *get_mtd_layout_label(void)
+ 	}
+ 
+ 	if (!layout_label)
+-		layout_label = "default";
++		layout_label = MTD_LAYOUT_FALLBACK_LABEL;
+ 
+ 	return layout_label;
+ }
+@@ -156,7 +167,7 @@ void board_mtdparts_default(const char **mtdids, const char **mtdparts)
+ 		if (custom_parts)
+ 			layout_node = ofnode_get_default_mtd_layout();
+ 		else
+-			layout_node = ofnode_get_mtd_layout("default");
++			layout_node = ofnode_get_mtd_layout(MTD_LAYOUT_FALLBACK_LABEL);
+ 	} else {
+ 		layout_node = ofnode_get_mtd_layout(layout_label);
+ 	}
+diff --git a/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_defconfig b/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_defconfig
+index 335d4f10..cd395c63 100644
+--- a/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_defconfig
++++ b/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_defconfig
+@@ -105,3 +105,14 @@ CONFIG_ENV_MTD_DEV="u-boot-env"
+ # CONFIG_I2C_SET_DEFAULT_BUS_NUM is not set
+ # CONFIG_PCIE_MEDIATEK is not set
+ # CONFIG_EFI_LOADER is not set
++CONFIG_WEBUI_FAILSAFE_ADVANCED=y
++CONFIG_WEBUI_FAILSAFE_BACKUP=y
++# CONFIG_WEBUI_FAILSAFE_FACTORY is not set
++# CONFIG_WEBUI_FAILSAFE_FLASH is not set
++# CONFIG_WEBUI_FAILSAFE_NAND_RAW is not set
++# CONFIG_WEBUI_FAILSAFE_CONSOLE is not set
++# CONFIG_WEBUI_FAILSAFE_ENV is not set
++# CONFIG_WEBUI_FAILSAFE_ENV_CUSTOM_ENV is not set
++# CONFIG_WEBUI_FAILSAFE_SIMG is not set
++# CONFIG_WEBUI_FAILSAFE_UBI is not set
++# CONFIG_MTK_TELNETD is not set
+diff --git a/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig b/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig
+index db26e0c5..02f792fa 100644
+--- a/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig
++++ b/uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig
+@@ -104,3 +104,15 @@ CONFIG_ENV_MTD_DEV="u-boot-env"
+ # CONFIG_I2C_SET_DEFAULT_BUS_NUM is not set
+ # CONFIG_PCIE_MEDIATEK is not set
+ # CONFIG_EFI_LOADER is not set
++CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"
++CONFIG_WEBUI_FAILSAFE_ADVANCED=y
++CONFIG_WEBUI_FAILSAFE_BACKUP=y
++# CONFIG_WEBUI_FAILSAFE_FACTORY is not set
++# CONFIG_WEBUI_FAILSAFE_FLASH is not set
++# CONFIG_WEBUI_FAILSAFE_NAND_RAW is not set
++# CONFIG_WEBUI_FAILSAFE_CONSOLE is not set
++# CONFIG_WEBUI_FAILSAFE_ENV is not set
++# CONFIG_WEBUI_FAILSAFE_ENV_CUSTOM_ENV is not set
++# CONFIG_WEBUI_FAILSAFE_SIMG is not set
++# CONFIG_WEBUI_FAILSAFE_UBI is not set
++# CONFIG_MTK_TELNETD is not set
+diff --git a/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/index.html b/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/index.html
+index 3f31b86e..c600464d 100644
+--- a/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/index.html
++++ b/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/index.html
+@@ -43,6 +43,12 @@
+ 							<br>
+ 							<div id="choose_mtd_layout" data-i18n="label.choose_mtd">Choose mtd layout:</div>
+ 							<select id="mtd_layout_label" name="mtd_layout_label" class="field-control"></select>
++							<p id="mtd_layout_warning">
++								Only the layouts of the device tree are offered. Choosing
++								immortalwrt-112m replaces the stock layout: the OEM areas
++								pdt_data, pdt_data_1, exp and plugin are reclaimed by the UBI
++								partition. Download a full read-only backup before switching.
++							</p>
+ 							<br><br>
+ 						</div>
+ 						<div id="sysinfo" class="sysinfo" data-i18n="sysinfo.loading">Loading system info...</div>
+diff --git a/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/main.js b/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/main.js
+index efd4cc24..fd0c3b7c 100644
+--- a/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/main.js
++++ b/uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/main.js
+@@ -1371,6 +1371,7 @@ function getmtdlayoutlist() {
+             const currentLayoutEl = document.getElementById("current_mtd_layout");
+             if (currentLayoutEl) {
+                 const cur = layoutNames[0];
++                APP_STATE.mtd_layout_current = cur;
+                 currentLayoutEl.innerHTML = cur ? t("label.current_mtd") + cur : "";
+             }
+ 
+@@ -1459,7 +1460,22 @@ function upload(formFieldName) {
+ 
+     const layoutSelect = document.getElementById("mtd_layout_label");
+     if (layoutSelect?.options.length > 0) {
+-        formData.append("mtd_layout", layoutSelect.options[layoutSelect.selectedIndex].value);
++        const selectedLayout = layoutSelect.options[layoutSelect.selectedIndex].value;
++        if (APP_STATE.mtd_layout_current === "default" && selectedLayout !== "default") {
++            /* The stock layout carries the OEM areas pdt_data, pdt_data_1, exp
++             * and plugin. Switching to immortalwrt-112m reclaims them into the
++             * UBI area, so a full read-only backup has to exist first. */
++            const warning = "Switching from the stock layout to " + selectedLayout +
++                " destroys the OEM areas (pdt_data, pdt_data_1, exp, plugin).\n" +
++                "Download a full read-only backup of the flash first. Continue?";
++            if (!window.confirm(warning)) {
++                if (formElement) formElement.style.display = "";
++                if (hintElement) hintElement.style.display = "";
++                if (progressBarElement) progressBarElement.style.display = "none";
++                return;
++            }
++        }
++        formData.append("mtd_layout", selectedLayout);
+     }
+ 
+     ajax({

@@ -245,6 +245,63 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertEqual("bl2", failsafe["bl2_target_partition"])
         self.assertIn("CONFIG_MTK_WEB_FAILSAFE=y", failsafe["u_boot_config"])
 
+    def test_lock_records_the_restricted_feature_set(self):
+        lock = self.load_lock()
+        features = lock["features"]
+        self.assertEqual("locked", features["status"])
+        enabled = {item["symbol"]: item for item in features["enabled"]}
+        disabled = {item["symbol"]: item for item in features["disabled"]}
+
+        # Recovery features the design requires.
+        for symbol in (
+            "CONFIG_MTK_DHCPD",
+            "CONFIG_MTK_WEB_FAILSAFE",
+            "CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE",
+            "CONFIG_WEBUI_FAILSAFE_BACKUP",
+            "CONFIG_MTK_UBI_SUPPORT",
+            "CONFIG_MTK_UPGRADE_BL2_VERIFY",
+            "CONFIG_CMD_TFTPPUT",
+            "CONFIG_DEBUG_UART",
+            "CONFIG_MEDIATEK_MULTI_MTD_LAYOUT",
+            "CONFIG_MTK_FIXED_MTD_MTDPARTS",
+            "CONFIG_MTK_DEFAULT_MTD_LAYOUT",
+        ):
+            self.assertIn(symbol, enabled, "%s must be enabled" % symbol)
+            self.assertTrue(enabled[symbol]["purpose"].strip())
+        self.assertEqual("immortalwrt-112m", enabled["CONFIG_MTK_DEFAULT_MTD_LAYOUT"]["value"])
+
+        # Features the design forbids on this device.
+        for symbol in (
+            "CONFIG_WEBUI_FAILSAFE_FACTORY",
+            "CONFIG_WEBUI_FAILSAFE_FLASH",
+            "CONFIG_WEBUI_FAILSAFE_ENV",
+            "CONFIG_WEBUI_FAILSAFE_CONSOLE",
+            "CONFIG_WEBUI_FAILSAFE_UBI",
+            "CONFIG_WEBUI_FAILSAFE_SIMG",
+            "CONFIG_WEBUI_FAILSAFE_NAND_RAW",
+            "CONFIG_MTK_TELNETD",
+        ):
+            self.assertIn(symbol, disabled, "%s must be disabled" % symbol)
+            self.assertTrue(disabled[symbol]["reason"].strip())
+        self.assertTrue(features["overclock"]["note"].strip())
+
+    def test_lock_records_the_device_patch_and_its_applicability(self):
+        lock = self.load_lock()
+        patches = lock["source"]["patches"]
+        self.assertEqual(1, len(patches))
+        patch = patches[0]
+        self.assertEqual(
+            "devices/nx30pro/uboot/patches/0001-nx30pro-restrict-recovery-ui.patch",
+            patch["path"],
+        )
+        self.assertEqual(SOURCE_COMMIT, patch["applies_to_commit"])
+        self.assertTrue(patch["purpose"].strip())
+        touched = patch["upstream_files"]
+        self.assertTrue(touched)
+        for path in touched:
+            self.assertTrue(path.startswith("uboot-mtk-20250711/"), path)
+        self.assertTrue((ROOT / patch["path"]).is_file(), "missing device patch %s" % patch["path"])
+
     def test_lock_does_not_guess_toolchain_or_hardware_facts(self):
         lock = self.load_lock()
         toolchain = lock["toolchain"]

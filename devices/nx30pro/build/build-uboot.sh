@@ -145,9 +145,10 @@ fi
 # The configuration that was really compiled has to carry the 112M partition
 # table. A patch that landed in a tree that the build does not use is caught
 # here.
-python3 "$HELPER" effective-config --lock "$LOCK" \
-	--config "$SOURCE_DIR/$UBOOT_TREE/.config" ||
-	fail "the compiled configuration does not carry the 112M partition table"
+python3 "$HELPER" verify-config --lock "$LOCK" \
+	--config "$SOURCE_DIR/$UBOOT_TREE/.config" \
+	> "$ARTIFACT_DIR/logs/effective-config.json" ||
+	fail "the compiled configuration does not carry the locked feature set"
 
 OUTPUT_DIR="$SOURCE_DIR/output"
 [ -d "$OUTPUT_DIR" ] || fail "the boot loader build produced no output directory"

@@ -21,6 +21,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -80,6 +81,53 @@ EXPECTED_LAYOUT_MTDPARTS = {
 }
 
 SIZE_SUFFIXES = {"k": 1024, "m": 1024 * 1024, "g": 1024 ** 3}
+
+# The feature set of the restricted recovery boot loader. Only the effective
+# configuration is checked against it, never the environment of the build.
+REQUIRED_EFFECTIVE_SYMBOLS = (
+    "CONFIG_MEDIATEK_MULTI_MTD_LAYOUT",
+    "CONFIG_MTK_FIXED_MTD_MTDPARTS",
+    "CONFIG_ENABLE_NAND_NMBM",
+    "CONFIG_MTK_DHCPD",
+    "CONFIG_MTK_WEB_FAILSAFE",
+    "CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE",
+    "CONFIG_WEBUI_FAILSAFE",
+    "CONFIG_WEBUI_FAILSAFE_BACKUP",
+    "CONFIG_MTK_UBI_SUPPORT",
+    "CONFIG_MTK_UPGRADE_BL2_VERIFY",
+    "CONFIG_CMD_TFTPPUT",
+    "CONFIG_DEBUG_UART",
+    "CONFIG_MTK_SERIAL",
+)
+FORBIDDEN_EFFECTIVE_SYMBOLS = (
+    "CONFIG_WEBUI_FAILSAFE_FACTORY",
+    "CONFIG_WEBUI_FAILSAFE_FLASH",
+    "CONFIG_WEBUI_FAILSAFE_NAND_RAW",
+    "CONFIG_WEBUI_FAILSAFE_CONSOLE",
+    "CONFIG_WEBUI_FAILSAFE_ENV",
+    "CONFIG_WEBUI_FAILSAFE_ENV_CUSTOM_ENV",
+    "CONFIG_WEBUI_FAILSAFE_SIMG",
+    "CONFIG_WEBUI_FAILSAFE_UBI",
+    "CONFIG_WEBUI_FAILSAFE_GPT",
+    "CONFIG_MTK_TELNETD",
+)
+# The upstream defaults enable these, so the device patch has to turn every one
+# of them off explicitly instead of relying on a missing line.
+FORBIDDEN_PATCH_SYMBOLS = (
+    "CONFIG_WEBUI_FAILSAFE_FACTORY",
+    "CONFIG_WEBUI_FAILSAFE_FLASH",
+    "CONFIG_WEBUI_FAILSAFE_CONSOLE",
+    "CONFIG_WEBUI_FAILSAFE_ENV",
+    "CONFIG_WEBUI_FAILSAFE_SIMG",
+    "CONFIG_WEBUI_FAILSAFE_UBI",
+    "CONFIG_MTK_TELNETD",
+)
+DEFAULT_LAYOUT_SYMBOL = "CONFIG_MTK_DEFAULT_MTD_LAYOUT"
+STOCK_LAYOUT_MARKER = "65536k(ubi)"
+OVERCLOCK_SYMBOL_RE = re.compile(
+    r"^CONFIG_[A-Z0-9_]*(OVERCLOCK|(CPU|DDR|DRAM)[A-Z0-9_]*(FREQ|SPEED|OVERCLOCK))[A-Z0-9_]*="
+)
+
 MTDPART_ENTRY_RE = re.compile(r"^(\d+[kKmMgG]?)(?:@\d+[kKmMgG]?)?\(([^)]+)\)")
 DTS_LAYOUT_NODE_RE = re.compile(r"(layout@[0-9a-fA-F]+)\s*\{(.*?)\n\s*\};", re.S)
 DTS_STRING_RE = lambda name: re.compile(r'%s\s*=\s*"([^"]*)"' % name)
@@ -368,6 +416,85 @@ def verify_layout_source(lock, dts_text):
     }
 
 
+def validate_features(lock, errors):
+    """Check the locked recovery feature set against the required contract."""
+    features = lock.get("features") or {}
+    if features.get("status") != "locked":
+        errors.append(
+            "the feature set of the recovery boot loader is not locked, it is %r"
+            % (features.get("status"),)
+        )
+
+    selector = features.get("selector") or {}
+    if selector.get("default_label") != EXPECTED_DEFAULT_LAYOUT:
+        errors.append(
+            "the layout selector must default to %s, the lock selects %r"
+            % (EXPECTED_DEFAULT_LAYOUT, selector.get("default_label"))
+        )
+    if list(selector.get("labels") or []) != list(EXPECTED_LAYOUT_LABELS):
+        errors.append(
+            "the layout selector must offer exactly %s, the lock offers %s"
+            % (
+                " and ".join(EXPECTED_LAYOUT_LABELS),
+                ", ".join(selector.get("labels") or []) or "nothing",
+            )
+        )
+    for key in ("free_form_mtdparts", "environment_editing"):
+        if selector.get(key) is not False:
+            errors.append(
+                "the layout selector must not allow %s, the lock records %r"
+                % (key, selector.get(key))
+            )
+
+    enabled = {item.get("symbol"): item for item in features.get("enabled") or []}
+    disabled = {item.get("symbol"): item for item in features.get("disabled") or []}
+    for symbol in REQUIRED_EFFECTIVE_SYMBOLS:
+        if symbol not in enabled:
+            errors.append("the lock does not require the recovery feature %s" % symbol)
+        elif not str(enabled[symbol].get("purpose", "")).strip():
+            errors.append("the lock does not say what %s is needed for" % symbol)
+    for symbol in FORBIDDEN_EFFECTIVE_SYMBOLS:
+        if symbol not in disabled:
+            errors.append("the lock does not forbid %s" % symbol)
+        elif not str(disabled[symbol].get("reason", "")).strip():
+            errors.append("the lock does not say why %s is forbidden" % symbol)
+    default_layout = (enabled.get(DEFAULT_LAYOUT_SYMBOL) or {}).get("value")
+    if default_layout != EXPECTED_DEFAULT_LAYOUT:
+        errors.append(
+            "the lock must select %s=%s, it selects %r"
+            % (DEFAULT_LAYOUT_SYMBOL, EXPECTED_DEFAULT_LAYOUT, default_layout)
+        )
+
+    overclock = features.get("overclock") or {}
+    if overclock.get("enabled") is not False:
+        errors.append("overclocking must stay disabled, the lock records %r" % (overclock.get("enabled"),))
+    if not str(overclock.get("note", "")).strip():
+        errors.append("the lock does not record how the overclock settings were checked")
+
+    patches = (lock.get("source") or {}).get("patches") or []
+    if len(patches) != 1:
+        errors.append(
+            "the lock must record exactly one device patch, it records %d" % len(patches)
+        )
+    tree = (lock.get("source") or {}).get("uboot_tree")
+    for record in patches:
+        if record.get("applies_to_commit") != (lock.get("source") or {}).get("commit"):
+            errors.append(
+                "the device patch %s is not recorded for the pinned commit"
+                % (record.get("path"),)
+            )
+        if not str(record.get("purpose", "")).strip():
+            errors.append(
+                "the device patch %s does not say what it restricts" % (record.get("path"),)
+            )
+        for path in record.get("upstream_files") or []:
+            if tree and not str(path).startswith(tree + "/"):
+                errors.append(
+                    "the device patch %s touches %s outside the locked %s tree"
+                    % (record.get("path"), path, tree)
+                )
+
+
 def validate_lock(lock):
     """Return the list of reasons why the lock is not build ready."""
     errors = []
@@ -491,6 +618,7 @@ def validate_lock(lock):
         )
 
     validate_layout_entries(lock, errors)
+    validate_features(lock, errors)
 
     artifacts = lock.get("artifacts") or {}
     for kind, suffix in (("fip", ".bin"), ("bl2", ".img")):
@@ -584,33 +712,264 @@ def render_plan(lock):
     }
 
 
-def validate_effective_config(text, lock):
+def parse_effective_config(text):
+    """Parse a .config into its enabled symbols and its explicit 'is not set'."""
+    enabled = {}
+    disabled = set()
+    for line in str(text).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        match = re.match(r"^# ([A-Za-z0-9_-]+) is not set$", line)
+        if match:
+            disabled.add(match.group(1))
+            continue
+        match = re.match(r"^([A-Za-z0-9_-]+)=(.*)$", line)
+        if match:
+            value = match.group(2)
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1]
+            enabled[match.group(1)] = value
+    return enabled, disabled
+
+
+def verify_effective_config(text, lock):
     """Check the boot loader configuration that was really compiled.
 
-    The patch is applied to a defconfig, so only the configuration that the
-    build produced proves that the compiled boot loader carries the 112M
-    partition table and not the stock one.
+    Requested environment variables are not evidence: olddefconfig drops a
+    symbol that no Kconfig knows, and a dangerous page that survives here is
+    compiled into the image. Only this file proves the feature set.
     """
+    enabled, disabled = parse_effective_config(text)
     errors = []
-    expected_table = lock["compatibility"]["minimal_device_patch"]["value"]
-    match = re.search(r'^CONFIG_MTDPARTS_DEFAULT="([^"]*)"', text, re.M)
-    if not match:
-        errors.append("the effective configuration has no CONFIG_MTDPARTS_DEFAULT")
-    elif match.group(1) != expected_table:
-        errors.append(
-            "the effective partition table is not the 112M table but %r"
-            % match.group(1)
-        )
-    if "CONFIG_MTK_FIXED_MTD_MTDPARTS=y" not in text:
-        errors.append("the effective configuration does not fix the mtd parts")
-    if "CONFIG_TARGET_MT7981=y" not in text:
+
+    if enabled.get("CONFIG_TARGET_MT7981") != "y":
         errors.append("the effective configuration does not target MT7981")
-    expected_tree = 'CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"'
-    if expected_tree not in text:
-        errors.append("the effective configuration does not use the NX30 Pro device tree")
+    if enabled.get("CONFIG_DEFAULT_DEVICE_TREE") != "%s-%s" % (EXPECTED_SOC, EXPECTED_BOARD):
+        errors.append(
+            "the effective configuration does not use the %s device tree, it uses %r"
+            % (EXPECTED_BOARD, enabled.get("CONFIG_DEFAULT_DEVICE_TREE"))
+        )
+
+    for symbol in REQUIRED_EFFECTIVE_SYMBOLS:
+        if enabled.get(symbol) != "y":
+            errors.append(
+                "the effective configuration does not enable %s, the recovery "
+                "feature it carries is missing" % symbol
+            )
+    for symbol in FORBIDDEN_EFFECTIVE_SYMBOLS:
+        if symbol in enabled:
+            errors.append(
+                "the effective configuration enables %s, which this device must "
+                "not offer" % symbol
+            )
+
+    default_layout = enabled.get(DEFAULT_LAYOUT_SYMBOL)
+    if default_layout != EXPECTED_DEFAULT_LAYOUT:
+        errors.append(
+            "the effective configuration defaults to the layout %r, it must default "
+            "to %s" % (default_layout, EXPECTED_DEFAULT_LAYOUT)
+        )
+
+    mtdparts_default = enabled.get("CONFIG_MTDPARTS_DEFAULT")
+    if mtdparts_default is not None:
+        if STOCK_LAYOUT_MARKER in mtdparts_default:
+            errors.append(
+                "the effective configuration carries the stock partition table %s, "
+                "the build fell back to the single layout defconfig"
+                % (STOCK_LAYOUT_MARKER,)
+            )
+        else:
+            errors.append(
+                "the effective configuration fixes CONFIG_MTDPARTS_DEFAULT to %r "
+                "instead of reading the layout whitelist from the device tree"
+                % (mtdparts_default,)
+            )
+
+    for symbol in sorted(enabled):
+        if OVERCLOCK_SYMBOL_RE.match(symbol + "="):
+            errors.append(
+                "the effective configuration enables the overclock setting %s"
+                % symbol
+            )
+
     if errors:
         raise LockError("; ".join(errors))
-    return []
+    return {
+        "default_layout": default_layout,
+        "enabled": sorted(
+            symbol for symbol in REQUIRED_EFFECTIVE_SYMBOLS if symbol in enabled
+        ),
+        "disabled": sorted(symbol for symbol in FORBIDDEN_EFFECTIVE_SYMBOLS if symbol in disabled),
+        "mtdparts_default": mtdparts_default,
+    }
+
+
+def verify_patch(patch_text, lock, source_dir=None):
+    """Check the device patch against the recovery contract of this device.
+
+    The patch is the only place that may restrict the upstream recovery UI, so
+    it may not grow into a second partition editor, an environment editor or a
+    third layout, and it has to keep the 112M layout as the default.
+    """
+    text = str(patch_text)
+    entries = (lock.get("source") or {}).get("patches") or []
+    if not entries:
+        raise LockError("the lock records no device patch")
+    record = entries[0]
+    if record.get("applies_to_commit") != lock["source"]["commit"]:
+        raise LockError(
+            "the device patch is recorded for commit %r, the lock pins %s"
+            % (record.get("applies_to_commit"), lock["source"]["commit"])
+        )
+
+    tree = lock["source"]["uboot_tree"]
+    files = re.findall(r"^diff --git a/(\S+) b/(\S+)$", text, re.M)
+    if not files:
+        raise LockError("the device patch is not a git diff")
+    paths = []
+    for left, right in files:
+        if left != right:
+            raise LockError("the device patch renames %s, a rename is not a restriction" % left)
+        if not left.startswith(tree + "/"):
+            raise LockError(
+                "the device patch touches %s, which is not part of the locked %s tree "
+                "of this device" % (left, tree)
+            )
+        paths.append(left)
+
+    expected_files = sorted(record.get("upstream_files") or [])
+    if sorted(paths) != expected_files:
+        raise LockError(
+            "the device patch touches %s, the lock records %s"
+            % (", ".join(sorted(paths)) or "nothing", ", ".join(expected_files) or "nothing")
+        )
+
+    added = [
+        line[1:] for line in text.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    errors = []
+    default_layout = None
+    disabled = []
+    warns = False
+    confirms = False
+
+    for line in added:
+        stripped = line.strip()
+        match = re.match(r"^CONFIG_[A-Za-z0-9_]*LAYOUT[A-Za-z0-9_]*=\"([^\"]*)\"$", stripped)
+        if match and match.group(1) not in EXPECTED_LAYOUT_LABELS:
+            errors.append(
+                "the device patch selects the layout %r, only %s may be selected"
+                % (match.group(1), " and ".join(EXPECTED_LAYOUT_LABELS))
+            )
+        match = re.match(r"^label\s*=\s*\"([^\"]*)\"", stripped)
+        if match and match.group(1) not in EXPECTED_LAYOUT_LABELS:
+            errors.append(
+                "the device patch adds the layout label %r, only %s may be selected"
+                % (match.group(1), " and ".join(EXPECTED_LAYOUT_LABELS))
+            )
+        if DEFAULT_LAYOUT_SYMBOL + '=' in stripped:
+            match = re.match(r'^%s="([^"]*)"$' % DEFAULT_LAYOUT_SYMBOL, stripped)
+            if match:
+                default_layout = match.group(1)
+        if "mtd_layout_custom" in stripped or stripped.startswith("CONFIG_MTDPARTS_DEFAULT="):
+            errors.append(
+                "the device patch exposes a free form mtdparts input, the selector may "
+                "only offer the locked layout whitelist"
+            )
+        if "env_set(" in stripped or "setenv " in stripped:
+            errors.append(
+                "the device patch writes the environment, generic environment editing "
+                "is disabled on this device"
+            )
+        match = re.match(r"^CONFIG_([A-Za-z0-9_]+)=", stripped)
+        if match and ("CONFIG_" + match.group(1)) in FORBIDDEN_EFFECTIVE_SYMBOLS:
+            errors.append(
+                "the device patch enables %s, which this device must not offer"
+                % ("CONFIG_" + match.group(1))
+            )
+        match = re.match(r"^# (CONFIG_[A-Za-z0-9_]+) is not set$", stripped)
+        if match and match.group(1) in FORBIDDEN_EFFECTIVE_SYMBOLS:
+            disabled.append(match.group(1))
+        if "confirm(" in stripped:
+            confirms = True
+        if "pdt_data" in stripped:
+            warns = True
+
+    if default_layout != EXPECTED_DEFAULT_LAYOUT:
+        errors.append(
+            "the device patch does not make %s the default layout, it selects %r"
+            % (EXPECTED_DEFAULT_LAYOUT, default_layout)
+        )
+    missing = [symbol for symbol in FORBIDDEN_PATCH_SYMBOLS if symbol not in disabled]
+    if missing:
+        errors.append(
+            "the device patch does not disable %s, the upstream defaults enable them"
+            % ", ".join(sorted(missing))
+        )
+    if not (confirms and warns):
+        errors.append(
+            "the device patch does not warn before a switch away from the stock layout: "
+            "it has to name the reclaimed OEM partitions and ask for a confirmation"
+        )
+
+    if errors:
+        raise LockError("; ".join(errors))
+
+    if source_dir is not None:
+        apply_device_patch_file(text, source_dir, check_only=True)
+
+    return {
+        "applies_to_commit": record["applies_to_commit"],
+        "files": sorted(paths),
+        "default_layout": default_layout,
+        "disabled": sorted(set(disabled)),
+        "warns_before_switch": True,
+    }
+
+
+def apply_device_patch_file(patch_text, source_dir, check_only=False):
+    """Apply one device patch inside the pinned checkout with git apply."""
+    source_dir = Path(source_dir)
+    with tempfile.TemporaryDirectory() as tmp:
+        patch_file = Path(tmp) / "device.patch"
+        patch_file.write_text(str(patch_text), encoding="utf-8")
+        command = ["git", "-C", str(source_dir), "apply", "--verbose"]
+        if check_only:
+            command.append("--check")
+        command.append(str(patch_file))
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise LockError(
+            "the device patch does not apply to %s: %s"
+            % (source_dir, (result.stderr or result.stdout).strip())
+        )
+    return result.stderr.strip() or result.stdout.strip()
+
+
+def apply_device_patches(lock, source_dir, repo_root=None):
+    """Verify and apply every recorded device patch in lock order."""
+    entries = (lock.get("source") or {}).get("patches") or []
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    applied = []
+    for record in sorted(entries, key=lambda item: item.get("order", 0)):
+        path = root / record["path"]
+        if not path.is_file():
+            raise LockError("the recorded device patch is missing: %s" % path)
+        text = path.read_text(encoding="utf-8")
+        verify_patch(text, lock)
+        output = apply_device_patch_file(text, source_dir)
+        applied.append(
+            {
+                "patch": record["path"],
+                "files": sorted(
+                    set(re.findall(r"^diff --git a/(\S+) b/", text, re.M))
+                ),
+                "git_apply": output,
+            }
+        )
+    return applied
 
 
 def upstream_build_trees(source_dir):
@@ -864,36 +1223,6 @@ def build_report(lock, artifacts, toolchain, build_env):
     }
 
 
-def apply_device_patch(source_dir, lock):
-    """Apply the minimal device patch to the boot loader build copy."""
-    source_dir = Path(source_dir)
-    tree = lock["source"]["uboot_tree"]
-    target = source_dir / tree / "configs" / (
-        "%s_%s_defconfig" % (EXPECTED_SOC, EXPECTED_BOARD)
-    )
-    if not target.is_file():
-        raise LockError("the boot loader defconfig is missing: %s" % target)
-    value = lock["compatibility"]["minimal_device_patch"]["value"]
-    lines = target.read_text(encoding="utf-8").splitlines(keepends=True)
-    replaced = False
-    old_value = None
-    for index, line in enumerate(lines):
-        if line.startswith("CONFIG_MTDPARTS_DEFAULT="):
-            old_value = line.strip()
-            lines[index] = 'CONFIG_MTDPARTS_DEFAULT="%s"\n' % value
-            replaced = True
-    if not replaced:
-        raise LockError(
-            "the boot loader defconfig has no CONFIG_MTDPARTS_DEFAULT to replace"
-        )
-    target.write_text("".join(lines), encoding="utf-8")
-    return {
-        "file": str(target),
-        "old": old_value,
-        "new": 'CONFIG_MTDPARTS_DEFAULT="%s"' % value,
-    }
-
-
 def preflight(lock, source_dir):
     """Run every check that has to pass before the build may start."""
     errors = validate_lock(lock)
@@ -976,7 +1305,18 @@ def command_patch(args):
     errors = validate_lock(lock)
     if errors:
         return report_lock_errors(errors)
-    result = apply_device_patch(args.source_dir, lock)
+    result = apply_device_patches(lock, args.source_dir, repo_root=args.repo_root)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_verify_patch(args):
+    lock = load_lock(args.lock)
+    errors = validate_lock(lock)
+    if errors:
+        return report_lock_errors(errors)
+    text = Path(args.patch).read_text(encoding="utf-8")
+    result = verify_patch(text, lock, source_dir=args.source_dir)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
@@ -984,8 +1324,8 @@ def command_patch(args):
 def command_effective_config(args):
     lock = load_lock(args.lock)
     text = Path(args.config).read_text(encoding="utf-8")
-    validate_effective_config(text, lock)
-    print("The effective configuration carries the 112M partition table.")
+    result = verify_effective_config(text, lock)
+    print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 
 
@@ -1058,13 +1398,22 @@ def main(argv=None):
     preflight.add_argument("--source-dir", required=True)
     preflight.set_defaults(handler=command_preflight)
 
-    patch = subparsers.add_parser("patch", help="apply the device patch to a build copy")
+    patch = subparsers.add_parser("patch", help="apply the device patches to a build copy")
     patch.add_argument("--lock", required=True)
     patch.add_argument("--source-dir", required=True)
+    patch.add_argument("--repo-root", default="")
     patch.set_defaults(handler=command_patch)
 
+    verify_patch_parser = subparsers.add_parser(
+        "verify-patch", help="check a device patch against the recovery contract"
+    )
+    verify_patch_parser.add_argument("--lock", required=True)
+    verify_patch_parser.add_argument("--patch", required=True)
+    verify_patch_parser.add_argument("--source-dir", default=None)
+    verify_patch_parser.set_defaults(handler=command_verify_patch)
+
     effective = subparsers.add_parser(
-        "effective-config", help="check the configuration the build produced"
+        "verify-config", help="check the configuration the build produced"
     )
     effective.add_argument("--lock", required=True)
     effective.add_argument("--config", required=True)

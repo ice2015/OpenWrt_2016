@@ -509,43 +509,269 @@ class Nx30ProUbootArtifactTests(unittest.TestCase):
 
 
 class Nx30ProUbootEffectiveConfigurationTests(unittest.TestCase):
+    """Only the configuration the build really produced proves the feature set.
+
+    Environment variables and defconfig wishes are not evidence: olddefconfig
+    drops symbols that no Kconfig knows, and a feature that is merely requested
+    can still be absent from the image.
+    """
+
+    CONFIG = """CONFIG_TARGET_MT7981=y
+CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"
+CONFIG_MEDIATEK_MULTI_MTD_LAYOUT=y
+CONFIG_MTK_FIXED_MTD_MTDPARTS=y
+CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"
+CONFIG_ENABLE_NAND_NMBM=y
+CONFIG_MTK_WEB_FAILSAFE=y
+CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE=y
+CONFIG_WEBUI_FAILSAFE=y
+CONFIG_WEBUI_FAILSAFE_UI_BOOTSTRAP=y
+CONFIG_WEBUI_FAILSAFE_ADVANCED=y
+CONFIG_WEBUI_FAILSAFE_BACKUP=y
+CONFIG_MTK_DHCPD=y
+CONFIG_MTK_DNSD=y
+CONFIG_MTK_UBI_SUPPORT=y
+CONFIG_MTK_UPGRADE_BL2_VERIFY=y
+CONFIG_CMD_TFTPPUT=y
+CONFIG_CMD_PING=y
+CONFIG_DEBUG_UART=y
+CONFIG_MTK_SERIAL=y
+# CONFIG_WEBUI_FAILSAFE_FACTORY is not set
+# CONFIG_WEBUI_FAILSAFE_FLASH is not set
+# CONFIG_WEBUI_FAILSAFE_ENV is not set
+# CONFIG_WEBUI_FAILSAFE_CONSOLE is not set
+# CONFIG_WEBUI_FAILSAFE_UBI is not set
+# CONFIG_WEBUI_FAILSAFE_SIMG is not set
+# CONFIG_WEBUI_FAILSAFE_NAND_RAW is not set
+# CONFIG_MTK_TELNETD is not set
+"""
+
+    DANGEROUS = (
+        "CONFIG_WEBUI_FAILSAFE_FACTORY",
+        "CONFIG_WEBUI_FAILSAFE_FLASH",
+        "CONFIG_WEBUI_FAILSAFE_ENV",
+        "CONFIG_WEBUI_FAILSAFE_CONSOLE",
+        "CONFIG_WEBUI_FAILSAFE_UBI",
+        "CONFIG_WEBUI_FAILSAFE_SIMG",
+        "CONFIG_WEBUI_FAILSAFE_NAND_RAW",
+        "CONFIG_MTK_TELNETD",
+    )
+
     def setUp(self):
         self.helper = load_helper()
         self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
-        self.table = self.lock["compatibility"]["minimal_device_patch"]["value"]
 
-    def config(self, table=None, extra=""):
-        table = self.table if table is None else table
-        return (
-            "CONFIG_TARGET_MT7981=y\n"
-            'CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"\n'
-            "CONFIG_MTK_FIXED_MTD_MTDPARTS=y\n"
-            'CONFIG_MTDPARTS_DEFAULT="%s"\n%s' % (table, extra)
-        )
+    def enable(self, text, symbol):
+        return text.replace("# %s is not set" % symbol, "%s=y" % symbol)
 
-    def test_effective_configuration_must_carry_the_112m_partition_table(self):
-        self.assertEqual([], self.helper.validate_effective_config(self.config(), self.lock))
+    def drop(self, text, symbol):
+        return text.replace("%s=y\n" % symbol, "")
 
-    def test_stock_partition_table_in_the_effective_configuration_is_rejected(self):
-        stock = (
-            "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),"
-            "65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)"
-        )
+    def test_the_locked_feature_set_passes_the_effective_configuration_check(self):
+        result = self.helper.verify_effective_config(self.CONFIG, self.lock)
+        self.assertEqual("immortalwrt-112m", result["default_layout"])
+        self.assertEqual(sorted(self.DANGEROUS), sorted(result["disabled"]))
+
+    def test_every_dangerous_web_feature_is_rejected_on_its_own(self):
+        for symbol in self.DANGEROUS:
+            with self.subTest(symbol=symbol):
+                with self.assertRaises(Exception) as caught:
+                    self.helper.verify_effective_config(self.enable(self.CONFIG, symbol), self.lock)
+                self.assertIn(symbol, str(caught.exception))
+
+    def test_a_configuration_that_lost_the_read_only_backup_is_rejected(self):
+        text = self.enable(self.CONFIG, "CONFIG_WEBUI_FAILSAFE_FLASH")
+        text = text.replace("CONFIG_WEBUI_FAILSAFE_BACKUP=y\n", "")
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_effective_config(text, self.lock)
+        self.assertIn("CONFIG_WEBUI_FAILSAFE_BACKUP", str(caught.exception))
+
+    def test_a_configuration_without_dhcpd_or_the_web_failsafe_is_rejected(self):
+        for symbol in ("CONFIG_MTK_DHCPD", "CONFIG_MTK_WEB_FAILSAFE"):
+            with self.subTest(symbol=symbol):
+                with self.assertRaises(Exception):
+                    self.helper.verify_effective_config(self.drop(self.CONFIG, symbol), self.lock)
+
+    def test_a_configuration_without_tftp_or_uart_recovery_is_rejected(self):
+        for symbol in ("CONFIG_CMD_TFTPPUT", "CONFIG_DEBUG_UART", "CONFIG_MTK_SERIAL"):
+            with self.subTest(symbol=symbol):
+                with self.assertRaises(Exception):
+                    self.helper.verify_effective_config(self.drop(self.CONFIG, symbol), self.lock)
+
+    def test_a_configuration_without_the_bl2_upgrade_check_is_rejected(self):
         with self.assertRaises(Exception):
-            self.helper.validate_effective_config(self.config(stock), self.lock)
+            self.helper.verify_effective_config(
+                self.drop(self.CONFIG, "CONFIG_MTK_UPGRADE_BL2_VERIFY"), self.lock
+            )
 
-    def test_effective_configuration_without_fixed_mtd_parts_is_rejected(self):
-        text = self.config().replace("CONFIG_MTK_FIXED_MTD_MTDPARTS=y\n", "")
-        with self.assertRaises(Exception):
-            self.helper.validate_effective_config(text, self.lock)
+    def test_a_fallback_to_the_single_layout_configuration_is_rejected(self):
+        # build.sh silently downgrades to the single layout defconfig when the
+        # multi layout one is missing, and that defconfig carries the stock table.
+        text = self.CONFIG.replace("CONFIG_MEDIATEK_MULTI_MTD_LAYOUT=y\n", "")
+        text = text.replace(
+            'CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"\n',
+            'CONFIG_MTDPARTS_DEFAULT="nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),'
+            '2048k(fip),65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),'
+            '38400k(plugin)"\n',
+        )
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_effective_config(text, self.lock)
+        message = str(caught.exception)
+        self.assertIn("CONFIG_MEDIATEK_MULTI_MTD_LAYOUT", message)
 
-    def test_effective_configuration_of_another_board_is_rejected(self):
-        text = self.config().replace(
+    def test_a_stock_partition_table_in_the_effective_configuration_is_rejected(self):
+        text = self.CONFIG + (
+            'CONFIG_MTDPARTS_DEFAULT="nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),'
+            '2048k(fip),65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),'
+            '38400k(plugin)"\n'
+        )
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_effective_config(text, self.lock)
+        self.assertIn("65536k(ubi)", str(caught.exception))
+
+    def test_an_effective_configuration_that_defaults_to_the_stock_layout_is_rejected(self):
+        for replacement in ('CONFIG_MTK_DEFAULT_MTD_LAYOUT="default"', ""):
+            text = self.CONFIG.replace(
+                'CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"\n',
+                replacement + ("\n" if replacement else ""),
+            )
+            with self.subTest(replacement=replacement or "missing"):
+                with self.assertRaises(Exception) as caught:
+                    self.helper.verify_effective_config(text, self.lock)
+                self.assertIn("immortalwrt-112m", str(caught.exception))
+
+    def test_an_overclock_profile_in_the_effective_configuration_is_rejected(self):
+        text = self.CONFIG + "CONFIG_MTK_CPU_OVERCLOCK=y\nCONFIG_DRAM_OVERCLOCK_2600=y\n"
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_effective_config(text, self.lock)
+        self.assertIn("overclock", str(caught.exception).lower())
+
+    def test_the_effective_configuration_of_another_board_is_rejected(self):
+        text = self.CONFIG.replace(
             'CONFIG_DEFAULT_DEVICE_TREE="mt7981-h3c_magic-nx30-pro"',
-            'CONFIG_DEFAULT_DEVICE_TREE="mt7981_wr30u"',
+            'CONFIG_DEFAULT_DEVICE_TREE="mt7981_xiaomi_wr30u"',
         )
         with self.assertRaises(Exception):
-            self.helper.validate_effective_config(text, self.lock)
+            self.helper.verify_effective_config(text, self.lock)
+
+    def test_the_command_line_reports_the_effective_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".config"
+            path.write_text(self.CONFIG, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(HELPER), "verify-config", "--lock", str(LOCK),
+                 "--config", str(path)],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("immortalwrt-112m", result.stdout)
+
+
+class Nx30ProUbootPatchContractTests(unittest.TestCase):
+    """The device patch is the only place the recovery UI may be restricted.
+
+    It must not grow into a second partition editor, an environment editor or a
+    third layout, and it has to keep the 112M layout as the default.
+    """
+
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        self.patch_path = ROOT / self.lock["source"]["patches"][0]["path"]
+        self.patch = self.patch_path.read_text(encoding="utf-8")
+
+    def verify(self, text, lock=None):
+        return self.helper.verify_patch(text, self.lock if lock is None else lock)
+
+    def test_the_device_patch_satisfies_the_patch_contract(self):
+        result = self.verify(self.patch)
+        self.assertIn("uboot-mtk-20250711/board/mediatek/common/mtd_layout.c", result["files"])
+        self.assertIn(
+            "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig",
+            result["files"],
+        )
+
+    def test_the_patch_records_the_commit_it_applies_to(self):
+        result = self.verify(self.patch)
+        self.assertEqual(SOURCE_COMMIT, result["applies_to_commit"])
+        self.assertEqual(
+            sorted(self.lock["source"]["patches"][0]["upstream_files"]),
+            sorted(result["files"]),
+        )
+
+    def test_a_patch_that_adds_a_third_layout_label_is_rejected(self):
+        text = self.patch.replace(
+            'CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"',
+            'CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"\n+CONFIG_MTD_LAYOUT_EXTRA="openwrt"',
+            1,
+        )
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("openwrt", str(caught.exception))
+
+    def test_a_patch_that_re_enables_a_dangerous_feature_is_rejected(self):
+        text = self.patch.replace(
+            "+# CONFIG_WEBUI_FAILSAFE_ENV is not set",
+            "+CONFIG_WEBUI_FAILSAFE_ENV=y",
+        )
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("CONFIG_WEBUI_FAILSAFE_ENV", str(caught.exception))
+
+    def test_a_patch_that_exposes_free_form_mtdparts_is_rejected(self):
+        text = self.patch + '\n+\tsetenv mtd_layout_custom "$input"\n'
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("mtdparts", str(caught.exception).lower())
+
+    def test_a_patch_that_can_write_arbitrary_environment_keys_is_rejected(self):
+        text = self.patch + '\n+\tenv_set(name, value);\n'
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("environment", str(caught.exception).lower())
+
+    def test_a_patch_that_does_not_make_the_112m_layout_the_default_is_rejected(self):
+        text = self.patch.replace(
+            'CONFIG_MTK_DEFAULT_MTD_LAYOUT="immortalwrt-112m"',
+            'CONFIG_MTK_DEFAULT_MTD_LAYOUT="default"',
+        )
+        with self.assertRaises(Exception) as caught:
+            self.verify(text)
+        self.assertIn("immortalwrt-112m", str(caught.exception))
+
+    def test_a_patch_that_does_not_warn_before_leaving_the_stock_layout_is_rejected(self):
+        without_warning = "\n".join(
+            line for line in self.patch.splitlines()
+            if "confirm" not in line and "pdt_data" not in line
+        )
+        with self.assertRaises(Exception) as caught:
+            self.verify(without_warning)
+        self.assertIn("warn", str(caught.exception).lower())
+
+    def test_a_patch_that_touches_another_device_or_tree_is_rejected(self):
+        text = self.patch.replace(
+            "uboot-mtk-20250711/board/mediatek/common/mtd_layout.c",
+            "uboot-mtk-20230718-09eda825/board/mediatek/common/mtd_layout.c",
+        )
+        with self.assertRaises(Exception):
+            self.verify(text)
+
+    def test_the_command_line_reports_the_patch_contract(self):
+        result = subprocess.run(
+            [sys.executable, str(HELPER), "verify-patch", "--lock", str(LOCK),
+             "--patch", str(self.patch_path)],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("immortalwrt-112m", result.stdout)
+
+    def test_a_patch_that_does_not_apply_to_the_source_tree_is_rejected(self):
+        # Without the real checkout the contract can only be read; with one, the
+        # patch has to apply, so an empty directory must be refused.
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            with self.assertRaises(Exception):
+                self.helper.verify_patch(self.patch, self.lock, source_dir=tmp)
 
 
 class Nx30ProUbootPreflightTests(unittest.TestCase):

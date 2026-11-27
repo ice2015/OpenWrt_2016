@@ -83,7 +83,30 @@
       "FIXED_MTDPARTS": "build.sh appends CONFIG_MEDIATEK_UBI_FIXED_MTDPARTS=y and CONFIG_MTK_FIXED_MTD_MTDPARTS=y. Upstream refuses MULTI_LAYOUT=1 together with FIXED_MTDPARTS=0, so the locked combination is the only supported one.",
       "SILENT": "SILENT=Y answers the interactive fallback prompts of build.sh so that a missing multi layout defconfig fails the build instead of silently downgrading to the single layout defconfig.",
       "VARIANT": "VARIANT=default keeps the raw mtd layout of this board. The ubootmod, ubi and openwrt variants force FIXED_MTDPARTS=0 and therefore cannot carry the multi layout whitelist."
-    }
+    },
+    "patches": [
+      {
+        "path": "devices/nx30pro/uboot/patches/0001-nx30pro-restrict-recovery-ui.patch",
+        "applies_to_commit": "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4",
+        "order": 1,
+        "purpose": "Makes immortalwrt-112m the default layout of an empty environment and disables the dangerous recovery web features on this board.",
+        "upstream_files": [
+          "uboot-mtk-20250711/board/mediatek/Kconfig",
+          "uboot-mtk-20250711/board/mediatek/common/mtd_layout.c",
+          "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_defconfig",
+          "uboot-mtk-20250711/configs/mt7981_h3c_magic-nx30-pro_multi_layout_defconfig",
+          "uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/index.html",
+          "uboot-mtk-20250711/failsafe/embedded/fsdata-bootstrap/main.js"
+        ],
+        "notes": [
+          "board/mediatek/Kconfig gains CONFIG_MTK_DEFAULT_MTD_LAYOUT, a string symbol that depends on MEDIATEK_MULTI_MTD_LAYOUT and defaults to 'default', so no other board changes behaviour.",
+          "board/mediatek/common/mtd_layout.c replaces the four hard coded 'default' fallback labels with that symbol; the stock fallback stays when the symbol is unset.",
+          "Both board defconfigs disable the Factory, Flash, NAND raw, Console, Env, SIMG, UBI and Telnet features. The multi layout defconfig also selects immortalwrt-112m as the default layout. The single layout defconfig is hardened as well because build.sh downgrades to it when the multi layout defconfig is missing.",
+          "The bootstrap web UI records the layout the device currently uses, warns that pdt_data, pdt_data_1, exp and plugin are reclaimed, and asks for a confirmation before an upload switches away from the stock layout.",
+          "No partition table is patched: the pinned device tree already carries both locked layouts, and verify-layout-source checks that against the source."
+        ]
+      }
+    ]
   },
   "toolchain": {
     "kind": "distribution-gnu-cross-toolchain",
@@ -126,8 +149,172 @@
     "boot_media_note": "The board device tree enables spi_nand on spi0 and carries a bl2_verify node with bl2_compatible = \"spim-nand\", so the BL2 image is verified against the SPI-NAND boot medium."
   },
   "features": {
-    "status": "UNRESOLVED",
-    "note": "Task 3 of the U-Boot plan records the enabled and disabled feature symbols together with the effective configuration check."
+    "status": "locked",
+    "selector": {
+      "kind": "whitelisted-layout-selector",
+      "labels": [
+        "immortalwrt-112m",
+        "default"
+      ],
+      "default_label": "immortalwrt-112m",
+      "source": "The web failsafe lists the labels of the /mtd-layout node of the pinned device tree. The device patch makes immortalwrt-112m the label that is used when the environment selects none, and it adds a data loss confirmation before a switch away from the stock layout.",
+      "free_form_mtdparts": false,
+      "free_form_mtdparts_note": "The upstream selector only offers a 'custom' entry when the mtd_layout_custom environment variable exists. That variable can only be written by the environment manager, which this build disables, or over UART. The device patch is rejected when it re-enables either path.",
+      "environment_editing": false
+    },
+    "enabled": [
+      {
+        "symbol": "CONFIG_MTK_DHCPD",
+        "value": "y",
+        "purpose": "DHCP server for the recovery network, selected by the web failsafe"
+      },
+      {
+        "symbol": "CONFIG_MTK_DNSD",
+        "value": "y",
+        "purpose": "DNS responder of the web failsafe, selected together with the DHCP server"
+      },
+      {
+        "symbol": "CONFIG_MTK_WEB_FAILSAFE",
+        "value": "y",
+        "purpose": "Web failsafe entry in the boot menu"
+      },
+      {
+        "symbol": "CONFIG_MTK_WEB_FAILSAFE_AFTER_BOOT_FAILURE",
+        "value": "y",
+        "purpose": "Starts the web failsafe automatically when no system can be booted"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE",
+        "value": "y",
+        "purpose": "Web UI itself, selected by CONFIG_MTK_WEB_FAILSAFE"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_UI_BOOTSTRAP",
+        "value": "y",
+        "purpose": "Bootstrap theme of the recovery web UI"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_ADVANCED",
+        "value": "y",
+        "purpose": "Gate for the advanced pages; it stays on because the read-only backup lives behind it"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_BACKUP",
+        "value": "y",
+        "purpose": "Read-only backup download of the whole flash and of single partitions"
+      },
+      {
+        "symbol": "CONFIG_MTK_UBI_SUPPORT",
+        "value": "y",
+        "purpose": "Writes a system image into the ubi partition of the selected layout"
+      },
+      {
+        "symbol": "CONFIG_MTK_UPGRADE_BL2_VERIFY",
+        "value": "y",
+        "purpose": "Verifies an uploaded BL2 against the boot medium before it is written"
+      },
+      {
+        "symbol": "CONFIG_CMD_TFTPPUT",
+        "value": "y",
+        "purpose": "TFTP recovery path over the serial console"
+      },
+      {
+        "symbol": "CONFIG_CMD_PING",
+        "value": "y",
+        "purpose": "Reachability check of the TFTP server during recovery"
+      },
+      {
+        "symbol": "CONFIG_DEBUG_UART",
+        "value": "y",
+        "purpose": "UART console, the recovery path that survives a broken network"
+      },
+      {
+        "symbol": "CONFIG_MTK_SERIAL",
+        "value": "y",
+        "purpose": "Serial driver of the UART console"
+      },
+      {
+        "symbol": "CONFIG_MEDIATEK_MULTI_MTD_LAYOUT",
+        "value": "y",
+        "purpose": "Reads the layout whitelist from the device tree instead of a fixed table"
+      },
+      {
+        "symbol": "CONFIG_MTK_FIXED_MTD_MTDPARTS",
+        "value": "y",
+        "purpose": "Regenerates the partition table from the selected layout on every boot"
+      },
+      {
+        "symbol": "CONFIG_MTK_DEFAULT_MTD_LAYOUT",
+        "value": "immortalwrt-112m",
+        "purpose": "Makes immortalwrt-112m the layout of a device whose environment selects none"
+      },
+      {
+        "symbol": "CONFIG_ENABLE_NAND_NMBM",
+        "value": "y",
+        "purpose": "Exposes the SPI-NAND through the NMBM logical device the layouts are addressed on"
+      }
+    ],
+    "disabled": [
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_FACTORY",
+        "state": "not-set",
+        "reason": "Factory writes are forbidden: the RF calibration area of the device must not be replaceable from a browser"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_FLASH",
+        "state": "not-set",
+        "reason": "The flash editor reads and writes arbitrary storage ranges, which is an unrecoverable bricking path"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_NAND_RAW",
+        "state": "not-set",
+        "reason": "Raw OOB access belongs to the flash editor and is disabled with it"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_ENV",
+        "state": "not-set",
+        "reason": "Generic environment editing would allow an arbitrary mtdparts and arbitrary boot commands"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_ENV_CUSTOM_ENV",
+        "state": "not-set",
+        "reason": "One-shot custom environment injection is another environment write path"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_CONSOLE",
+        "state": "not-set",
+        "reason": "The web terminal is remote code execution over the network"
+      },
+      {
+        "symbol": "CONFIG_MTK_TELNETD",
+        "state": "not-set",
+        "reason": "Telnet is a second unauthenticated remote shell"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_UBI",
+        "state": "not-set",
+        "reason": "UBI volume management can destroy the system volume of the selected layout"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_SIMG",
+        "state": "not-set",
+        "reason": "A single image upload writes a whole ROM dump, which is not a recovery path"
+      },
+      {
+        "symbol": "CONFIG_WEBUI_FAILSAFE_GPT",
+        "state": "not-set",
+        "reason": "GPT rewriting does not apply to this SPI-NAND board and is not compiled for it"
+      }
+    ],
+    "overclock": {
+      "enabled": false,
+      "symbols_found": [],
+      "note": "The pinned tree carries no MediaTek CPU or DDR overclock Kconfig symbol; the only matches for 'overclock' are unrelated Rockchip and Atmel clock drivers. verify-config still rejects any enabled symbol whose name contains OVERCLOCK or a CPU/DDR/DRAM frequency setting, so a future upstream addition cannot pass unnoticed."
+    },
+    "evidence": {
+      "gate": "verify-config reads the .config that olddefconfig produced in the U-Boot tree, never the environment that was passed to build.sh",
+      "source": "failsafe/Kconfig gates every dangerous page and failsafe/failsafe_core.c registers its handler only when the symbol is set, so disabling the symbol removes the route as well"
+    }
   },
   "layouts": {
     "default_label": "immortalwrt-112m",
