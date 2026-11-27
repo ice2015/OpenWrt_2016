@@ -26,11 +26,25 @@
 | `uboot_lock.py verify-layout-source`（对锁定 commit 的真实设备树） | 通过：设备树只携带 `default` 与 `immortalwrt-112m` 两套布局 |
 | `uboot_lock.py verify-patch --source-dir <锁定 commit 的纯净检出>` | 通过：设备补丁可应用，且不含第三个布局、自由 `mtdparts` 或环境写入 |
 
-静态验证记录（由实施 Agent 填写实际输出摘要，不得写“应该通过”）：
+静态验证记录（2026-11-27，本工作区实际输出）：
 
-- 聚焦测试：UNRESOLVED（待本轮实施结束时补记实际结果）
-- `scripts/validate.sh`：UNRESOLVED（同上）
-- 仓库全量测试：UNRESOLVED（同上；其中 TR3000/Lite 的既存失败只记录、不修复）
+| 命令 | 实际结果 |
+|---|---|
+| `python3 -m unittest tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build tests.workflows.test_workflows` | `Ran 126 tests ... OK` |
+| `bash scripts/validate.sh` | 退出 0，输出 `Manifest catalog is valid.` |
+| `python3 -m unittest discover -s tests -v` | `Ran 506 tests ... FAILED (failures=30, skipped=13)` |
+| `uboot_lock.py verify-layout-source --dts <锁定 commit 的真实设备树>` | 退出 0，只列出 `default` 与 `immortalwrt-112m` |
+| `uboot_lock.py verify-patch --source-dir <锁定 commit 的纯净检出>` | 退出 0，`git apply --check` 通过 |
+
+全量测试的 30 项失败全部是既存的 TR3000/Lite 失败，与本次改动无关：实施前在基线
+工作区（commit `2748192`）运行同一命令得到 `Ran 429 tests ... FAILED (failures=30,
+skipped=13)`，两次的失败测试名集合逐项相同。失败集中在
+`scripts.test_tr3000_lite_remote_controller`（27 项）、`scripts.test_scripts`
+（`test_every_script_supports_help`、`test_lite_network_input_validation`）与
+`structure.test_device_isolation`（`test_legacy_libraries_can_be_sourced_from_posix_callers`）。
+按授权边界，这些失败只记录、不修复，也不扩大改动范围。
+
+本次实施新增 77 项测试（429 → 506），未引入新的失败。
 
 ## 2. 未执行的验证
 
