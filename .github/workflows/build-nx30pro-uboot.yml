@@ -1,4 +1,9 @@
-name: NX30 Pro U-Boot candidate
+name: NX30 Pro restricted-recovery U-Boot
+
+# Manual only. This workflow builds a boot loader candidate; it is never
+# triggered by a push, a pull request or a schedule, and it contains no flash,
+# erase or device command. Accepting a candidate is a separate, explicitly
+# authorized step recorded in devices/nx30pro/docs/UBOOT-TEST-REPORT.md.
 
 on:
   workflow_dispatch:
@@ -13,28 +18,49 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
-      UBOOT_REPOSITORY: https://github.com/hanwckf/bl-mt798x
-      UBOOT_SHA: 36916669d0874306638196c5327a20c2ef215bed
+      UBOOT_REPOSITORY: https://github.com/Yuzhii0718/bl-mt798x-dhcpd
+      UBOOT_SHA: e4cf4dc72d451dc7a86c9508390ad5a2e50743c4
+      UBOOT_LOCK: devices/nx30pro/uboot/uboot-source-lock.json
     steps:
       - name: Check out this build project
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Install pinned build prerequisites
+      - name: Install the build prerequisites the lock names
+        shell: bash
         run: |
+          set -Eeuo pipefail
           mkdir -p "$GITHUB_WORKSPACE/uboot-artifact/logs"
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential bison device-tree-compiler flex gcc-aarch64-linux-gnu \
-            libssl-dev python3
+            libssl-dev python3 npm
+          aarch64-linux-gnu-gcc --version | head -1
+          node --version
+          npm --version
+          python3 --version
 
-      - name: Clone pinned boot loader source
+      - name: Run the repository preflight and the lock gate
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/nx30pro-uboot" "$GITHUB_WORKSPACE/uboot-artifact/logs"
-          git clone --filter=blob:none --no-checkout "$UBOOT_REPOSITORY" "$RUNNER_TEMP/nx30pro-uboot/source"
+          bash scripts/validate.sh
+          python3 -m unittest discover -s tests -p 'test_nx30pro*' -v
+          python3 -m unittest tests.workflows.test_workflows -v
+          python3 devices/nx30pro/build/uboot_lock.py check --lock "$UBOOT_LOCK" \
+            | tee "$RUNNER_TEMP/uboot-build-plan.json"
+          # The plan is the only description of what this job is allowed to build.
+          grep -q 'h3c_magic-nx30-pro' "$RUNNER_TEMP/uboot-build-plan.json"
+          grep -q "$UBOOT_SHA" "$RUNNER_TEMP/uboot-build-plan.json"
+
+      - name: Clone the pinned boot loader source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/nx30pro-uboot"
+          git clone --filter=blob:none --no-checkout "$UBOOT_REPOSITORY" \
+            "$RUNNER_TEMP/nx30pro-uboot/source"
           git -C "$RUNNER_TEMP/nx30pro-uboot/source" checkout --detach "$UBOOT_SHA"
           test "$(git -C "$RUNNER_TEMP/nx30pro-uboot/source" rev-parse HEAD)" = "$UBOOT_SHA"
 

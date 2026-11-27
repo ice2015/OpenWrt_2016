@@ -97,27 +97,112 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("MULTI_LAYOUT=1", (ROOT / "devices/tr3000/build/build-uboot.sh").read_text(encoding="utf-8"))
         self.assertNotIn("256mb", workflow.lower())
 
-    def test_nx30pro_uboot_workflow_builds_the_locked_candidate(self) -> None:
-        workflow = self.workflow("build-nx30pro-uboot.yml")
-        lock = json.loads(
+    def nx30pro_uboot_lock(self) -> dict:
+        return json.loads(
             (ROOT / "devices/nx30pro/uboot/uboot-source-lock.json").read_text(encoding="utf-8")
         )
 
-        self.assertIn("workflow_dispatch:", workflow)
-        self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
-        self.assertIn("concurrency:", workflow)
+    def test_nx30pro_uboot_workflow_has_only_a_manual_trigger(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+        triggers = re.search(r"(?m)^on:\n((?:(?:[ \t].*|)\n)+?)\n(?=\S)", workflow)
+
+        self.assertIsNotNone(triggers, "the workflow does not declare its triggers")
+        block = triggers.group(1)
+        self.assertIn("workflow_dispatch:", block)
+        for forbidden in ("push:", "pull_request:", "schedule:", "release:", "issues:"):
+            self.assertNotIn(forbidden, block)
+        self.assertNotIn("workflow_dispatch:", "")  # documentation of intent
+
+    def test_nx30pro_uboot_workflow_pins_every_action_by_sha(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+        uses = re.findall(r"(?m)^\s*uses:\s*(\S+)", workflow)
+
+        self.assertNotEqual([], uses)
+        for reference in uses:
+            self.assertRegex(
+                reference,
+                r"^[^@]+@[0-9a-f]{40}$",
+                "%s is not pinned to a commit sha" % reference,
+            )
+
+    def test_nx30pro_uboot_workflow_installs_the_dependencies_the_lock_names(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+        lock = self.nx30pro_uboot_lock()
+
+        for package in lock["host_packages"]:
+            self.assertIn(package, workflow)
+        # build.sh minifies the failsafe web assets with npm before compiling.
+        self.assertIn("npm", workflow)
+
+    def test_nx30pro_uboot_workflow_runs_repository_checks_before_the_build(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+
+        build_at = workflow.index("devices/nx30pro/build/build-uboot.sh")
+        validate_at = workflow.index("bash scripts/validate.sh")
+        tests_at = workflow.index("python3 -m unittest discover -s tests")
+        self.assertLess(validate_at, build_at)
+        self.assertLess(tests_at, build_at)
+        # The static gate of the lock itself runs before any source is fetched.
+        preflight_at = workflow.index("check --lock")
+        self.assertLess(preflight_at, workflow.index("git clone"))
+
+    def test_nx30pro_uboot_workflow_clones_the_locked_commit_only(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+        lock = self.nx30pro_uboot_lock()
+
         self.assertIn(lock["source"]["repository"], workflow)
         self.assertIn(lock["source"]["commit"], workflow)
+        # The ref name is informational; a moving branch is never a build input.
+        self.assertNotRegex(workflow, r"clone[^\n]*\b(master|main)\b")
+        self.assertNotRegex(workflow, r"checkout[^\n]*--branch")
+        self.assertRegex(workflow, r"rev-parse HEAD[^\n]*UBOOT_SHA|UBOOT_SHA[^\n]*rev-parse")
+
+    def test_nx30pro_uboot_workflow_has_no_flash_commands_and_no_other_device(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+
+        for forbidden in (
+            "mtd write",
+            "nandwrite",
+            "flash_erase",
+            "dd if=",
+            "/dev/mtd",
+            "mtd_debug",
+            "sysupgrade",
+        ):
+            self.assertNotIn(forbidden, workflow)
+        for other_device in ("devices/tr3000", "scripts/build-uboot.sh", "build-lite.sh"):
+            self.assertNotIn(other_device, workflow)
+        self.assertNotIn("secrets:", workflow)
+        self.assertNotIn("pull_request_target", workflow)
+        self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
+
+    def test_nx30pro_uboot_workflow_builds_the_locked_candidate(self) -> None:
+        workflow = self.workflow("build-nx30pro-uboot.yml")
+        lock = self.nx30pro_uboot_lock()
+
+        self.assertIn("concurrency:", workflow)
         self.assertIn("devices/nx30pro/build/build-uboot.sh", workflow)
         self.assertIn("devices/nx30pro/uboot/uboot-source-lock.json", workflow)
         self.assertIn("actions/upload-artifact@", workflow)
         self.assertNotIn("secrets:", workflow)
+        # The build entry point of the plan is called with its exact interface.
+        self.assertRegex(
+            workflow,
+            r"sh devices/nx30pro/build/build-uboot\.sh \\\n"
+            r"\s+--lock devices/nx30pro/uboot/uboot-source-lock\.json \\\n"
+            r"\s+--source-dir [^\n]+\\\n"
+            r"\s+--artifact-dir [^\n]+\n",
+        )
+        self.assertIn(lock["board"]["name"], workflow)
         # Images are published only when the build and both inspections
         # succeeded; the logs are always kept for diagnosis.
         self.assertRegex(workflow, r"(?s)- name: Upload boot loader candidates.*?if: success\(\)")
         self.assertRegex(workflow, r"(?s)- name: Upload build logs.*?if: always\(\)")
         self.assertIn("uboot-artifact/images/", workflow)
         self.assertIn("uboot-artifact/logs/", workflow)
+        self.assertIn("uboot-artifact/build-report.json", workflow)
+        self.assertIn("uboot-artifact/FLASH-TARGETS.txt", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
 
     def test_nx30pro_firmware_workflow_builds_the_locked_candidate(self) -> None:
         workflow = self.workflow("build-nx30pro.yml")
