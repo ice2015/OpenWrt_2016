@@ -121,6 +121,270 @@ MAC_ADDRESS = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
 # the deployment README. It is a placeholder, not the MAC of a device.
 MAC_PLACEHOLDER = "aa:bb:cc:dd:ee:ff"
 
+# The overlay of this device. It is copied into the rootfs by
+# devices/nx30pro/build/configure.sh, so everything in it ships to the device.
+OVERLAY = DEVICE / "files"
+FIRST_BOOT_DEFAULTS = OVERLAY / "etc" / "uci-defaults" / "90-nx30pro-defaults"
+OVERLAY_CONFIG_DIR = OVERLAY / "etc" / "config"
+WAN_MAC_README = OVERLAY / "etc" / "nx30pro" / "README"
+
+# Values that belong to one deployment and never to a build. They are scanned
+# over the whole overlay, comments included: a commented out credential is
+# still a credential in the repository.
+IPV4_ADDRESS = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+IPV6_ADDRESS = re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![\w:])")
+PRIVATE_KEY_BLOCK = re.compile(r"BEGIN [A-Z ]*PRIVATE KEY")
+# Tunnel tokens, credentials files and API keys are base64 or hex blobs.
+TOKEN_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9+/=.-])[A-Za-z0-9+/=]{24,}(?![A-Za-z0-9+/=.-])"
+)
+# A domain only counts in a value position; a file name such as
+# /etc/cloudflared/config.yml is not one.
+DOMAIN_LITERAL = re.compile(
+    r"(?<![\w./-])[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+    r"(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}(?![\w./-])",
+    re.I,
+)
+# `name=value`, `option name 'value'`, `list name 'value'` and `name: value`.
+ASSIGNMENT = re.compile(
+    r"""(?xim)
+    (?:
+        ^\s*(?P<shell>[A-Za-z_][\w]*)\s*=
+      | \buci[^\n]*\bset\s+\S*\.(?P<uci>\w+)\s*=
+      | ^\s*(?:option|list)\s+(?P<config>\w+)
+      | ^\s*(?P<yaml>[A-Za-z_][\w-]*)\s*:
+    )
+    (?P<value>[^\n]*)
+    """,
+)
+# Option names that only ever hold a deployment value. Writing one of them is
+# only allowed with the off switch value 0, which carries no information.
+DEPLOYMENT_OPTIONS = frozenset(
+    (
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "passphrase",
+        "key",
+        "psk",
+        "private_key",
+        "credentials_file",
+        "origincert",
+        "account",
+        "api_key",
+        "subscription",
+        "domain",
+        "lookup_host",
+        "username",
+        "server_addr",
+        "ssid",
+        "mac",
+        "ipaddr",
+    )
+)
+
+# First boot handling of every selected package that ships a service.
+# `init` names the /etc/init.d scripts of the package, `switches` the UCI
+# options that gate them as (package, section type, option). Both were read at
+# the pinned feed commits recorded in source-lock.json:
+#
+#   luci-app-passwall  root/etc/init.d/{passwall,passwall_server} and
+#                      root/usr/share/passwall/0_default_config
+#                      (`config global` / `option enabled '0'`) plus
+#                      root/etc/config/passwall_server
+#                      (`config global 'global'` / `option enable '0'`).
+#   ddns-scripts       files/etc/init.d/ddns, files/etc/config/ddns
+#                      (`config service`), read by
+#                      files/usr/lib/ddns/dynamic_dns_updater.sh, which
+#                      treats a missing `enabled` as 0.
+#   tailscale          files/tailscale.init of the tailscaled subpackage and
+#                      files/tailscale.conf (`config settings 'settings'`):
+#                      no enable option exists, only the init script gates it.
+#   zerotier           files/etc/init.d/zerotier (`section_enabled` reads
+#                      `enabled` of every `zerotier` section) and
+#                      files/etc/config/zerotier.
+#   dockerd            files/dockerd.init: no enable option, and its boot()
+#                      even adds a network interface, a bridge device and a
+#                      firewall zone with input ACCEPT before starting.
+#   cloudflared        files/cloudflared.init (`config_get_bool enabled
+#                      "config" "enabled"`) and files/cloudflared.config.
+#   frpc               files/frpc.init and files/frpc.config: no enable
+#                      option, and the shipped config forwards local port 22.
+#   nlbwmon            files/nlbwmon.init and files/nlbwmon.config: no enable
+#                      option.
+#   ttyd               files/ttyd.init validates `enable:bool:1`, i.e. the web
+#                      terminal is ON unless the option says otherwise.
+#   sqm-scripts        section type `queue` and option `enabled`, read from
+#                      luci-app-sqm/htdocs/luci-static/resources/view/network/
+#                      sqm.js at the pinned luci commit; the sqm-scripts
+#                      tarball itself is not part of the feed checkout.
+#   etherwake          files/etherwake.init: wakes every `target` section with
+#                      `wakeonboot` on, and its config template carries a MAC
+#                      and a password field, so it stays off.
+SELECTED_SERVICES = {
+    "luci-app-passwall": {
+        "init": ("passwall", "passwall_server"),
+        "switches": (
+            ("passwall", "global", "enabled"),
+            ("passwall_server", "global", "enable"),
+        ),
+    },
+    "ddns-scripts": {
+        "init": ("ddns",),
+        "switches": (("ddns", "service", "enabled"),),
+    },
+    "tailscale": {"init": ("tailscale",), "switches": ()},
+    "zerotier": {
+        "init": ("zerotier",),
+        "switches": (("zerotier", "zerotier", "enabled"),),
+    },
+    "dockerd": {"init": ("dockerd",), "switches": ()},
+    "cloudflared": {
+        "init": ("cloudflared",),
+        "switches": (("cloudflared", "cloudflared", "enabled"),),
+    },
+    "frpc": {"init": ("frpc",), "switches": ()},
+    "nlbwmon": {"init": ("nlbwmon",), "switches": ()},
+    "ttyd": {"init": ("ttyd",), "switches": (("ttyd", "ttyd", "enable"),)},
+    "sqm-scripts": {"init": ("sqm",), "switches": (("sqm", "queue", "enabled"),)},
+    "etherwake": {"init": ("etherwake",), "switches": ()},
+}
+
+# Selected packages that are not services. Each one needs a reason, so a new
+# package in the lock has to be classified deliberately instead of silently
+# escaping the first boot defaults.
+SELECTED_NON_SERVICES = {
+    "luci": "web framework, no init script of its own",
+    "luci-ssl-openssl": "TLS collector of luci, no init script of its own",
+    "luci-i18n-base-zh-cn": "translation package, no init script",
+    "luci-theme-argon": "theme; its own uci-defaults sets luci.main.mediaurlbase",
+    "luci-theme-bootstrap": "fallback theme, registered by its own uci-defaults",
+    "luci-app-ddns": "LuCI view of ddns-scripts, no init script",
+    "luci-app-zerotier": "LuCI view of zerotier, no init script",
+    "luci-app-docker": "LuCI view of dockerd, no init script",
+    "xray-core": "backend binary that passwall starts, no init script",
+    "xray-plugin": "backend plugin that passwall starts, no init script",
+    "docker": "command line client of dockerd, no init script",
+    "fuse-overlayfs": "storage backend of dockerd, no init script",
+    "ddns-scripts-cloudflare": "provider plugin of ddns-scripts, no init script",
+    "openssh-sftp-server": "installs /usr/lib/sftp-server only, no init script",
+    "tcpdump-mini": "command line tool, no init script",
+    "iperf3": "command line tool, no init script",
+    "mtr": "command line tool, no init script",
+    # The baseline DNS/DHCP server is essential: an image without it has no
+    # resolver, and the documented Lite failure showed how far that reaches.
+    "dnsmasq-full": "baseline DNS/DHCP server, must stay enabled",
+}
+
+# UCI packages the first boot defaults must never write to: they carry the
+# baseline network, wireless, firewall and management configuration.
+UNTOUCHABLE_UCI_PACKAGES = (
+    "network",
+    "wireless",
+    "firewall",
+    "dhcp",
+    "system",
+    "dropbear",
+    "uhttpd",
+    "luci",
+    "ucitrack",
+)
+
+# Init scripts that must not be disabled: they are the baseline of the image.
+UNTOUCHABLE_SERVICES = (
+    "dnsmasq",
+    "network",
+    "firewall",
+    "system",
+    "log",
+    "dropbear",
+    "uhttpd",
+    "cron",
+    "rpcd",
+    "boot",
+)
+
+# Commands the target image provides. busybox of the pinned base commit
+# enables mkdir, sed, echo and test and does NOT enable stat or od
+# (package/utils/busybox/Config-defaults.in), which a development host has;
+# uci comes from package/system/uci and is always in the image. The list is
+# deliberately minimal: a new command needs new evidence, because no NX30 Pro
+# image exists yet to export a verified command list from.
+IMAGE_COMMANDS = frozenset(("uci", "mkdir", "sed", "echo", "["))
+
+SHELL_BUILTINS = frozenset(
+    (
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "for",
+        "in",
+        "do",
+        "done",
+        "while",
+        "until",
+        "case",
+        "esac",
+        "local",
+        "return",
+        "set",
+        "exit",
+        "export",
+        "unset",
+        "shift",
+        "read",
+        "eval",
+        "exec",
+        "break",
+        "continue",
+        "true",
+        "false",
+        ".",
+        ":",
+    )
+)
+SEGMENT_SEPARATOR = re.compile(
+    r"[;|]|\$\(|&&|\|\||\bthen\b|\bdo\b|\belse\b|\belif\b|\bif\b|\bwhile\b|\bfor\b"
+)
+# A word in one of these shapes is data of the script, not a command.
+DATA_WORD = re.compile(r"""^[-$'"`<>(){}*?@&\d]|=""")
+
+
+def shell_commands(text):
+    """Return every command name a POSIX shell script runs.
+
+    Only command positions are read: the first word of a segment after a line
+    start, `;`, `|`, `&&`, `||`, `$(`, `then`, `do`, `else` or a control
+    keyword. Shell builtins, the script's own functions and variables and
+    expansions such as `"$script" disable` are not commands.
+    """
+    functions = set(re.findall(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)", text, re.M))
+    variables = set(re.findall(r"\b([A-Za-z_]\w*)=", text))
+    variables.update(re.findall(r"\blocal\s+([A-Za-z_]\w*)", text))
+    found = set()
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0]
+        if not line.strip():
+            continue
+        for segment in SEGMENT_SEPARATOR.split(line):
+            words = segment.strip().split()
+            while words and words[0] == "!":
+                words.pop(0)
+            if not words:
+                continue
+            word = words[0]
+            if word in SHELL_BUILTINS or word in functions or word in variables:
+                continue
+            if "(" in word or ")" in word:
+                continue
+            if DATA_WORD.search(word):
+                continue
+            found.add(word)
+    return found, functions
+
 
 def patch_targets(patch_text):
     """Return the (left, right) source paths of every file a patch touches."""
@@ -687,13 +951,17 @@ class Nx30ProFirmwareDeviceLayerTests(unittest.TestCase):
         self.assertIn("/etc/nx30pro/wan-mac", text)
         self.assertIn("02_network", text)
 
-    def test_overlay_keeps_every_service_switched_off(self):
-        defaults = DEVICE / "files" / "etc" / "uci-defaults" / "90-nx30pro-defaults"
-        self.assertTrue(defaults.is_file(), "missing NX30 Pro first boot defaults")
-        text = defaults.read_text(encoding="utf-8")
-        for service in ("passwall", "ddns", "tailscale", "zerotier", "docker"):
-            self.assertRegex(text, r"uci -q set %s\.enabled='0'" % service, service)
-        self.assertIn("/etc/nx30pro", text)
+    def test_overlay_is_the_documented_first_boot_contract(self):
+        """The overlay contract itself lives in Nx30ProFirmwareFirstBootOverlayTests.
+
+        This row only keeps the two facts the device layer table states: the
+        overlay is registered in the manifest and the deployment directory of
+        the WAN MAC is documented.
+        """
+        self.assertTrue(FIRST_BOOT_DEFAULTS.is_file())
+        self.assertTrue(WAN_MAC_README.is_file())
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(["devices/nx30pro/files"], manifest["overlay_layers"])
 
     def test_manifest_registers_the_device_with_its_own_source(self):
         manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -1218,6 +1486,288 @@ class Nx30ProDeviceConfigLayerTests(unittest.TestCase):
                 explaining,
                 "the override %r has no explaining comment above it" % line,
             )
+
+
+class Nx30ProFirmwareFirstBootOverlayTests(unittest.TestCase):
+    """First boot state of the image: services off, no deployment value.
+
+    Everything here reads the overlay of this device and the package table of
+    its source lock. No image was built and no device was touched: the
+    assertions are static, and the runtime behaviour of a service stays
+    UNRESOLVED until a device test says otherwise.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        cls.packages = {
+            entry["package"]: entry for entry in cls.lock["packages"]
+        }
+        cls.text = FIRST_BOOT_DEFAULTS.read_text(encoding="utf-8")
+
+    def selected_packages(self):
+        """Every package the lock selects for this image."""
+        return [
+            name
+            for name, entry in self.packages.items()
+            if entry["status"] not in ("unavailable", "UNRESOLVED")
+        ]
+
+    def overlay_files(self):
+        return sorted(path for path in OVERLAY.rglob("*") if path.is_file())
+
+    def test_every_selected_package_is_classified_as_a_service_or_not(self):
+        classified = set(SELECTED_SERVICES) | set(SELECTED_NON_SERVICES)
+        selected = set(self.selected_packages())
+        self.assertEqual(
+            selected,
+            classified,
+            "a selected package is neither in SELECTED_SERVICES nor in "
+            "SELECTED_NON_SERVICES, so the first boot defaults do not state "
+            "what happens to it; missing: %s, unselected: %s"
+            % (
+                sorted(selected - classified),
+                sorted(classified - selected),
+            ),
+        )
+        self.assertEqual(
+            [], sorted(set(SELECTED_SERVICES) & set(SELECTED_NON_SERVICES))
+        )
+        for name, entry in SELECTED_SERVICES.items():
+            self.assertTrue(entry["init"], name)
+        for name, reason in SELECTED_NON_SERVICES.items():
+            self.assertTrue(reason, name)
+
+    def test_first_boot_defaults_switch_every_selected_service_off(self):
+        """PassWall, DDNS, Tailscale, ZeroTier, Docker, cloudflared and the rest.
+
+        A service is off when its init script is disabled and, when the
+        package gates itself through UCI, when every section of the gating
+        type carries the off switch. The image enables all of them while it is
+        assembled (include/rootfs.mk prepare_rootfs runs `rc.common enable`
+        for every /etc/init.d script), so the symlink has to go.
+        """
+        for name, entry in SELECTED_SERVICES.items():
+            for script in entry["init"]:
+                self.assertRegex(
+                    self.text,
+                    r"(?m)^service_off %s$" % re.escape(script),
+                    "%s: the init script %s is not disabled" % (name, script),
+                )
+            for package, section_type, option in entry["switches"]:
+                self.assertRegex(
+                    self.text,
+                    r"(?m)^switch_off %s %s %s$"
+                    % (re.escape(package), re.escape(section_type), re.escape(option)),
+                    "%s: %s.%s is not switched off" % (name, package, option),
+                )
+
+    def test_first_boot_defaults_keep_the_essential_services_alone(self):
+        for package in UNTOUCHABLE_UCI_PACKAGES:
+            self.assertNotRegex(
+                self.text,
+                r"(?m)^(?:service_off|switch_off)\s+%s\b" % re.escape(package),
+                "the first boot defaults must not switch off %s" % package,
+            )
+        for script in UNTOUCHABLE_SERVICES:
+            self.assertNotRegex(
+                self.text,
+                r"(?m)^service_off %s$" % re.escape(script),
+                "the first boot defaults must not disable /etc/init.d/%s" % script,
+            )
+
+    def test_first_boot_defaults_only_write_the_off_switch(self):
+        """The defaults may write 0 to an enable option and nothing else.
+
+        Any other value would be a deployment value: a node, an account, an
+        interface, an address. `uci add`, `delete` and `rename` are refused as
+        well, because a first boot script that rewrites a section also
+        rewrites what an operator put there.
+        """
+        # Prose in a comment is not a command: `<uci package>` in the helper
+        # documentation would otherwise read as the `uci package` subcommand.
+        code = "\n".join(
+            line for line in self.text.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        subcommands = set()
+        for match in re.finditer(r"\buci\s+(?:-\w+\s+)*(\w+)", code):
+            subcommands.add(match.group(1))
+        self.assertLessEqual(
+            subcommands,
+            {"show", "get", "set", "commit"},
+            "the first boot defaults use a uci subcommand that changes more "
+            "than an enable option",
+        )
+        for match in re.finditer(r"\buci\b[^\n]*\bset\b([^\n]*)", code):
+            value = re.split(r"[;\n]", match.group(1))[0]
+            value = re.sub(r"\bthen\b.*$", "", value).strip()
+            self.assertTrue(
+                value.endswith("=0") or value.endswith('=0"'),
+                "the first boot defaults write %r instead of the off switch"
+                % value,
+            )
+
+    def test_first_boot_defaults_guard_a_package_that_is_not_installed(self):
+        """An absent package must not fail the script.
+
+        Both helpers answer with the package's own paths: /etc/config/<name>
+        for a UCI switch and /etc/init.d/<name> for a service. A package the
+        probe dropped, or an optional tool that never built, leaves the file
+        absent and the helper returns 0 instead of failing the first boot.
+        """
+        self.assertIn('[ ! -f "/etc/config/$package" ]', self.text)
+        self.assertIn('[ ! -x "$script" ]', self.text)
+        self.assertIn("#!/bin/sh", self.text.splitlines()[0])
+        self.assertIn("set -eu", self.text)
+
+    def test_first_boot_defaults_commit_only_the_packages_they_changed(self):
+        """No blanket `uci commit`, and no write when the value already fits.
+
+        A blanket commit would also commit the deltas of every other
+        uci-defaults script of the image. Reading the current value first
+        keeps a second run free of flash writes, which is what makes the file
+        idempotent.
+        """
+        for match in re.finditer(r"\buci[^\n]*\bcommit\b([^\n]*)", self.text):
+            self.assertTrue(
+                match.group(1).strip().startswith('"$package"'),
+                "the first boot defaults commit more than one package: %r"
+                % match.group(0),
+            )
+        self.assertIn("mark_changed", self.text)
+        self.assertRegex(self.text, r"(?m)^commit_changed$")
+
+    def test_first_boot_defaults_are_removed_only_after_a_successful_run(self):
+        """/etc/init.d/boot removes a uci-defaults script only when it returned 0.
+
+        So this file must not delete itself and must not swallow a failure:
+        the last statement is `exit 0`, every helper reports a failed write on
+        stderr and returns nonzero, and `set -e` turns that into a nonzero
+        exit of the sourced subshell, which keeps the file for the next boot.
+        """
+        self.assertEqual("exit 0", self.text.strip().splitlines()[-1].strip())
+        self.assertNotIn("rm ", self.text)
+        self.assertNotIn("$0", self.text)
+        self.assertNotIn("|| true", self.text)
+        self.assertRegex(self.text, r"(?m)^\s*echo \"nx30pro-defaults: ")
+        # The documented zero byte libuci delta trap: a pending change is only
+        # pending when the delta file has content, so `-e` is never enough.
+        for match in re.finditer(r"\[\s*(-\w)\s+[^\n]*/tmp/\.uci", self.text):
+            self.assertEqual(
+                "-s",
+                match.group(1),
+                "a zero byte /tmp/.uci delta is not a pending change",
+            )
+
+    def test_first_boot_defaults_use_only_commands_of_the_target_image(self):
+        """No applet the target busybox lacks.
+
+        The documented Lite failure was a script that called `stat` and `od`
+        on a device whose busybox has neither. The NX30 Pro command list is
+        not verified yet because no image exists, so the allowlist holds only
+        what the pinned base enables by default plus uci.
+        """
+        commands, functions = shell_commands(self.text)
+        unknown = commands - IMAGE_COMMANDS - SHELL_BUILTINS - functions
+        self.assertEqual(
+            set(),
+            unknown,
+            "the first boot defaults call commands the image is not proven to "
+            "provide; extend IMAGE_COMMANDS only with evidence from the "
+            "pinned base or a verified image",
+        )
+
+    def test_first_boot_defaults_explain_the_deployment_placeholders(self):
+        """cloudflared and DDNS are documented, not configured.
+
+        The tunnel token and the DDNS provider, domain and password belong to
+        one deployment. The defaults say where they go and that they never
+        enter the image, and they write no value of them.
+        """
+        self.assertIn("cloudflared", self.text)
+        self.assertIn("config.yml", self.text)
+        self.assertIn("ddns", self.text)
+        self.assertIn("deployment", self.text.lower())
+
+    def test_overlay_carries_no_tunnel_token_domain_credential_or_address(self):
+        for path in self.overlay_files():
+            text = path.read_text(encoding="utf-8")
+            relative = path.relative_to(OVERLAY).as_posix()
+            self.assertEqual(
+                [],
+                IPV4_ADDRESS.findall(text),
+                "%s carries an IP address" % relative,
+            )
+            self.assertEqual(
+                [],
+                IPV6_ADDRESS.findall(text),
+                "%s carries an IPv6 address" % relative,
+            )
+            self.assertEqual(
+                [],
+                PRIVATE_KEY_BLOCK.findall(text),
+                "%s carries private key material" % relative,
+            )
+            self.assertEqual(
+                [],
+                TOKEN_LITERAL.findall(text),
+                "%s carries a token shaped literal" % relative,
+            )
+            found = MAC_ADDRESS.findall(text)
+            if path != WAN_MAC_README:
+                self.assertEqual(
+                    [], found, "%s carries a MAC address" % relative
+                )
+            else:
+                self.assertEqual(
+                    [MAC_PLACEHOLDER] * len(found),
+                    found,
+                    "%s carries a MAC that is not the documented placeholder"
+                    % relative,
+                )
+            for match in ASSIGNMENT.finditer(text):
+                name = (
+                    match.group("shell")
+                    or match.group("uci")
+                    or match.group("config")
+                    or match.group("yaml")
+                )
+                value = match.group("value").strip().strip("'\"")
+                if not value or value in ("0", '""', "''"):
+                    continue
+                self.assertEqual(
+                    [],
+                    DOMAIN_LITERAL.findall(value),
+                    "%s assigns a domain to %s" % (relative, name),
+                )
+                self.assertNotIn(
+                    name.lower(),
+                    DEPLOYMENT_OPTIONS,
+                    "%s assigns a value to the deployment option %s"
+                    % (relative, name),
+                )
+
+    def test_overlay_ships_no_wireless_or_network_configuration(self):
+        """No wholesale replacement of a baseline configuration file.
+
+        The documented Lite failure replaced /etc/config/network and lost the
+        `loopback` section, which took the device's own resolver, its clock
+        and every TLS download with it. This overlay ships no /etc/config
+        file at all: every selected service installs its own conffile, and a
+        copy here would replace it during rootfs assembly and be ambiguous
+        across a sysupgrade. If a template ever becomes necessary, a network
+        template has to keep loopback.
+        """
+        if not OVERLAY_CONFIG_DIR.is_dir():
+            return
+        for path in sorted(OVERLAY_CONFIG_DIR.rglob("*")):
+            if not path.is_file() or path.name != "network":
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("config interface 'loopback'", text)
+            for option in ("device 'lo'", "proto 'static'", "ipaddr '127.0.0.1'"):
+                self.assertIn(option, text)
 
 
 if __name__ == "__main__":

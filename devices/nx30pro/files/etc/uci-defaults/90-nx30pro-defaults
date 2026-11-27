@@ -1,34 +1,213 @@
 #!/bin/sh
-# NX30 Pro first boot defaults.
+# NX30 Pro 112M first boot defaults.
 #
-# Nothing in this file enables a service that needs an account, a token or a
-# subscription. Every service stays switched off until it is configured.
+# The contract of this file, and the evidence for it, is checked statically by
+# tests/structure/test_nx30pro_firmware_contract.py against the package table
+# of devices/nx30pro/source-lock.json. Nothing here was observed on a device:
+# the runtime behaviour of every service stays UNRESOLVED until a device test.
+#
+# * Every service the device layer selects is switched off. The image enables
+#   all of them while it is assembled: include/rootfs.mk `prepare_rootfs` runs
+#   `rc.common <script> enable` for every /etc/init.d script that begins with
+#   `#!/bin/sh /etc/rc.common`, which creates /etc/rc.d/S<START><name>.
+#   `disable` is the exact inverse (rc.common removes /etc/rc.d/S??name and
+#   /etc/rc.d/K??name) and is idempotent.
+# * Nothing has to be stopped. /etc/init.d/boot has START=10 and applies
+#   /etc/uci-defaults before the START numbers of the services below: 60
+#   (etherwake, nlbwmon), 80 (tailscale), 90 (zerotier), 95 (ddns) and 99
+#   (passwall, passwall_server, dockerd, cloudflared, frpc, ttyd). The rc.d
+#   names carry that number, so removing the symlink is enough.
+# * An absent package cannot fail this file: both helpers answer on the paths
+#   of the package itself, /etc/config/<name> and /etc/init.d/<name>, and
+#   return 0 when they are not there.
+# * Only the UCI packages this file changed are committed, and an option is
+#   written only when its current value differs, so a repeated run changes
+#   nothing and writes nothing to flash.
+# * This file does not delete itself. /etc/init.d/boot runs a uci-defaults
+#   script in a subshell and removes it only when it returned 0, so any
+#   failure keeps the file for the next boot. That is why `set -e` is on and
+#   why no failure is swallowed here.
+# * No account, node, subscription, token, domain, password, key, address or
+#   MAC of a device appears in this file. Deployment values are written on the
+#   device after the first boot; see the placeholders at the bottom.
+#
+# Only uci, mkdir, sed, echo and the test builtin are used. busybox of the
+# pinned base enables mkdir, sed, echo and test and does not enable stat or
+# od, which a development host has (package/utils/busybox/Config-defaults.in).
 set -eu
 
-# The directory that holds the deployment specific values. The WAN MAC file
-# is written by the operator, it is never part of the image.
+# UCI packages this file created a pending change for.
+CHANGED=""
+
+mark_changed() {
+	local package=$1
+
+	case " $CHANGED " in
+	*" $package "*)
+		return 0
+		;;
+	esac
+	CHANGED="$CHANGED $package"
+	return 0
+}
+
+# switch_off <uci package> <section type> <option>
+#
+# Write 0 to <option> of every section of one type, so a section an operator
+# added cannot stay on. The section names are read from `uci show`, which
+# reports an anonymous section as the generated cfg name that `uci set`
+# accepts, so neither the number nor the naming of the sections is assumed.
+switch_off() {
+	local package=$1
+	local type=$2
+	local option=$3
+	local sections
+	local section
+	local current
+
+	if [ ! -f "/etc/config/$package" ]; then
+		return 0
+	fi
+	sections=$(uci -q show "$package" 2>/dev/null | sed -n "s/^${package}\.\([^.][^.]*\)=${type}$/\1/p") || sections=""
+	for section in $sections; do
+		current=$(uci -q get "${package}.${section}.${option}" 2>/dev/null) || current=""
+		if [ "$current" = "0" ]; then
+			continue
+		fi
+		if ! uci -q set "${package}.${section}.${option}=0"
+		then
+			echo "nx30pro-defaults: cannot switch off ${package}.${section}.${option}" >&2
+			return 1
+		fi
+		mark_changed "$package"
+	done
+	return 0
+}
+
+# service_off <init script name>
+service_off() {
+	local script="/etc/init.d/$1"
+
+	if [ ! -x "$script" ]; then
+		return 0
+	fi
+	if ! "$script" disable
+	then
+		echo "nx30pro-defaults: cannot disable $script" >&2
+		return 1
+	fi
+	return 0
+}
+
+# commit_changed
+#
+# Commit the packages this file changed and nothing else. A blanket commit
+# would also commit the pending deltas of every other uci-defaults script of
+# the image, which is not this file's decision.
+commit_changed() {
+	local package
+
+	for package in $CHANGED; do
+		if ! uci -q commit "$package"
+		then
+			echo "nx30pro-defaults: cannot commit $package" >&2
+			return 1
+		fi
+	done
+	return 0
+}
+
+# Deployment values of one device live here and are written by the operator
+# after the first boot; the WAN MAC file is documented in the README that
+# ships next to it. The directory is part of the image, its content is not.
 mkdir -p /etc/nx30pro
 
-uci -q set luci.main.mediaurlbase='/luci-static/bootstrap' 2>/dev/null || true
-uci -q delete luci.main.mediaurlbase 2>/dev/null || true
-uci -q set luci.main.resourcebase='/luci-static/argon' 2>/dev/null || true
+# LuCI theme: deliberately untouched here. luci-theme-argon and
+# luci-theme-bootstrap each install their own /etc/uci-defaults/30_luci-theme-*
+# script, those sort before this file, and together they already make Argon
+# the mediaurlbase while registering Bootstrap as the fallback theme. Writing
+# luci.main.mediaurlbase here would run after them, and luci.main.resourcebase
+# is /luci-static/resources of luci-base, not a theme path.
 
-# Transparent proxy: stays off until a node is configured.
-uci -q set passwall.enabled='0' 2>/dev/null || true
+# Transparent proxy: PassWall with its Xray backend. /etc/config/passwall is
+# created by the application's own /etc/uci-defaults/luci-passwall, which
+# sorts after this file, so at the very first boot the switch below finds no
+# config file and the copied default of the application governs; that default
+# already carries 0 in `option enabled` of its `config global` section. The
+# two init scripts are disabled here and stay disabled, and the server half is
+# switched off through its own config file, which the package installs.
+service_off passwall
+service_off passwall_server
+switch_off passwall global enabled
+switch_off passwall_server global enable
 
-# Dynamic DNS: stays off until a provider and a domain are configured.
-uci -q set ddns.enabled='0' 2>/dev/null || true
+# Dynamic DNS: the updater skips a service section whose `enabled` is absent
+# or 0, so the two shipped placeholder sections are inert; the switch makes
+# that state explicit instead of relying on an absent option. The provider,
+# the domain and its credentials are deployment values, see the bottom.
+service_off ddns
+switch_off ddns service enabled
 
-# Overlay networks: stay off until an account is added.
-uci -q set tailscale.enabled='0' 2>/dev/null || true
-uci -q set zerotier.enabled='0' 2>/dev/null || true
+# Overlay networks. Tailscale has no enable option at all, its init script is
+# the only gate, and without a state file the daemon has no account anyway.
+# ZeroTier gates every `zerotier` section on its own `enabled` option.
+service_off tailscale
+service_off zerotier
+switch_off zerotier zerotier enabled
 
-# Container engine: stays off until a storage driver and a data directory
-# are confirmed on the device.
-uci -q set docker.enabled='0' 2>/dev/null || true
+# Container engine. dockerd has no enable option either, and its boot path
+# would add a network interface, a bridge device and a firewall zone that
+# accepts input before it starts the daemon. Which storage driver and which
+# data directory work on the writable space of this device is UNRESOLVED, so
+# the daemon stays off until that was answered on the device.
+service_off dockerd
 
-# The management interfaces stay in the lan zone only. The image never opens
-# the router ports to the wan zone.
-uci -q set firewall.@zone[1].input='REJECT' 2>/dev/null || true
+# Argo tunnel. The init script only starts the client when the `enabled`
+# option of its `config` section is 1, and the tunnel credentials are
+# deployment values, see the bottom.
+service_off cloudflared
+switch_off cloudflared cloudflared enabled
+
+# Optional services the device layer selects. frpc has no enable option and
+# its shipped configuration forwards a local port to a remote one, nlbwmon
+# has no enable option either, and ttyd validates its `enable` option with a
+# default of 1, i.e. the web terminal is on unless this file says otherwise.
+# The section type and the option of sqm are read from luci-app-sqm of the
+# pinned luci feed; the sqm-scripts tarball itself is not part of the feed
+# checkout, so both helpers guard on the paths of the package. etherwake only
+# wakes a target whose `wakeonboot` is on, and its config template carries a
+# MAC and a password field, so the boot path stays off and the command line
+# tool remains available to the operator.
+service_off frpc
+service_off nlbwmon
+service_off ttyd
+switch_off ttyd ttyd enable
+service_off sqm
+switch_off sqm queue enabled
+service_off etherwake
+
+commit_changed
+
+# ---------------------------------------------------------------------------
+# Deployment placeholders. Nothing below is written by this file; it says
+# where a value belongs so that nobody puts it into the image instead.
+#
+# cloudflared (Argo tunnel)
+#   The package installs /etc/cloudflared/config.yml with the upstream
+#   placeholders for the tunnel UUID and its credentials file. At deployment
+#   time an operator replaces them with the real tunnel and ingress rules, or
+#   stores the tunnel token in the `token` option of the `config` section of
+#   /etc/config/cloudflared, then sets the `enabled` option of that section to
+#   1 and enables the init script again. The token and the credentials file
+#   are secrets: they are written on the device only, never in this repository
+#   and never in a build.
+#
+# Dynamic DNS
+#   The provider, the host name, the domain and its account data are entered
+#   on the device, in LuCI under the dynamic DNS page or in the matching
+#   service section of /etc/config/ddns. The operator then sets the `enabled`
+#   option of that section to 1 and enables the init script again. The
+#   ddns-scripts-cloudflare provider of this image needs the account token of
+#   that service, which is a secret and stays on the device.
 
 exit 0
