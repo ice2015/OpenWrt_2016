@@ -10,6 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-27-nx30pro-firmware-uboot-redesign.md`
 
+> **Execution status (2026-11-27, phase one):** Tasks 1–6 are implemented and committed
+> (`2748192..ad3847e`, including one review fix pass). Task 7 is intentionally NOT executed:
+> triggering GitHub Actions requires separate user authorization. This was static work only —
+> no U-Boot was compiled and no device was touched. Evidence:
+> `devices/nx30pro/docs/UBOOT-TEST-REPORT.md`.
+
 ## Global Constraints
 
 - Default layout is exactly `immortalwrt-112m`; the only alternative is exactly `default`.
@@ -43,25 +49,25 @@
 - Consumes: approved design and upstream read-only investigation evidence.
 - Produces: `uboot-source-lock.json` fields `source.repository`, `source.commit`, `source.version`, `source.atf_tree`, `source.uboot_tree`, `board`, `features`, `layouts`, and `artifacts`; `uboot_lock.py check --lock PATH` validates them.
 
-- [ ] **Step 1: Add failing source-lock tests**
+- [x] **Step 1: Add failing source-lock tests**
 
   Assert repository equals `https://github.com/Yuzhii0718/bl-mt798x-dhcpd`, commit is 40 lowercase hex characters, board is `h3c_magic-nx30-pro`, SoC is `mt7981`, and the selected ATF/U-Boot trees are recorded. Assert the old `hanwckf/bl-mt798x` repository is rejected.
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
   Run: `python -m unittest tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build -v`
 
   Expected: FAIL because the existing lock points to `hanwckf/bl-mt798x` and the helper hard-codes that repository.
 
-- [ ] **Step 3: Replace the lock schema and helper expectations**
+- [x] **Step 3: Replace the lock schema and helper expectations**
 
   Record the researched Yuzhii commit rather than `master`. Keep the U-Boot version decision explicit: select SP1 only after verifying Linux 5.4 compatibility evidence; otherwise leave the version `UNRESOLVED` and make `check` return the repository's build-not-ready status instead of guessing.
 
-- [ ] **Step 4: Run the focused tests**
+- [x] **Step 4: Run the focused tests**
 
   Expected: PASS for the selected complete candidate, or PASS for a test proving an `UNRESOLVED` version safely blocks build readiness.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add devices/nx30pro/uboot/uboot-source-lock.json devices/nx30pro/build/uboot_lock.py tests/structure/test_nx30pro_uboot_contract.py tests/scripts/test_nx30pro_uboot_build.py
@@ -80,23 +86,23 @@
 - Consumes: Task 1 lock schema.
 - Produces: `layouts.default_label == "immortalwrt-112m"`; exactly two entries keyed `immortalwrt-112m` and `default`; `uboot_lock.py verify-layout-source --lock PATH --dts PATH`.
 
-- [ ] **Step 1: Add failing layout tests**
+- [x] **Step 1: Add failing layout tests**
 
   Assert the 112M table is `1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)`. Assert the stock table retains `pdt_data`, `pdt_data_1`, `exp`, and `plugin`. Assert both tables use the same BL2, environment, Factory, and FIP offsets and sizes; reject any third label.
 
-- [ ] **Step 2: Add failing DTS verification tests**
+- [x] **Step 2: Add failing DTS verification tests**
 
   Cover wrong default label, missing stock layout, changed Factory offset, arbitrary third layout, and physical-NAND addresses presented as NMBM logical addresses.
 
-- [ ] **Step 3: Run focused tests and confirm failure**
+- [x] **Step 3: Run focused tests and confirm failure**
 
   Run: `python -m unittest tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build -v`
 
-- [ ] **Step 4: Implement the two-layout lock and verifier**
+- [x] **Step 4: Implement the two-layout lock and verifier**
 
   The verifier consumes the pinned upstream NX30PRO DTS and returns nonzero unless it contains exactly the locked whitelist. It must not synthesize a layout absent from the pinned source.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
   ```bash
   git add devices/nx30pro/uboot/uboot-source-lock.json devices/nx30pro/build/uboot_lock.py tests/structure/test_nx30pro_uboot_contract.py tests/scripts/test_nx30pro_uboot_build.py
@@ -116,27 +122,27 @@
 - Consumes: Task 2 layout whitelist.
 - Produces: device patch implementing a selector that only writes the two locked layout labels; `uboot_lock.py verify-config --lock PATH --config PATH` and `verify-patch --lock PATH --patch PATH`.
 
-- [ ] **Step 1: Add failing feature-contract tests**
+- [x] **Step 1: Add failing feature-contract tests**
 
   Assert required effective symbols for DHCPD, Web failsafe, backup, TFTP and UART. Assert disabled symbols or absence for Factory write, Flash Editor, generic environment editor, Web console, Telnet, UBI manager, and all MT7981 overclock profiles.
 
-- [ ] **Step 2: Add failing selector-boundary tests**
+- [x] **Step 2: Add failing selector-boundary tests**
 
   Assert the patch contains only the two layout labels, has no free-form `mtdparts` input, cannot write arbitrary environment keys, defaults to `immortalwrt-112m`, and warns before switching from stock to 112M.
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [x] **Step 3: Run tests and confirm failure**
 
   Run: `python -m unittest tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build -v`
 
-- [ ] **Step 4: Determine the smallest upstream patch surface**
+- [x] **Step 4: Determine the smallest upstream patch surface**
 
   Inspect the pinned source's Kconfig and Web handlers. If Kconfig can disable every dangerous feature independently, keep the patch limited to the whitelist selector; otherwise also remove the dangerous routes and handlers in this device-only patch. Record affected upstream paths and commit applicability in the patch header.
 
-- [ ] **Step 5: Implement verification and the minimal patch**
+- [x] **Step 5: Implement verification and the minimal patch**
 
   `verify-config` inspects the post-`olddefconfig` output, not requested environment variables. `verify-patch` rejects generic environment and arbitrary partition editing interfaces.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
   ```bash
   git add devices/nx30pro/uboot/patches devices/nx30pro/uboot/uboot-source-lock.json devices/nx30pro/build/uboot_lock.py tests/structure/test_nx30pro_uboot_contract.py tests/scripts/test_nx30pro_uboot_build.py
@@ -154,23 +160,23 @@
 - Consumes: Task 1 source lock, Task 2 layout verifier, Task 3 patch/config verifier.
 - Produces: `build-uboot.sh --lock FILE --source-dir DIR --artifact-dir DIR [--check-only]`; artifact tree `images/`, `logs/`, `build-report.json`, `uboot-source-lock.json`, `FLASH-TARGETS.txt`.
 
-- [ ] **Step 1: Add failing orchestration tests**
+- [x] **Step 1: Add failing orchestration tests**
 
   Test pinned revision mismatch, dirty source, missing board, patch apply failure, wrong default layout, dangerous effective feature, enabled overclock, and `--check-only` performing no build.
 
-- [ ] **Step 2: Add failing artifact tests**
+- [x] **Step 2: Add failing artifact tests**
 
   Reject empty, oversized, misnamed, duplicated, or structurally invalid BL2/FIP. Assert SHA256 and toolchain identity are recorded and that firmware images cannot be mislabeled as boot-loader images.
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [x] **Step 3: Run tests and confirm failure**
 
   Run: `python -m unittest tests.scripts.test_nx30pro_uboot_build -v`
 
-- [ ] **Step 4: Implement Yuzhii build orchestration**
+- [x] **Step 4: Implement Yuzhii build orchestration**
 
   Apply device patches after verifying the pinned revision, select the locked board/version with `MULTI_LAYOUT=1` and `FIXED_MTDPARTS=1`, generate effective configuration, run all pre-build gates, invoke the upstream build entry, and inspect artifacts before moving them into `images/`.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
   ```bash
   git add devices/nx30pro/build/build-uboot.sh devices/nx30pro/build/uboot_lock.py tests/scripts/test_nx30pro_uboot_build.py
@@ -187,23 +193,23 @@
 - Consumes: Task 4 CLI and artifact layout.
 - Produces: manual-only `NX30 Pro restricted-recovery U-Boot` workflow.
 
-- [ ] **Step 1: Add failing workflow tests**
+- [x] **Step 1: Add failing workflow tests**
 
   Assert only `workflow_dispatch` is present; the workflow pins action SHAs, installs the dependencies named by the lock, runs repository/static preflight before build, invokes Task 4's exact CLI, uploads candidate artifacts only on success, and uploads diagnostics with `if: always()`.
 
-- [ ] **Step 2: Assert forbidden behavior**
+- [x] **Step 2: Assert forbidden behavior**
 
   Reject `push`, `pull_request`, schedules, flash commands, NAND erase commands, moving source refs, and paths belonging to other devices.
 
-- [ ] **Step 3: Run tests and confirm failure**
+- [x] **Step 3: Run tests and confirm failure**
 
   Run: `python -m unittest tests.workflows.test_workflows -v`
 
-- [ ] **Step 4: Rewrite the workflow and run tests**
+- [x] **Step 4: Rewrite the workflow and run tests**
 
   Do not trigger it. Static YAML and contract tests are the only verification in this task.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add .github/workflows/build-nx30pro-uboot.yml tests/workflows/test_workflows.py
@@ -224,19 +230,19 @@
 - Consumes: Tasks 1–5 facts and artifact names.
 - Produces: operator documentation that separates candidate build success from device validation.
 
-- [ ] **Step 1: Add failing documentation tests**
+- [x] **Step 1: Add failing documentation tests**
 
   Require source commit, two layouts, default label, restricted UI feature list, backup-first warning, NMBM logical-address wording, artifact roles, and explicit `UNRESOLVED` hardware facts. Reject claims of completed real-device validation and executable destructive flash commands.
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
   Run: `python -m unittest tests.structure.test_nx30pro_uboot_contract -v`
 
-- [ ] **Step 3: Update documentation**
+- [x] **Step 3: Update documentation**
 
   Include an authorization gate for any future Action run. `UBOOT-TEST-REPORT.md` starts as static/preflight-only and gains Action run IDs, URLs, hashes, and device results only when those events actually occur.
 
-- [ ] **Step 4: Run repository checks**
+- [x] **Step 4: Run repository checks**
 
   Run: `bash scripts/validate.sh`
 
@@ -244,7 +250,7 @@
 
   Expected: PASS. These commands do not compile U-Boot and do not trigger Actions.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
   ```bash
   git add devices/nx30pro/docs devices/nx30pro/README.md tests/structure/test_nx30pro_uboot_contract.py
