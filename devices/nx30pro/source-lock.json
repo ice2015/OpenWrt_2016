@@ -79,7 +79,7 @@
     "ready": false,
     "blocking": [
       "No `make defconfig` probe has been authorized for this source/feed combination, so no hard gate package has final .config evidence.",
-      "The 112M profile h3c_nx30pro_112M does not exist in the pinned source commit; it is ported by the device patch in Task 2 and is unverified until then.",
+      "The 112M profile h3c_nx30pro_112M does not exist in the pinned source commit. devices/nx30pro/patches ports it and verify-device-tree plus verify-image-rules check the patched tree against this lock, but no build has compiled it, so the profile stays unproven.",
       "Every hard gate package is recorded as candidate: present in a locked feed index, not proven buildable."
     ],
     "required_evidence": "An authorized disposable Linux or Actions run that installs the four locked feeds, runs `make defconfig` for mediatek/mt7981 with devices/nx30pro/config.config and proves every hard gate symbol is still =y in the final .config.",
@@ -94,10 +94,14 @@
     "device_tree": "mt7981-h3c-nx30pro-112M",
     "device_tree_file": "target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts",
     "kernel_config": "kernel-bin | lzma | fit lzma",
-    "verification": "not-in-locked-source",
-    "evidence": "A recursive search for 'nx30' under target/linux/mediatek of the pinned commit returns only the five stock files (image/mt7981.mk Device/h3c_nx30pro with IMAGE_SIZE 65536k, files-5.4/.../mt7981-h3c-nx30pro.dts, mt7981/base-files/etc/board.d/01_leds, 02_network, lib/upgrade/platform.sh). There is no 112M profile and no 112M device tree upstream, so both are ported from the Galaxian reference by devices/nx30pro/patches and stay unverified until Task 2 checks them against this lock. The stock tree also has no mt7981-h3c-nx30pro-base.dtsi, which the reference 112M device tree includes; the port must add it or inline the shared nodes."
+    "supported_devices": "h3c,nx30pro",
+    "verification": "ported-by-device-patch",
+    "verification_note": "The profile is not part of the pinned upstream commit. devices/nx30pro/patches/0001-mediatek-add-nx30pro-112m-profile.patch adds it, and firmware_lock.py verify-device-tree and verify-image-rules compare the patched tree with this lock. Static checks only: nothing has been compiled and no device has been touched.",
+    "evidence": "A recursive search for 'nx30' under target/linux/mediatek of the pinned commit returns only the five stock files (image/mt7981.mk Device/h3c_nx30pro with IMAGE_SIZE 65536k at lines 644-659, files-5.4/.../mt7981-h3c-nx30pro.dts, mt7981/base-files/etc/board.d/01_leds, 02_network, lib/upgrade/platform.sh). There is no 112M profile and no 112M device tree upstream, so devices/nx30pro/patches/0001-mediatek-add-nx30pro-112m-profile.patch ports both from the Galaxian reference. The pinned tree has no mt7981-h3c-nx30pro-base.dtsi, which the reference 112M device tree includes, so the ported device tree keeps the shared board nodes of the pinned stock device tree inline and replaces only the NMBM partition table with the 112M one. SUPPORTED_DEVICES stays h3c,nx30pro, which is why the board.d files of the pinned source match the ported device tree unchanged."
   },
   "image": {
+    "rules_file": "target/linux/mediatek/image/mt7981.mk",
+    "image_size": "110592k",
     "image_size_kib": 110592,
     "image_size_note": "IMAGE_SIZE := 110592k is the upper bound of the factory image, taken from the 112M port reference, not a measured size. The UBI partition of the partition contract is 112 MiB, so the image has about 4 MiB of head room. Both stay UNRESOLVED until the first real build reports them.",
     "blocksize": "128k",
@@ -106,10 +110,60 @@
     "kernel_in_ubi": true,
     "factory_image": "factory.bin",
     "sysupgrade_image": "sysupgrade.bin",
+    "images_default": "sysupgrade.bin",
+    "images_default_evidence": "target/linux/mediatek/image/Makefile line 19, inside `define Device/Default`: `IMAGES := sysupgrade.bin`. The subtarget default therefore builds the sysupgrade image of every profile, which is why Device/h3c_nx30pro_112M only adds factory.bin to IMAGES, exactly like every other mt7981 profile.",
     "factory_rule": "append-ubi | check-size $$$$(IMAGE_SIZE)",
     "sysupgrade_rule": "sysupgrade-tar | append-metadata",
-    "verification": "reference-only",
-    "verification_note": "These rules are read from the Galaxian 112M port reference, not from the pinned source. Task 2 verifies them against the ported profile."
+    "factory_role": "The raw UBI image of the 112 MiB ubi partition. check-size refuses it when it exceeds IMAGE_SIZE.",
+    "sysupgrade_role": "The sysupgrade tar archive with appended metadata for the LuCI upgrade page and the sysupgrade command. It is not a boot loader image and it is not the factory image.",
+    "artifact_naming": {
+      "rule": "include/image.mk of the pinned source: IMAGE_PREFIX := $(IMG_PREFIX)-$(1) and IMAGE_NAME = $(IMAGE_PREFIX)-$(1)-$(2), with IMG_PREFIX := $(VERSION_DIST_SANITIZED)-$(IMG_PREFIX_VERNUM)$(IMG_PREFIX_VERCODE)$(IMG_PREFIX_EXTRA)$(BOARD)-$(SUBTARGET) and BIN_DIR = bin/targets/$(BOARD)/$(SUBTARGET)",
+      "factory_suffix": "factory.bin",
+      "sysupgrade_suffix": "sysupgrade.bin",
+      "profile_segment": "h3c_nx30pro_112M",
+      "exact_name": "UNRESOLVED",
+      "note": "The suffixes, the profile segment and the output directory are read from the ported image rules and from include/image.mk, so manifests/devices/nx30pro.json carries them as wildcard patterns. The exact prefix is not derivable offline: VERSION_DIST_SANITIZED and the optional version segments come from version and config variables that only a real build resolves. The final file names stay UNRESOLVED until the first build lists bin/targets/mediatek/mt7981."
+    },
+    "verification": "ported-source",
+    "verification_note": "These rules are the ones devices/nx30pro/patches/0001-mediatek-add-nx30pro-112m-profile.patch adds to target/linux/mediatek/image/mt7981.mk of the pinned source; they were derived from the Galaxian 112M port reference. verify-image-rules compares every field above with the patched file as exact strings, so a foreign profile or an approximate limit fails. No image has been built from them."
+  },
+  "device_port": {
+    "applies_to": "740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6",
+    "derived_from": "78cf22edddf07443d8f0506c9f361d3498475189",
+    "derived_from_note": "The port is derived only from the Galaxian 112M reference recorded in source.port_reference, which is rejected as a build base, and rebased onto the pinned hanwckf commit above. Both patches were generated against the pinned files and `git apply --check` passes for each of them, alone and in the recorded order.",
+    "patch_layer": "devices/nx30pro/patches",
+    "order_note": "The four digit prefix is the application order and is part of the contract: the profile patch is 0001, the WAN MAC patch is 0002. The two patches touch disjoint files, so the order is reproducible either way, but only one numbering is accepted.",
+    "patches": [
+      {
+        "path": "devices/nx30pro/patches/0001-mediatek-add-nx30pro-112m-profile.patch",
+        "applies_to_commit": "740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6",
+        "upstream_files": [
+          "target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts",
+          "target/linux/mediatek/image/mt7981.mk"
+        ],
+        "purpose": "Add the NX30 Pro 112M device tree with the NMBM partition table of partition_contract and the Device/h3c_nx30pro_112M profile with its explicit image limit and its two distinct image roles. The stock Device/h3c_nx30pro profile and the stock 64M device tree stay untouched."
+      },
+      {
+        "path": "devices/nx30pro/patches/0002-mediatek-nx30pro-wan-mac-source.patch",
+        "applies_to_commit": "740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6",
+        "upstream_files": [
+          "target/linux/mediatek/mt7981/base-files/etc/board.d/02_network"
+        ],
+        "purpose": "Read the WAN MAC from the provisioned /etc/nx30pro/wan-mac first, then from the read-only factory data area, then from the stock pdt_data_1 partition for a device that still has it, and drop the stock write of a derived Wi-Fi MAC into the Factory partition so the calibration data stays untouched."
+      }
+    ],
+    "mac_source": {
+      "documented": "/etc/nx30pro/wan-mac, written at deployment time, never part of the image and never committed",
+      "fallbacks": [
+        "mtd_get_mac_ascii Factory ethaddr (read only)",
+        "mtd_get_mac_ascii pdt_data_1 ethaddr (read only, the partition is absent on the 112M layout)"
+      ],
+      "without_a_mac": "The interfaces keep the addresses the boot loader handed over and the case is logged; no MAC is derived from nothing.",
+      "factory_partition": "read-only. The stock write of a derived Wi-Fi MAC into Factory offset 4, guarded by mtk_factory_get_byte Factory 4 2 = 00-0c, is removed by the port.",
+      "embedded_values": "none. No device MAC appears in the patches, the overlay, the configuration or this lock; the only MAC literal anywhere in the device layer is the documented placeholder of devices/nx30pro/files/etc/nx30pro/README."
+    },
+    "verification": "static-source-check",
+    "verification_note": "Verified by reading the patched source tree, not by building it. No firmware was compiled, no defconfig ran, no GitHub Action was triggered and no device was touched."
   },
   "partition_contract": {
     "source": "devices/nx30pro/uboot/uboot-source-lock.json layouts.entries[\"immortalwrt-112m\"], which is the /mtd-layout/layout@1 node of the pinned boot loader device tree",
@@ -751,12 +805,22 @@
     {
       "topic": "112M profile and device tree in the pinned source",
       "status": "UNRESOLVED",
-      "needed": "The Task 2 port plus verify-device-tree and verify-image-rules against this lock"
+      "needed": "The port is in devices/nx30pro/patches and verify-device-tree plus verify-image-rules check the patched tree against this lock, but a profile nobody compiled is still unproven. Build evidence from an authorized run is needed: the profile has to appear in the final .config, the device tree has to compile and both images have to be produced."
     },
     {
       "topic": "WAN MAC value of the device",
       "status": "UNRESOLVED",
       "needed": "Read the ethaddr of the stock device before the layout change and provision it into /etc/nx30pro/wan-mac at deployment time. The real value never enters the repository or the image."
+    },
+    {
+      "topic": "WAN MAC read path and Factory calibration data on the 112M layout",
+      "status": "UNRESOLVED",
+      "needed": "Whether the Factory partition of a real device holds an ascii ethaddr, and where the Wi-Fi calibration data and the Wi-Fi MAC of this board really come from once pdt_data_1 is gone. The port only reads Factory and drops the stock write of a derived Wi-Fi MAC into it; the correct read path has to be confirmed on the device before the behaviour is called verified."
+    },
+    {
+      "topic": "Final factory and sysupgrade file names",
+      "status": "UNRESOLVED",
+      "needed": "The listing of bin/targets/mediatek/mt7981 of the first real build. image.artifact_naming records the naming rule and the two suffixes read from the ported image rules, but VERSION_DIST_SANITIZED and the optional version segments are build time variables, so the exact prefix is not derivable offline."
     },
     {
       "topic": "WireGuard server on Linux 5.4",

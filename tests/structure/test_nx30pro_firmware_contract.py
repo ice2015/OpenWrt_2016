@@ -90,6 +90,94 @@ EXCLUDED_MANAGERS = (
 
 CONFIG_SYMBOL = re.compile(r"^CONFIG_[A-Za-z0-9_-]+$")
 
+# The device port of Task 2. The profile patch is applied first, so the
+# numbering of the patch directory is part of the contract.
+PATCHES = DEVICE / "patches"
+PROFILE_PATCH = PATCHES / "0001-mediatek-add-nx30pro-112m-profile.patch"
+MAC_PATCH = PATCHES / "0002-mediatek-nx30pro-wan-mac-source.patch"
+PATCH_NUMBER = re.compile(r"^(\d{4})-[a-z0-9-]+\.patch$")
+
+DEVICE_TREE_FILE = (
+    "target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/"
+    "mt7981-h3c-nx30pro-112M.dts"
+)
+IMAGE_RULES_FILE = "target/linux/mediatek/image/mt7981.mk"
+NETWORK_FILE = "target/linux/mediatek/mt7981/base-files/etc/board.d/02_network"
+
+# The 112M partition table, in bytes, exactly as the boot loader locks it.
+PORTED_PARTITIONS = (
+    ("BL2", 0x000000, 0x100000),
+    ("u-boot-env", 0x100000, 0x080000),
+    ("Factory", 0x180000, 0x200000),
+    ("FIP", 0x380000, 0x200000),
+    ("ubi", 0x580000, 0x7000000),
+)
+# Partitions of the stock 64M table. They are part of the UBI area on the
+# 112M layout and must not reappear in the ported device tree.
+STOCK_ONLY_LABELS = ("pdt_data", "pdt_data_1", "exp", "plugin")
+
+MAC_ADDRESS = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+# The only MAC literal the device layer may carry: the documented example of
+# the deployment README. It is a placeholder, not the MAC of a device.
+MAC_PLACEHOLDER = "aa:bb:cc:dd:ee:ff"
+
+
+def patch_targets(patch_text):
+    """Return the (left, right) source paths of every file a patch touches."""
+    return re.findall(r"^diff --git a/(\S+) b/(\S+)$", patch_text, re.M)
+
+
+def added_lines(patch_text, source_path):
+    """Return the lines one patch adds to one source file, in patch order."""
+    chunks = re.split(r"^diff --git ", patch_text, flags=re.M)[1:]
+    for chunk in chunks:
+        header = chunk.splitlines()[0]
+        if not header.endswith(" b/%s" % source_path):
+            continue
+        return [
+            line[1:]
+            for line in chunk.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        ]
+    raise AssertionError("the patch does not touch %s" % source_path)
+
+
+def removed_lines(patch_text, source_path):
+    """Return the lines one patch removes from one source file."""
+    chunks = re.split(r"^diff --git ", patch_text, flags=re.M)[1:]
+    for chunk in chunks:
+        header = chunk.splitlines()[0]
+        if not header.endswith(" b/%s" % source_path):
+            continue
+        return [
+            line[1:]
+            for line in chunk.splitlines()
+            if line.startswith("-") and not line.startswith("---")
+        ]
+    raise AssertionError("the patch does not touch %s" % source_path)
+
+
+def device_tree_partitions(dts_text):
+    """Parse (label, offset, size) of every NMBM partition, in file order.
+
+    The unit address of the node has to agree with the offset of its `reg`,
+    otherwise an approximate table would still parse.
+    """
+    pattern = re.compile(
+        r"partition@([0-9a-fA-F]+)\s*\{\s*"
+        r'label\s*=\s*"([^"]+)";\s*'
+        r"reg\s*=\s*<\s*([^>]+?)\s*>;\s*\};",
+        re.S,
+    )
+    found = []
+    for unit, label, register in pattern.findall(dts_text):
+        values = register.split()
+        assert len(values) == 2, "reg of %s is not one <offset size> pair" % label
+        offset, size = int(values[0], 0), int(values[1], 0)
+        assert int(unit, 16) == offset, "partition@%s is not at %#x" % (unit, offset)
+        found.append((label, offset, size))
+    return tuple(found)
+
 
 def section(text, heading):
     """Return the body of one markdown section, up to the next same level."""
@@ -380,9 +468,10 @@ class Nx30ProFirmwareSourceLockTests(unittest.TestCase):
             "CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y",
             target["profile_symbol"],
         )
-        # The profile does not exist in the pinned upstream tree yet; it is
-        # ported by the device patch and stays unverified until then.
-        self.assertIn("not-in-locked-source", target["verification"])
+        # The profile does not exist in the pinned upstream tree; it is
+        # ported by the device patch and stays unproven until a build ran.
+        self.assertEqual("ported-by-device-patch", target["verification"])
+        self.assertIn(PROFILE_PATCH.name, target["evidence"])
         self.assertTrue(target["evidence"])
 
     def test_unresolved_items_stay_listed(self):
@@ -592,9 +681,8 @@ class Nx30ProFirmwareDeviceLayerTests(unittest.TestCase):
         self.assertNotIn(REJECTED_REVISION, text)
 
     def test_device_patch_carries_the_mac_provisioning(self):
-        patches = sorted((DEVICE / "patches").glob("*.patch"))
-        self.assertTrue(patches)
-        text = patches[0].read_text(encoding="utf-8")
+        self.assertTrue(MAC_PATCH.is_file(), "missing %s" % MAC_PATCH)
+        text = MAC_PATCH.read_text(encoding="utf-8")
         self.assertIn("pdt_data_1", text)
         self.assertIn("/etc/nx30pro/wan-mac", text)
         self.assertIn("02_network", text)
@@ -660,6 +748,276 @@ class Nx30ProFirmwareDocumentTests(unittest.TestCase):
             self.assertIn(topic, text)
         for forbidden in ("mtd write", "nandwrite", "flash_erase", "dd of="):
             self.assertNotIn(forbidden, text)
+
+
+class Nx30ProFirmwareDevicePortTests(unittest.TestCase):
+    """The 112M device port: one profile, one device tree, two image roles.
+
+    Every assertion below reads the device patch, never a build output. The
+    patch is the only place that may define the NX30 Pro 112M profile, so a
+    profile copied from another device, an approximate partition size or the
+    stock 64M table has to fail here.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        cls.profile_patch = PROFILE_PATCH.read_text(encoding="utf-8")
+        cls.mac_patch = MAC_PATCH.read_text(encoding="utf-8")
+        cls.device_tree = "\n".join(
+            added_lines(cls.profile_patch, DEVICE_TREE_FILE)
+        )
+        cls.image_rules = "\n".join(
+            added_lines(cls.profile_patch, IMAGE_RULES_FILE)
+        )
+
+    def test_patch_ordering_is_deterministic_and_unique(self):
+        patches = sorted(path.name for path in PATCHES.glob("*.patch"))
+        self.assertEqual(
+            [PROFILE_PATCH.name, MAC_PATCH.name],
+            patches,
+            "the patch directory must hold exactly these two numbered patches",
+        )
+        numbers = []
+        for name in patches:
+            match = PATCH_NUMBER.match(name)
+            self.assertIsNotNone(match, name)
+            numbers.append(match.group(1))
+        self.assertEqual(len(set(numbers)), len(numbers), "duplicate patch number")
+        self.assertEqual(sorted(numbers), numbers, "the numbering is not sorted")
+
+    def test_profile_patch_touches_only_the_nx30pro_port_files(self):
+        targets = patch_targets(self.profile_patch)
+        self.assertTrue(targets)
+        for left, right in targets:
+            self.assertEqual(left, right, "the port may not rename a source file")
+        self.assertEqual(
+            sorted({left for left, _ in targets}),
+            sorted([DEVICE_TREE_FILE, IMAGE_RULES_FILE]),
+        )
+
+    def test_mac_patch_touches_only_the_board_network_script(self):
+        targets = patch_targets(self.mac_patch)
+        self.assertEqual(
+            sorted({left for left, _ in targets}), [NETWORK_FILE]
+        )
+
+    def test_profile_patch_defines_exactly_one_nx30pro_profile(self):
+        added = self.image_rules
+        self.assertEqual(1, added.count("define Device/h3c_nx30pro_112M"))
+        self.assertEqual(1, added.count("TARGET_DEVICES += h3c_nx30pro_112M"))
+        self.assertEqual(1, len(re.findall(r"^\+?define Device/", added, re.M)))
+        # A profile copied from another device keeps its own DTS or its own
+        # supported devices; neither may appear in this port.
+        self.assertNotIn("cmcc", added.lower())
+        self.assertNotIn("rax3000m", added.lower())
+        self.assertIn("DEVICE_DTS := mt7981-h3c-nx30pro-112M", added)
+        self.assertIn("SUPPORTED_DEVICES := h3c,nx30pro", added)
+        self.assertIn("DEVICE_VENDOR := H3C", added)
+
+    def test_profile_patch_does_not_change_the_stock_64m_profile(self):
+        self.assertNotIn("IMAGE_SIZE := 65536k", self.image_rules)
+        for line in removed_lines(self.profile_patch, IMAGE_RULES_FILE):
+            self.assertNotIn("Device/h3c_nx30pro\n", line)
+        self.assertEqual([], removed_lines(self.profile_patch, DEVICE_TREE_FILE))
+
+    def test_device_tree_carries_the_exact_112m_partition_table(self):
+        self.assertEqual(
+            PORTED_PARTITIONS, device_tree_partitions(self.device_tree)
+        )
+        contract = tuple(
+            (entry["label"], entry["offset"], entry["size"])
+            for entry in self.lock["partition_contract"]["partitions"]
+        )
+        self.assertEqual(contract, device_tree_partitions(self.device_tree))
+        boot = json.loads(UBOOT_LOCK.read_text(encoding="utf-8"))
+        locked = tuple(
+            (entry["label"], entry["offset"], entry["size"])
+            for entry in boot["layouts"]["entries"]["immortalwrt-112m"]["partitions"]
+        )
+        self.assertEqual(
+            [(label.lower(), offset, size) for label, offset, size in locked],
+            [
+                (label.lower(), offset, size)
+                for label, offset, size in device_tree_partitions(self.device_tree)
+            ],
+        )
+
+    def test_device_tree_binds_the_partitions_to_the_nmbm_logical_device(self):
+        tree = self.device_tree
+        nmbm = tree.index("nmbm_spim_nand")
+        self.assertIn('compatible = "generic,nmbm";', tree)
+        self.assertIn("lower-mtd-device = <&spi_nand>;", tree)
+        self.assertIn("forced-create;", tree)
+        partitions = tree.index("partitions {")
+        self.assertLess(nmbm, partitions, "the partitions are not inside the NMBM node")
+        self.assertIn('compatible = "fixed-partitions";', tree[partitions:])
+        # The offsets are logical NMBM addresses, so exactly one partition
+        # table exists and it hangs off the NMBM device, never off the raw
+        # spi-nand chip node.
+        self.assertEqual(1, tree.count("partitions {"))
+        self.assertLess(tree.index("lower-mtd-device = <&spi_nand>;"), partitions)
+
+    def test_device_tree_rejects_the_stock_64m_table(self):
+        tree = self.device_tree
+        for label in STOCK_ONLY_LABELS:
+            self.assertNotIn('label = "%s"' % label, tree, label)
+        partitions = device_tree_partitions(tree)
+        self.assertEqual(5, len(partitions))
+        self.assertNotIn(
+            0x4000000,
+            [size for _, _, size in partitions],
+            "the stock 64 MiB UBI size is not the 112M one",
+        )
+        # The table has to cover the whole 112M area without a gap.
+        self.assertEqual(
+            self.lock["partition_contract"]["ubi_end_offset"],
+            partitions[-1][1] + partitions[-1][2],
+        )
+
+    def test_image_rules_carry_the_explicit_limit_and_distinct_roles(self):
+        rules = self.image_rules
+        self.assertIn("IMAGE_SIZE := 110592k", rules)
+        self.assertIn("BLOCKSIZE := 128k", rules)
+        self.assertIn("PAGESIZE := 2048", rules)
+        self.assertIn("UBINIZE_OPTS := -E 5", rules)
+        self.assertIn("KERNEL_IN_UBI := 1", rules)
+        self.assertIn("IMAGES += factory.bin", rules)
+        factory = "IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)"
+        sysupgrade = "IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata"
+        self.assertIn(factory, rules)
+        self.assertIn(sysupgrade, rules)
+        # The two roles stay distinct: a factory image is a raw UBI image with
+        # a size check, a sysupgrade image is a metadata archive.
+        self.assertNotEqual(factory, sysupgrade)
+        self.assertNotIn("IMAGE/factory.bin := sysupgrade-tar", rules)
+        self.assertNotIn("IMAGE/sysupgrade.bin := append-ubi", rules)
+        image = self.lock["image"]
+        self.assertEqual(110592, image["image_size_kib"])
+        self.assertEqual("factory.bin", image["factory_image"])
+        self.assertEqual("sysupgrade.bin", image["sysupgrade_image"])
+        self.assertEqual("append-ubi | check-size $$$$(IMAGE_SIZE)", image["factory_rule"])
+        self.assertEqual("sysupgrade-tar | append-metadata", image["sysupgrade_rule"])
+
+    def test_lock_records_the_port_with_its_source_and_its_reference(self):
+        port = self.lock["device_port"]
+        source = self.lock["source"]
+        self.assertEqual(source["revision"], port["applies_to"])
+        self.assertEqual(source["port_reference"]["revision"], port["derived_from"])
+        self.assertEqual(
+            [PROFILE_PATCH.name, MAC_PATCH.name],
+            [Path(entry["path"]).name for entry in port["patches"]],
+        )
+        expected_files = {
+            PROFILE_PATCH.name: [DEVICE_TREE_FILE, IMAGE_RULES_FILE],
+            MAC_PATCH.name: [NETWORK_FILE],
+        }
+        for entry in port["patches"]:
+            path = ROOT / entry["path"]
+            self.assertTrue(path.is_file(), entry["path"])
+            self.assertEqual(source["revision"], entry["applies_to_commit"])
+            self.assertTrue(entry["purpose"])
+            patch_text = path.read_text(encoding="utf-8")
+            self.assertEqual(
+                sorted(entry["upstream_files"]),
+                sorted({left for left, _ in patch_targets(patch_text)}),
+                entry["path"],
+            )
+            self.assertEqual(
+                sorted(expected_files[path.name]), sorted(entry["upstream_files"])
+            )
+
+    def test_port_stays_a_static_check_and_never_a_build_result(self):
+        port = self.lock["device_port"]
+        self.assertEqual("static-source-check", port["verification"])
+        self.assertIn("not", port["verification_note"].lower())
+        self.assertFalse(self.lock["build_readiness"]["ready"])
+
+    def test_mac_patch_documents_a_source_that_survives_the_missing_pdt_data_1(self):
+        added = added_lines(self.mac_patch, NETWORK_FILE)
+        body = "\n".join(added)
+        self.assertIn("/etc/nx30pro/wan-mac", body)
+        # The stock source stays reachable for a device that still has it, but
+        # only as a read-only fallback after the provisioned file.
+        self.assertIn("mtd_get_mac_ascii pdt_data_1 ethaddr", body)
+        self.assertLess(
+            body.index("/etc/nx30pro/wan-mac"), body.index("pdt_data_1 ethaddr")
+        )
+        self.assertIn("mtd_get_mac_ascii Factory ethaddr", body)
+        self.assertIn("h3c,nx30pro", body)
+        # Without a MAC the interfaces keep the boot loader address and the
+        # case is logged instead of deriving a wrong one.
+        self.assertIn("logger", body)
+        self.assertIn("provision", body)
+        self.assertEqual([], [line for line in added if "ethaddr" in line and "=" not in line])
+        readme = (DEVICE / "files" / "etc" / "nx30pro" / "README").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/etc/nx30pro/wan-mac", readme)
+        self.assertIn("pdt_data_1", readme)
+
+    def test_mac_patch_preserves_the_factory_partition(self):
+        added = "\n".join(added_lines(self.mac_patch, NETWORK_FILE))
+        removed = "\n".join(removed_lines(self.mac_patch, NETWORK_FILE))
+        # The stock script writes a derived Wi-Fi MAC into Factory; the port
+        # drops that write and keeps the calibration partition read only.
+        self.assertIn("mtk_facrory_write_mac", removed)
+        self.assertNotIn("mtk_facrory_write_mac", added)
+        self.assertIn('mtk_factory_get_byte "Factory" 4 2', removed)
+        for forbidden in ("mtd_write", "nandwrite", "flash_erase", "dd if=", "> /dev/mtd"):
+            self.assertNotIn(forbidden, added, forbidden)
+
+    def test_no_device_mac_is_embedded_in_the_device_layer(self):
+        for path in (PROFILE_PATCH, MAC_PATCH, LOCK, MANIFEST, CONFIG):
+            text = path.read_text(encoding="utf-8")
+            self.assertEqual([], MAC_ADDRESS.findall(text), path.name)
+        for path in sorted((DEVICE / "files").rglob("*")):
+            if not path.is_file():
+                continue
+            found = MAC_ADDRESS.findall(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [MAC_PLACEHOLDER] * len(found),
+                found,
+                "%s carries a MAC that is not the documented placeholder" % path,
+            )
+
+    def test_wan_mac_and_calibration_facts_stay_unresolved(self):
+        topics = {item["topic"]: item for item in self.lock["unresolved"]}
+        self.assertTrue(
+            any("WAN MAC" in topic for topic in topics), sorted(topics)
+        )
+        self.assertTrue(
+            any("calibration" in topic.lower() for topic in topics), sorted(topics)
+        )
+        for topic, item in topics.items():
+            self.assertEqual("UNRESOLVED", item["status"], topic)
+            self.assertTrue(item["needed"], topic)
+
+    def test_manifest_artifact_roles_match_the_ported_image_rules(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        roles = manifest["artifact_roles"]
+        self.assertEqual({"factory", "sysupgrade"}, set(roles))
+        image = self.lock["image"]
+        self.assertEqual(image["factory_image"], roles["factory"]["suffix"])
+        self.assertEqual(image["sysupgrade_image"], roles["sysupgrade"]["suffix"])
+        self.assertEqual(image["factory_rule"], roles["factory"]["rule"])
+        self.assertEqual(image["sysupgrade_rule"], roles["sysupgrade"]["rule"])
+        self.assertNotEqual(roles["factory"]["purpose"], roles["sysupgrade"]["purpose"])
+        patterns = manifest["artifact_patterns"]
+        self.assertEqual(2, len(patterns))
+        factory = [item for item in patterns if item.endswith("-factory.bin")]
+        sysupgrade = [item for item in patterns if item.endswith("-sysupgrade.bin")]
+        self.assertEqual(1, len(factory))
+        self.assertEqual(1, len(sysupgrade))
+        for pattern in patterns:
+            self.assertIn("bin/targets/mediatek/mt7981/", pattern)
+            self.assertIn("h3c_nx30pro_112M", pattern)
+        # The exact file name prefix depends on build time version variables,
+        # so the pattern keeps a wildcard and the lock records why.
+        self.assertTrue(factory[0].startswith("bin/targets/mediatek/mt7981/*"))
+        self.assertIn("UNRESOLVED", image["artifact_naming"]["exact_name"])
+        self.assertIn("IMAGE_NAME", image["artifact_naming"]["rule"])
+
 
 
 if __name__ == "__main__":

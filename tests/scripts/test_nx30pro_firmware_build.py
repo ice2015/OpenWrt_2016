@@ -15,6 +15,7 @@ produced, never against the fragment that was fed into it.
 import copy
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -75,6 +76,117 @@ def run_check(lock_path):
 def check_lock(lock):
     with tempfile.TemporaryDirectory() as tmp:
         return run_check(write_lock(tmp, lock))
+
+
+PATCHES = ROOT / "devices" / "nx30pro" / "patches"
+PROFILE_PATCH = PATCHES / "0001-mediatek-add-nx30pro-112m-profile.patch"
+DEVICE_TREE_FILE = (
+    "target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/"
+    "mt7981-h3c-nx30pro-112M.dts"
+)
+IMAGE_RULES_FILE = "target/linux/mediatek/image/mt7981.mk"
+
+# The stock 64M table of the pinned source: the same first four partitions, a
+# 64 MiB UBI area and the two pdt_data partitions the 112M layout absorbed.
+STOCK_DEVICE_TREE = """/dts-v1/;
+#include "mt7981.dtsi"
+
+/ {
+    nmbm_spim_nand {
+        compatible = "generic,nmbm";
+        lower-mtd-device = <&spi_nand>;
+        forced-create;
+
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            partition@0 {
+                label = "BL2";
+                reg = <0x00 0x100000>;
+            };
+
+            partition@100000 {
+                label = "u-boot-env";
+                reg = <0x100000 0x80000>;
+            };
+
+            partition@180000 {
+                label = "Factory";
+                reg = <0x180000 0x200000>;
+            };
+
+            partition@380000 {
+                label = "FIP";
+                reg = <0x380000 0x200000>;
+            };
+
+            partition@580000 {
+                label = "ubi";
+                reg = <0x580000 0x4000000>;
+            };
+
+            partition@4580000 {
+                label = "pdt_data";
+                reg = <0x4580000 0x0600000>;
+            };
+
+            partition@4b80000 {
+                label = "pdt_data_1";
+                reg = <0x4b80000 0x0600000>;
+            };
+        };
+    };
+};
+"""
+
+# The profile of another board of the same subtarget. It is a valid mt7981
+# profile, so a verifier that only looks for "a" profile would accept it.
+ANOTHER_PROFILE_RULES = """define Device/cmcc_rax3000m
+  DEVICE_VENDOR := CMCC
+  DEVICE_MODEL := RAX3000M
+  DEVICE_DTS := mt7981-cmcc-rax3000m
+  DEVICE_DTS_DIR := $(DTS_DIR)/mediatek
+  SUPPORTED_DEVICES := cmcc,rax3000m
+  UBINIZE_OPTS := -E 5
+  BLOCKSIZE := 128k
+  PAGESIZE := 2048
+  IMAGE_SIZE := 116736k
+  KERNEL_IN_UBI := 1
+  IMAGES += factory.bin
+  IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)
+  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+endef
+TARGET_DEVICES += cmcc_rax3000m
+"""
+
+
+def patched_source(patch_text, source_path):
+    """Reconstruct one patched source file out of the port patch.
+
+    The ported device tree is a new file, so its added lines are its whole
+    content. The image rules are the profile block the patch adds, which is
+    what the verifier has to select out of a file full of other profiles.
+    """
+    chunks = re.split(r"^diff --git ", patch_text, flags=re.M)[1:]
+    for chunk in chunks:
+        if not chunk.splitlines()[0].endswith(" b/%s" % source_path):
+            continue
+        return "\n".join(
+            line[1:]
+            for line in chunk.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+    raise AssertionError("the port patch does not touch %s" % source_path)
+
+
+def run_verifier(command, *args):
+    return subprocess.run(
+        [sys.executable, str(HELPER), command, *args],
+        capture_output=True,
+        text=True,
+    )
 
 
 def hard_gate_entry(lock, package):
@@ -314,6 +426,222 @@ class Nx30ProFirmwareConfigTests(unittest.TestCase):
         text = self.good_config() + "# CONFIG_PACKAGE_luci-app-openclash is not set\n"
         symbols = self.helper.verify_config(text, self.lock)
         self.assertIsNone(symbols.get("CONFIG_PACKAGE_luci-app-openclash"))
+
+
+class Nx30ProFirmwareDevicePortVerifierTests(unittest.TestCase):
+    """verify-device-tree and verify-image-rules read the patched source.
+
+    Both compare the patched source tree with the lock. Neither may accept the
+    profile of another device, the stock 64M table, or an approximate
+    partition size or image limit.
+    """
+
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = real_lock()
+        patch_text = PROFILE_PATCH.read_text(encoding="utf-8")
+        self.device_tree = patched_source(patch_text, DEVICE_TREE_FILE)
+        self.profile_rules = patched_source(patch_text, IMAGE_RULES_FILE)
+        self.image_rules = ANOTHER_PROFILE_RULES + "\n" + self.profile_rules
+
+    def test_verify_device_tree_accepts_the_ported_device_tree(self):
+        found = self.helper.verify_device_tree(self.device_tree, self.lock)
+        self.assertEqual(
+            [
+                (entry["label"], entry["offset"], entry["size"])
+                for entry in self.lock["partition_contract"]["partitions"]
+            ],
+            found,
+        )
+
+    def test_verify_device_tree_rejects_the_stock_64m_table(self):
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_device_tree(STOCK_DEVICE_TREE, self.lock)
+        self.assertIn("partition", str(caught.exception).lower())
+
+    def test_verify_device_tree_rejects_an_approximate_partition_size(self):
+        for size in ("0x6FFFFFF", "0x7000001", "0x6FFF000"):
+            text = self.device_tree.replace(
+                "reg = <0x580000 0x7000000>;", "reg = <0x580000 %s>;" % size
+            )
+            self.assertNotEqual(self.device_tree, text, size)
+            with self.assertRaises(Exception, msg=size):
+                self.helper.verify_device_tree(text, self.lock)
+
+    def test_verify_device_tree_rejects_a_moved_partition(self):
+        text = self.device_tree.replace(
+            "partition@380000 {", "partition@3c0000 {"
+        ).replace("reg = <0x380000 0x200000>;", "reg = <0x3c0000 0x200000>;")
+        self.assertNotEqual(self.device_tree, text)
+        with self.assertRaises(Exception):
+            self.helper.verify_device_tree(text, self.lock)
+
+    def test_verify_device_tree_rejects_a_missing_partition(self):
+        start = self.device_tree.index("partition@380000 {")
+        end = self.device_tree.index("};", self.device_tree.index("0x380000", start))
+        missing = self.device_tree[:start] + self.device_tree[end + 3 :]
+        self.assertNotEqual(self.device_tree, missing)
+        self.assertNotIn("FIP", missing)
+        with self.assertRaises(Exception):
+            self.helper.verify_device_tree(missing, self.lock)
+
+    def test_verify_device_tree_rejects_an_extra_partition(self):
+        extra = re.sub(
+            r'(label = "ubi";\s*reg = <0x580000 0x7000000>;\s*\};)',
+            r'\1\n\n            partition@7580000 {\n'
+            r'                label = "pdt_data_1";\n'
+            r"                reg = <0x7580000 0x600000>;\n"
+            r"            };",
+            self.device_tree,
+            count=1,
+        )
+        self.assertNotEqual(self.device_tree, extra)
+        self.assertIn("pdt_data_1", extra)
+        with self.assertRaises(Exception):
+            self.helper.verify_device_tree(extra, self.lock)
+
+    def test_verify_device_tree_rejects_a_renamed_partition(self):
+        text = self.device_tree.replace('label = "FIP";', 'label = "fip";')
+        with self.assertRaises(Exception):
+            self.helper.verify_device_tree(text, self.lock)
+
+    def test_verify_device_tree_rejects_a_table_that_is_not_bound_to_nmbm(self):
+        for token in (
+            'compatible = "generic,nmbm";',
+            "forced-create;",
+            "lower-mtd-device = <&spi_nand>;",
+        ):
+            text = self.device_tree.replace(token, "")
+            self.assertNotEqual(self.device_tree, text, token)
+            with self.assertRaises(Exception, msg=token) as caught:
+                self.helper.verify_device_tree(text, self.lock)
+            self.assertIn("nmbm", str(caught.exception).lower())
+
+    def test_verify_device_tree_rejects_a_unit_address_that_disagrees(self):
+        text = self.device_tree.replace("partition@580000 {", "partition@5c0000 {")
+        with self.assertRaises(Exception):
+            self.helper.verify_device_tree(text, self.lock)
+
+    def test_verify_image_rules_accepts_the_ported_profile(self):
+        found = self.helper.verify_image_rules(self.image_rules, self.lock)
+        self.assertEqual("110592k", found["IMAGE_SIZE"])
+        self.assertEqual("mt7981-h3c-nx30pro-112M", found["DEVICE_DTS"])
+        self.assertEqual("h3c,nx30pro", found["SUPPORTED_DEVICES"])
+        self.assertEqual(
+            "append-ubi | check-size $$$$(IMAGE_SIZE)", found["IMAGE/factory.bin"]
+        )
+        self.assertEqual(
+            "sysupgrade-tar | append-metadata", found["IMAGE/sysupgrade.bin"]
+        )
+
+    def test_verify_image_rules_rejects_the_profile_of_another_device(self):
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_image_rules(ANOTHER_PROFILE_RULES, self.lock)
+        self.assertIn("h3c_nx30pro_112M", str(caught.exception))
+
+    def test_verify_image_rules_rejects_the_stock_profile_as_the_112m_one(self):
+        stock = (
+            self.profile_rules.replace("h3c_nx30pro_112M", "h3c_nx30pro")
+            .replace("mt7981-h3c-nx30pro-112M", "mt7981-h3c-nx30pro")
+            .replace("NX30PRO (with 112M ubi)", "NX30PRO")
+            .replace("110592k", "65536k")
+        )
+        with self.assertRaises(Exception):
+            self.helper.verify_image_rules(stock, self.lock)
+
+    def test_verify_image_rules_rejects_an_approximate_image_limit(self):
+        for size in ("110000k", "110593k", "112M", "110592K"):
+            text = self.image_rules.replace(
+                "IMAGE_SIZE := 110592k", "IMAGE_SIZE := %s" % size
+            )
+            self.assertNotEqual(self.image_rules, text, size)
+            with self.assertRaises(Exception, msg=size):
+                self.helper.verify_image_rules(text, self.lock)
+
+    def test_verify_image_rules_rejects_swapped_image_roles(self):
+        text = self.image_rules.replace(
+            "IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)",
+            "IMAGE/factory.bin := sysupgrade-tar | append-metadata",
+        ).replace(
+            "IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata",
+            "IMAGE/sysupgrade.bin := append-ubi | check-size $$$$(IMAGE_SIZE)",
+        )
+        self.assertNotEqual(self.image_rules, text)
+        with self.assertRaises(Exception):
+            self.helper.verify_image_rules(text, self.lock)
+
+    def test_verify_image_rules_rejects_a_factory_image_without_a_size_check(self):
+        text = self.image_rules.replace(
+            "IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)",
+            "IMAGE/factory.bin := append-ubi",
+        )
+        with self.assertRaises(Exception) as caught:
+            self.helper.verify_image_rules(text, self.lock)
+        self.assertIn("factory", str(caught.exception).lower())
+
+    def test_verify_image_rules_rejects_a_missing_factory_image(self):
+        text = self.image_rules.replace("  IMAGES += factory.bin\n", "")
+        self.assertNotEqual(self.image_rules, text)
+        with self.assertRaises(Exception):
+            self.helper.verify_image_rules(text, self.lock)
+
+    def test_verify_image_rules_rejects_a_wrong_device_tree_or_board(self):
+        for old, new in (
+            (
+                "DEVICE_DTS := mt7981-h3c-nx30pro-112M",
+                "DEVICE_DTS := mt7981-cmcc-rax3000m",
+            ),
+            ("SUPPORTED_DEVICES := h3c,nx30pro", "SUPPORTED_DEVICES := cmcc,rax3000m"),
+            ("BLOCKSIZE := 128k", "BLOCKSIZE := 64k"),
+            ("PAGESIZE := 2048", "PAGESIZE := 4096"),
+            ("UBINIZE_OPTS := -E 5", "UBINIZE_OPTS := -E 4"),
+            ("KERNEL_IN_UBI := 1", "KERNEL_IN_UBI := 0"),
+        ):
+            text = self.image_rules.replace(old, new)
+            self.assertNotEqual(self.image_rules, text, old)
+            with self.assertRaises(Exception, msg=old):
+                self.helper.verify_image_rules(text, self.lock)
+
+    def test_verifier_commands_read_the_patched_source_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = Path(tmp) / "source"
+            for relative, content in (
+                (DEVICE_TREE_FILE, self.device_tree),
+                (IMAGE_RULES_FILE, self.image_rules),
+            ):
+                target = tree / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            result = run_verifier(
+                "verify-device-tree", "--lock", str(LOCK), "--source-dir", str(tree)
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            result = run_verifier(
+                "verify-image-rules", "--lock", str(LOCK), "--source-dir", str(tree)
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("h3c_nx30pro_112M", result.stdout)
+            # A tree that still carries the stock table and a foreign profile
+            # fails both commands.
+            (tree / DEVICE_TREE_FILE).write_text(STOCK_DEVICE_TREE, encoding="utf-8")
+            (tree / IMAGE_RULES_FILE).write_text(
+                ANOTHER_PROFILE_RULES, encoding="utf-8"
+            )
+            result = run_verifier(
+                "verify-device-tree", "--lock", str(LOCK), "--source-dir", str(tree)
+            )
+            self.assertNotEqual(0, result.returncode)
+            result = run_verifier(
+                "verify-image-rules", "--lock", str(LOCK), "--source-dir", str(tree)
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("h3c_nx30pro_112M", result.stderr)
+
+    def test_the_device_port_does_not_make_the_lock_build_ready(self):
+        result = run_check(LOCK)
+        self.assertEqual(BUILD_NOT_READY, result.returncode, result.stdout)
+        self.assertEqual("", result.stdout.strip())
+        self.assertIn("defconfig", result.stderr)
 
 
 if __name__ == "__main__":

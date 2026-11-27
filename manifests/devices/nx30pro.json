@@ -11,12 +11,26 @@
   "patch_layers": ["devices/nx30pro/patches"],
   "overlay_layers": ["devices/nx30pro/files"],
   "artifact_patterns": [
-    "bin/targets/mediatek/mt7981/h3c_nx30pro_112M-factory.bin",
-    "bin/targets/mediatek/mt7981/h3c_nx30pro_112M-sysupgrade.bin"
+    "bin/targets/mediatek/mt7981/*h3c_nx30pro_112M-factory.bin",
+    "bin/targets/mediatek/mt7981/*h3c_nx30pro_112M-sysupgrade.bin"
   ],
+  "artifact_roles": {
+    "factory": {
+      "suffix": "factory.bin",
+      "rule": "append-ubi | check-size $$$$(IMAGE_SIZE)",
+      "purpose": "Raw UBI image of the 112 MiB ubi partition, refused by check-size when it exceeds the 110592k image limit."
+    },
+    "sysupgrade": {
+      "suffix": "sysupgrade.bin",
+      "rule": "sysupgrade-tar | append-metadata",
+      "purpose": "Sysupgrade tar archive with appended metadata for the LuCI upgrade page and the sysupgrade command; not a boot loader image and not interchangeable with the factory image."
+    }
+  },
   "notes": [
     "The device uses its own source fork, which is registered as the distribution immortalwrt-mt798x in manifests/sources.json.",
     "The boot loader of this device is built by devices/nx30pro/build/build-uboot.sh and uses the same partition contract.",
-    "The WAN MAC of the device is deployment specific and is provisioned into /etc/nx30pro/wan-mac, never into the image."
+    "The WAN MAC of the device is deployment specific and is provisioned into /etc/nx30pro/wan-mac, never into the image.",
+    "The 112M profile is not part of the pinned source: devices/nx30pro/patches ports it, and firmware_lock.py verify-device-tree and verify-image-rules check the patched tree against devices/nx30pro/source-lock.json.",
+    "The artifact patterns carry a wildcard prefix because the file name prefix depends on build time version variables; the exact names stay UNRESOLVED until the first real build lists bin/targets/mediatek/mt7981."
   ]
 }

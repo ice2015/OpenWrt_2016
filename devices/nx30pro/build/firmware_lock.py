@@ -16,6 +16,13 @@ failed this gate.
 
 The configuration check runs against the final .config that the build
 produced, never against the fragment that was fed into it.
+
+Two further checks read the patched source tree instead of the lock alone:
+`verify-device-tree` compares the NMBM partition table of the ported 112M
+device tree with the partition contract, and `verify-image-rules` compares the
+`Device/h3c_nx30pro_112M` block of the image rules with the locked profile,
+image limit and image roles. Both compare exact values, so a profile of
+another board, the stock 64M table or an approximate size fails.
 """
 
 import argparse
@@ -52,6 +59,25 @@ EXPECTED_PARTITIONS = [
     ("FIP", 0x380000, 0x200000),
     ("ubi", 0x580000, 0x7000000),
 ]
+
+# The partition contract is an NMBM logical one: the table has to hang off the
+# NMBM mapping node of the pinned source, never off the raw spi-nand chip.
+NMBM_NODE = "nmbm_spim_nand"
+NMBM_BINDING = (
+    'compatible = "generic,nmbm";',
+    "lower-mtd-device = <&spi_nand>;",
+    "forced-create;",
+)
+
+PARTITION_RE = re.compile(
+    r"partition@([0-9a-fA-F]+)\s*\{\s*"
+    r'label\s*=\s*"([^"]+)";\s*'
+    r"reg\s*=\s*<\s*([^>]+?)\s*>;\s*\};",
+    re.S,
+)
+
+DEVICE_BLOCK_RE = re.compile(r"^define Device/(\S+)\n(.*?)^endef\n", re.S | re.M)
+DEVICE_FIELD_RE = re.compile(r"^\s*([A-Za-z0-9_.$()/+-]+)\s*(:=|\+=)\s*(.*?)\s*$")
 
 REQUIRED_FEEDS = ("packages", "luci", "routing", "telephony")
 
@@ -252,6 +278,64 @@ def validate_readiness(lock, errors):
         )
 
 
+def validate_device_port(lock, errors):
+    """Check the record of the device port against the pinned source.
+
+    The record is what ties the two patch files to the commit they were
+    derived for: a patch that is recorded for another commit, a port that
+    claims to come from anywhere but the recorded reference tree, or a patch
+    list whose numbering is not deterministic all fail here. The content of
+    the patches is checked by verify-device-tree and verify-image-rules
+    against the patched source tree.
+    """
+    port = lock.get("device_port")
+    source = lock.get("source") or {}
+    if not isinstance(port, dict):
+        errors.append("the lock has no device_port record")
+        return
+    if port.get("applies_to") != source.get("revision"):
+        errors.append(
+            "the device port is recorded for %r, the lock pins the source %r"
+            % (port.get("applies_to"), source.get("revision"))
+        )
+    reference = (source.get("port_reference") or {}).get("revision")
+    if port.get("derived_from") != reference:
+        errors.append(
+            "the device port claims to be derived from %r, the lock records the "
+            "port reference %r" % (port.get("derived_from"), reference)
+        )
+    entries = port.get("patches") or []
+    if not entries:
+        errors.append("the device port records no patch")
+    numbers = []
+    for entry in entries:
+        path = entry.get("path") or ""
+        name = Path(path).name
+        match = re.match(r"^(\d{4})-[a-z0-9-]+\.patch$", name)
+        if not match:
+            errors.append("the device patch %r is not deterministically numbered" % path)
+        else:
+            numbers.append(match.group(1))
+        if not path.startswith("devices/nx30pro/patches/"):
+            errors.append(
+                "the device patch %r is not part of the device patch layer" % path
+            )
+        if entry.get("applies_to_commit") != source.get("revision"):
+            errors.append(
+                "the device patch %s is recorded for commit %r, the lock pins %r"
+                % (name, entry.get("applies_to_commit"), source.get("revision"))
+            )
+        if not entry.get("upstream_files"):
+            errors.append("the device patch %s names no upstream file" % name)
+        if not entry.get("purpose"):
+            errors.append("the device patch %s records no purpose" % name)
+    if numbers != sorted(numbers) or len(set(numbers)) != len(numbers):
+        errors.append(
+            "the device patch numbering %s is not a deterministic order"
+            % ", ".join(numbers)
+        )
+
+
 def validate_lock(lock):
     """Return the list of reasons why the lock is not build ready."""
     errors = []
@@ -302,6 +386,7 @@ def validate_lock(lock):
         )
 
     validate_packages(lock, errors)
+    validate_device_port(lock, errors)
     validate_readiness(lock, errors)
 
     return errors
@@ -339,31 +424,189 @@ def config_symbols(text):
     return symbols
 
 
-def verify_device_tree(text, lock):
-    """Check that the device tree carries the partition contract of the lock."""
-    pattern = re.compile(
-        r"partition@\w+\s*\{\s*label\s*=\s*\"([^\"]+)\";\s*reg\s*=\s*<([^>]+)>;\s*\};",
-        re.S,
-    )
-    actual = []
-    for label, register in pattern.findall(text):
+def device_tree_partitions(text):
+    """Return (label, offset, size) of every partition node, in file order.
+
+    A node whose unit address disagrees with the offset of its `reg` is a
+    contradiction the preprocessor would still compile, so it is refused here
+    instead of being silently normalized.
+    """
+    partitions = []
+    for unit, label, register in PARTITION_RE.findall(text):
         values = register.split()
         if len(values) != 2:
-            continue
+            raise ConfigError(
+                "the reg of the partition %s is not one <offset size> pair: %s"
+                % (label, register)
+            )
         try:
-            actual.append((label, int(values[0], 0), int(values[1], 0)))
-        except ValueError:
-            continue
+            offset, size = int(values[0], 0), int(values[1], 0)
+        except ValueError as error:
+            raise ConfigError(
+                "the reg of the partition %s is not numeric: %s" % (label, error)
+            )
+        if int(unit, 16) != offset:
+            raise ConfigError(
+                "the partition %s is named partition@%s but starts at %#x"
+                % (label, unit, offset)
+            )
+        partitions.append((label, offset, size))
+    return partitions
+
+
+def verify_device_tree(text, lock):
+    """Check that the device tree carries the partition contract of the lock.
+
+    The comparison is exact: every locked (label, offset, size) tuple has to
+    appear in the locked order and nothing else may. The stock 64M table, an
+    approximate UBI size, a renamed label or a table that is not bound to the
+    NMBM logical device all fail.
+    """
+    errors = []
+    contract = lock.get("partition_contract") or {}
     expected = [
         (entry["label"], entry["offset"], entry["size"])
-        for entry in lock["partition_contract"]["partitions"]
+        for entry in contract.get("partitions") or []
     ]
-    if actual != expected:
-        raise ConfigError(
-            "the device tree does not carry the partition contract of the lock: %s"
-            % actual
+    if not expected:
+        raise LockError("the lock carries no partition contract")
+
+    node = text.find(NMBM_NODE)
+    if node < 0:
+        errors.append(
+            "the device tree has no %s node, so the partition contract would "
+            "not be an NMBM logical one" % NMBM_NODE
         )
+    else:
+        for token in NMBM_BINDING:
+            if token not in text[node:]:
+                errors.append(
+                    "the %s node does not carry %s, the partitions would not be "
+                    "bound to the NMBM logical device" % (NMBM_NODE, token)
+                )
+    if text.count("partitions {") != 1:
+        errors.append(
+            "the device tree carries %d partition tables, exactly one NMBM "
+            "table is allowed" % text.count("partitions {")
+        )
+
+    actual = device_tree_partitions(text)
+    if actual != expected:
+        errors.append(
+            "the device tree partitions %s are not the locked contract %s"
+            % (actual, expected)
+        )
+    end_offset = contract.get("ubi_end_offset")
+    if isinstance(end_offset, int) and actual:
+        covered = actual[-1][1] + actual[-1][2]
+        if covered != end_offset:
+            errors.append(
+                "the partition table ends at %#x, the locked UBI end offset is %#x"
+                % (covered, end_offset)
+            )
+    if errors:
+        raise ConfigError("; ".join(errors))
     return actual
+
+
+def parse_device_blocks(text):
+    """Return {profile: {field: value}} of every `define Device/<profile>`."""
+    blocks = {}
+    for profile, body in DEVICE_BLOCK_RE.findall(text):
+        fields = {}
+        for line in body.splitlines():
+            match = DEVICE_FIELD_RE.match(line)
+            if not match:
+                continue
+            key, operator, value = match.groups()
+            if operator == "+=" and key in fields:
+                fields[key] = "%s %s" % (fields[key], value)
+            else:
+                fields[key] = value
+        blocks[profile] = fields
+    return blocks
+
+
+def verify_image_rules(text, lock):
+    """Check the ported profile of the image rules against the lock.
+
+    Only the block of the locked profile is read; a file full of other boards
+    is normal. Every field is compared as an exact string, so a profile copied
+    from another board, an approximate image limit or swapped factory and
+    sysupgrade roles fail instead of passing a loose pattern.
+    """
+    target = lock.get("target") or {}
+    image = lock.get("image") or {}
+    profile = target.get("profile")
+    if not profile:
+        raise LockError("the lock names no target profile")
+
+    blocks = parse_device_blocks(text)
+    if profile not in blocks:
+        raise ConfigError(
+            "the image rules do not define the profile %s, they define %s"
+            % (profile, ", ".join(sorted(blocks)) or "nothing")
+        )
+    fields = blocks[profile]
+
+    expected = {
+        "DEVICE_DTS": target.get("device_tree"),
+        "SUPPORTED_DEVICES": target.get("supported_devices"),
+        "IMAGE_SIZE": image.get("image_size"),
+        "BLOCKSIZE": image.get("blocksize"),
+        "PAGESIZE": image.get("pagesize"),
+        "UBINIZE_OPTS": image.get("ubinize_opts"),
+        "KERNEL_IN_UBI": None
+        if image.get("kernel_in_ubi") is None
+        else ("1" if image.get("kernel_in_ubi") else "0"),
+        "IMAGE/%s" % image.get("factory_image"): image.get("factory_rule"),
+        "IMAGE/%s" % image.get("sysupgrade_image"): image.get("sysupgrade_rule"),
+    }
+    errors = []
+    for key, value in expected.items():
+        if value is None:
+            errors.append("the lock records no %s for the profile %s" % (key, profile))
+            continue
+        actual = fields.get(key)
+        if actual != str(value):
+            errors.append(
+                "the profile %s sets %s to %r, the lock requires %r"
+                % (profile, key, actual, str(value))
+            )
+
+    images = (fields.get("IMAGES") or "").split()
+    factory_image = image.get("factory_image")
+    sysupgrade_image = image.get("sysupgrade_image")
+    default_images = image.get("images_default")
+    if factory_image and factory_image not in images:
+        errors.append(
+            "the profile %s does not add %s to IMAGES, it adds %s"
+            % (profile, factory_image, images or "nothing")
+        )
+    # The subtarget default already builds the sysupgrade image; a profile only
+    # adds the factory one. Which image that default is comes from the lock, so
+    # a changed subtarget default cannot pass unnoticed.
+    if sysupgrade_image and sysupgrade_image != default_images:
+        errors.append(
+            "the lock records %r as the default image of the subtarget, not the "
+            "sysupgrade image %r, so the profile would not build it"
+            % (default_images, sysupgrade_image)
+        )
+    factory_rule = expected["IMAGE/%s" % factory_image]
+    sysupgrade_rule = expected["IMAGE/%s" % sysupgrade_image]
+    if factory_rule and factory_rule == sysupgrade_rule:
+        errors.append(
+            "the lock records the same rule for the factory and the sysupgrade "
+            "image, the two roles must stay distinct"
+        )
+    if "check-size" not in (factory_rule or ""):
+        errors.append(
+            "the lock records a factory rule without check-size, the image "
+            "limit would not be enforced"
+        )
+    if errors:
+        raise ConfigError("; ".join(errors))
+    return fields
 
 
 def verify_config(text, lock):
@@ -463,6 +706,37 @@ def command_check(args):
     return 0
 
 
+def locked_source_path(lock, kind):
+    """Return the source tree path of the device tree or the image rules."""
+    if kind == "device-tree":
+        path = (lock.get("target") or {}).get("device_tree_file")
+    elif kind == "image-rules":
+        path = (lock.get("image") or {}).get("rules_file")
+    else:
+        raise LockError("unknown source file kind %r" % (kind,))
+    if not path:
+        raise LockError("the lock records no %s path" % kind)
+    return path
+
+
+def read_locked_source(lock, kind, explicit, source_dir):
+    """Read one file of the patched source tree.
+
+    Either the caller names the file directly or it names the patched source
+    tree and the lock says where the file lives inside it. Reading it from the
+    lock keeps a moved upstream path from being silently accepted.
+    """
+    if explicit:
+        path = Path(explicit)
+    elif source_dir:
+        path = Path(source_dir) / locked_source_path(lock, kind)
+    else:
+        raise LockError("the %s check needs --source-dir or an explicit path" % kind)
+    if not path.is_file():
+        raise LockError("the %s source file is missing: %s" % (kind, path))
+    return path.read_text(encoding="utf-8")
+
+
 def command_verify_config(args):
     lock = load_lock(args.lock)
     text = Path(args.config).read_text(encoding="utf-8")
@@ -473,9 +747,42 @@ def command_verify_config(args):
 
 def command_verify_device_tree(args):
     lock = load_lock(args.lock)
-    text = Path(args.dts).read_text(encoding="utf-8")
-    verify_device_tree(text, lock)
-    print("The device tree carries the partition contract of the lock.")
+    text = read_locked_source(
+        lock, "device-tree", args.dts, args.source_dir
+    )
+    partitions = verify_device_tree(text, lock)
+    print(
+        json.dumps(
+            {
+                "profile": (lock.get("target") or {}).get("profile"),
+                "address_space": (lock.get("partition_contract") or {}).get(
+                    "address_space"
+                ),
+                "partitions": [
+                    {"label": label, "offset": offset, "size": size}
+                    for label, offset, size in partitions
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def command_verify_image_rules(args):
+    lock = load_lock(args.lock)
+    text = read_locked_source(
+        lock, "image-rules", args.image_rules, args.source_dir
+    )
+    fields = verify_image_rules(text, lock)
+    print(
+        json.dumps(
+            {"profile": (lock.get("target") or {}).get("profile"), "fields": fields},
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
@@ -522,8 +829,25 @@ def main(argv=None):
         "verify-device-tree", help="check the partition contract of the device tree"
     )
     verify_tree.add_argument("--lock", required=True)
-    verify_tree.add_argument("--dts", required=True)
+    verify_tree.add_argument("--dts", default="")
+    verify_tree.add_argument(
+        "--source-dir",
+        default="",
+        help="the patched source tree; the lock names the device tree inside it",
+    )
     verify_tree.set_defaults(handler=command_verify_device_tree)
+
+    verify_rules = subparsers.add_parser(
+        "verify-image-rules", help="check the ported profile of the image rules"
+    )
+    verify_rules.add_argument("--lock", required=True)
+    verify_rules.add_argument("--image-rules", default="")
+    verify_rules.add_argument(
+        "--source-dir",
+        default="",
+        help="the patched source tree; the lock names the image rules inside it",
+    )
+    verify_rules.set_defaults(handler=command_verify_image_rules)
 
     report = subparsers.add_parser("report", help="write the build report")
     report.add_argument("--lock", required=True)

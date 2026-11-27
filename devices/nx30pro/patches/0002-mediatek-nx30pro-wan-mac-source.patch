@@ -1,0 +1,67 @@
+Subject: [PATCH] mediatek: read the NX30 Pro WAN MAC from a provisioned source
+
+The pinned source reads the WAN MAC of the h3c,nx30pro board from the
+pdt_data_1 partition and derives the LAN MAC from it. The 112M
+partition contract of this device has no pdt_data_1 partition, because
+that space is part of the larger UBI area, so on this layout the stock
+code finds no MAC at all.
+
+Take the WAN MAC from a provisioned file first, then from the factory
+data area, and only then from the stock partition when a device still
+carries it. The provisioned file /etc/nx30pro/wan-mac is written at
+deployment time and is never part of the image, so no device MAC is
+stored in this repository.
+
+When no MAC is found the interfaces keep the addresses the boot loader
+handed over instead of getting a derived wrong one, and the case is
+logged.
+
+The stock script also writes a derived Wi-Fi MAC into the Factory
+partition when its first two bytes read 00-0c. This port drops that
+write: the calibration partition stays read only, the vendor
+provisioned Wi-Fi MAC is preserved, and the stock write together with
+the real calibration data source stays unresolved until device testing
+is separately authorized.
+
+diff --git a/target/linux/mediatek/mt7981/base-files/etc/board.d/02_network b/target/linux/mediatek/mt7981/base-files/etc/board.d/02_network
+index ae85c00..dad3a9f 100755
+--- a/target/linux/mediatek/mt7981/base-files/etc/board.d/02_network
++++ b/target/linux/mediatek/mt7981/base-files/etc/board.d/02_network
+@@ -249,12 +249,32 @@ mediatek_setup_macs()
+ 		label_mac=$lan_mac
+ 		;;
+ 	h3c,nx30pro)
+-		wan_mac=$(mtd_get_mac_ascii pdt_data_1 ethaddr)
+-		lan_mac=$(macaddr_add $wan_mac 1)
+-		if [ "$(mtk_factory_get_byte "Factory" 4 2)" = "00-0c" ]; then
+-			local wifi_mac="$(macaddr_add $wan_mac 2)"
+-			mtk_facrory_write_mac "Factory" 4 $wifi_mac
++		# The 112M partition contract has no pdt_data_1 partition, so the stock
++		# location of the WAN MAC is gone on this layout. Read the provisioned
++		# file first, then the factory data area, and only then the stock
++		# partition for a device that still carries it. The provisioned file
++		# is written at deployment time and is never part of the image, so no
++		# device MAC is stored in this repository.
++		if [ -f /etc/nx30pro/wan-mac ]; then
++			wan_mac="$(cat /etc/nx30pro/wan-mac)"
++		fi
++		if [ -z "$wan_mac" ]; then
++			wan_mac="$(mtd_get_mac_ascii Factory ethaddr)"
++		fi
++		if [ -z "$wan_mac" ]; then
++			wan_mac="$(mtd_get_mac_ascii pdt_data_1 ethaddr)"
++		fi
++		if [ -n "$wan_mac" ]; then
++			lan_mac=$(macaddr_add $wan_mac 1)
++		else
++			logger -t board.d -p user.warn \
++				"no WAN MAC for h3c,nx30pro, provision /etc/nx30pro/wan-mac"
+ 		fi
++		# The stock script writes a derived Wi-Fi MAC into the Factory
++		# partition when its first two bytes read 00-0c. This port keeps the
++		# calibration partition read only and leaves the vendor provisioned
++		# Wi-Fi MAC alone; the stock write and the calibration data source
++		# stay unresolved until device testing is authorized.
+ 		;;
+ 	*cmcc,a10* |\
+ 	*konka,komi-a31*)

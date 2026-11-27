@@ -1,0 +1,284 @@
+Subject: [PATCH] mediatek: add the NX30 Pro 112M device profile
+
+The pinned source hanwckf/immortalwrt-mt798x at 740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6
+already supports the stock NX30PRO (mt7981-h3c-nx30pro.dts and
+Device/h3c_nx30pro with IMAGE_SIZE 65536k), but it carries no 112M
+profile and no 112M device tree.
+
+Port the 112M definition of the device from the rejected build base
+Galaxian-Explosion/nx30pro-imm-112M-nmbm at
+78cf22edddf07443d8f0506c9f361d3498475189, which is port reference
+evidence only, and rebase it onto the pinned source:
+
+- mt7981-h3c-nx30pro-112M.dts is the stock NX30PRO device tree of the
+  pinned source with the NMBM partition table of the 112M layout. The
+  reference splits the board nodes into mt7981-h3c-nx30pro-base.dtsi,
+  which the pinned source does not have, so the shared nodes stay
+  inline instead of adding a second board file.
+- The partition table is BL2 0x0/0x100000, u-boot-env 0x100000/0x80000,
+  Factory 0x180000/0x200000, FIP 0x380000/0x200000 and
+  ubi 0x580000/0x7000000. These are addresses of the NMBM logical
+  device nmbm0, never physical NAND addresses, and they are the table
+  devices/nx30pro/uboot/uboot-source-lock.json locks as
+  layouts.entries["immortalwrt-112m"]. The stock pdt_data, pdt_data_1,
+  exp and plugin partitions are gone because that space is part of the
+  larger UBI area.
+- Device/h3c_nx30pro_112M keeps SUPPORTED_DEVICES h3c,nx30pro, so the
+  board.d files of the pinned source match this device tree unchanged.
+  It carries the explicit image limit IMAGE_SIZE := 110592k with
+  check-size on the factory image, and the two distinct roles
+  factory.bin (append-ubi) and sysupgrade.bin (sysupgrade-tar with
+  metadata).
+
+The stock Device/h3c_nx30pro profile and its 64M device tree are not
+modified: the stock table is not the 112M profile.
+
+diff --git a/target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts b/target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts
+new file mode 100644
+index 0000000..f91efbb
+--- /dev/null
++++ b/target/linux/mediatek/files-5.4/arch/arm64/boot/dts/mediatek/mt7981-h3c-nx30pro-112M.dts
+@@ -0,0 +1,215 @@
++/dts-v1/;
++#include "mt7981.dtsi"
++
++/ {
++	model = "H3C NX30PRO";
++	compatible = "h3c,nx30pro", "mediatek,mt7981";
++
++	aliases {
++		led-boot = &red_led;
++		led-failsafe = &red_led;
++		led-running = &green_led;
++		led-upgrade = &green_led;
++	};
++
++	chosen {
++		bootargs = "console=ttyS0,115200n1 loglevel=8  \
++				earlycon=uart8250,mmio32,0x11002000";
++	};
++
++	memory {
++		reg = <0 0x40000000 0 0x10000000>;
++	};
++
++	leds {
++		compatible = "gpio-leds";
++
++		green_led: green {
++			label = "nx30pro:green";
++			gpios = <&pio 4 GPIO_ACTIVE_LOW>;
++		};
++
++		red_led: red {
++			label = "nx30pro:red";
++			gpios = <&pio 5 GPIO_ACTIVE_LOW>;
++		};
++	};
++
++	gpio-keys {
++		compatible = "gpio-keys";
++		reset {
++			label = "reset";
++			linux,code = <KEY_RESTART>;
++			gpios = <&pio 1 GPIO_ACTIVE_LOW>;
++		};
++
++		mesh {
++			label = "mesh";
++			gpios = <&pio 0 GPIO_ACTIVE_LOW>;
++			linux,code = <BTN_9>;
++			linux,input-type = <EV_SW>;
++		};
++	};
++
++	gsw: gsw@0 {
++		compatible = "mediatek,mt753x";
++		mediatek,ethsys = <&ethsys>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++	};
++
++	nmbm_spim_nand {
++		compatible = "generic,nmbm";
++		#address-cells = <1>;
++		#size-cells = <1>;
++
++		lower-mtd-device = <&spi_nand>;
++		forced-create;
++
++		partitions {
++			compatible = "fixed-partitions";
++			#address-cells = <1>;
++			#size-cells = <1>;
++
++			partition@0 {
++				label = "BL2";
++				reg = <0x00 0x100000>;
++			};
++
++			partition@100000 {
++				label = "u-boot-env";
++				reg = <0x100000 0x80000>;
++			};
++
++			partition@180000 {
++				label = "Factory";
++				reg = <0x180000 0x200000>;
++			};
++
++			partition@380000 {
++				label = "FIP";
++				reg = <0x380000 0x200000>;
++			};
++
++			partition@580000 {
++				label = "ubi";
++				reg = <0x580000 0x7000000>;
++			};
++		};
++	};
++};
++
++&uart0 {
++	status = "okay";
++};
++
++&watchdog {
++	status = "okay";
++};
++
++&eth {
++	status = "okay";
++
++	gmac0: mac@0 {
++		compatible = "mediatek,eth-mac";
++		reg = <0>;
++		phy-mode = "2500base-x";
++
++		fixed-link {
++			speed = <2500>;
++			full-duplex;
++			pause;
++		};
++	};
++
++	gmac1: mac@1 {
++		compatible = "mediatek,eth-mac";
++		reg = <1>;
++		phy-mode = "gmii";
++		phy-handle = <&phy0>;
++	};
++
++	mdio: mdio-bus {
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		phy0: ethernet-phy@0 {
++			compatible = "ethernet-phy-id03a2.9461";
++			reg = <0>;
++			phy-mode = "gmii";
++			nvmem-cells = <&phy_calibration>;
++			nvmem-cell-names = "phy-cal-data";
++		};
++	};
++};
++
++&gsw {
++	mediatek,mdio = <&mdio>;
++	mediatek,mdio_master_pinmux = <0>;
++	reset-gpios = <&pio 39 0>;
++	interrupt-parent = <&pio>;
++	interrupts = <38 IRQ_TYPE_LEVEL_HIGH>;
++	status = "okay";
++
++	port6: port@6 {
++		compatible = "mediatek,mt753x-port";
++		mediatek,ssc-on;
++		reg = <6>;
++		phy-mode = "sgmii";
++
++		fixed-link {
++			speed = <2500>;
++			full-duplex;
++		};
++	};
++};
++
++&hnat {
++	mtketh-wan = "eth1";
++	mtketh-lan = "eth0";
++	mtketh-max-gmac = <2>;
++	status = "okay";
++};
++
++&spi0 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&spi0_flash_pins>;
++	status = "okay";
++
++	spi_nand: spi_nand@0 {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		compatible = "spi-nand";
++		reg = <0>;
++		spi-max-frequency = <52000000>;
++		spi-tx-bus-width = <4>;
++		spi-rx-bus-width = <4>;
++		spi-cal-enable;
++		spi-cal-mode = "read-data";
++		spi-cal-datalen = <7>;
++		spi-cal-data = /bits/ 8 <0x53 0x50 0x49 0x4E 0x41 0x4E 0x44>; /* 'SPINAND' */
++		spi-cal-addrlen = <5>;
++		spi-cal-addr = /bits/ 32 <0x0 0x0 0x0 0x0 0x0>;
++	};
++};
++
++&pio {
++	spi0_flash_pins: spi0-pins {
++		mux {
++			function = "spi";
++			groups = "spi0", "spi0_wp_hold";
++		};
++
++		conf-pu {
++			pins = "SPI0_CS", "SPI0_HOLD", "SPI0_WP";
++			drive-strength = <MTK_DRIVE_8mA>;
++			bias-pull-up = <MTK_PUPD_SET_R1R0_11>;
++		};
++
++		conf-pd {
++			pins = "SPI0_CLK", "SPI0_MOSI", "SPI0_MISO";
++			drive-strength = <MTK_DRIVE_8mA>;
++			bias-pull-down = <MTK_PUPD_SET_R1R0_11>;
++		};
++	};
++};
+diff --git a/target/linux/mediatek/image/mt7981.mk b/target/linux/mediatek/image/mt7981.mk
+index 79dfe1f..69eb556 100644
+--- a/target/linux/mediatek/image/mt7981.mk
++++ b/target/linux/mediatek/image/mt7981.mk
+@@ -658,6 +658,23 @@ define Device/h3c_nx30pro
+ endef
+ TARGET_DEVICES += h3c_nx30pro
+ 
++define Device/h3c_nx30pro_112M
++  DEVICE_VENDOR := H3C
++  DEVICE_MODEL := NX30PRO (with 112M ubi)
++  DEVICE_DTS := mt7981-h3c-nx30pro-112M
++  DEVICE_DTS_DIR := $(DTS_DIR)/mediatek
++  SUPPORTED_DEVICES := h3c,nx30pro
++  UBINIZE_OPTS := -E 5
++  BLOCKSIZE := 128k
++  PAGESIZE := 2048
++  IMAGE_SIZE := 110592k
++  KERNEL_IN_UBI := 1
++  IMAGES += factory.bin
++  IMAGE/factory.bin := append-ubi | check-size $$$$(IMAGE_SIZE)
++  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
++endef
++TARGET_DEVICES += h3c_nx30pro_112M
++
+ define Device/honor_fur-602
+   DEVICE_VENDOR := HONOR
+   DEVICE_MODEL := FUR-602
