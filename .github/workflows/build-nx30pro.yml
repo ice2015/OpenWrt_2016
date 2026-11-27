@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     env:
-      SOURCE_REVISION: 78cf22edddf07443d8f0506c9f361d3498475189
+      SOURCE_REVISION: 740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6
     steps:
       - name: Check out this build project
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

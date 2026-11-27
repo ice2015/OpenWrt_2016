@@ -36,8 +36,8 @@
     },
     {
       "id": "immortalwrt-mt798x",
-      "repository": "https://github.com/jerryhan77/immortalwrt-mt798x.git",
-      "revision": "78cf22edddf07443d8f0506c9f361d3498475189",
+      "repository": "https://github.com/hanwckf/immortalwrt-mt798x",
+      "revision": "UNRESOLVED",
       "config_layers": [],
       "feed_layers": []
     }

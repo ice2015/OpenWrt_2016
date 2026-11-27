@@ -3,9 +3,16 @@
 
 The helper is the single place that knows what a build ready firmware lock
 looks like. It refuses a lock that does not pin the source commit and the
-feed revisions, that names another device profile, that does not match the
-partition contract of the boot loader, or that does not confirm the packages
-of the requirement table.
+feed revisions, that names the rejected Galaxian base or another repository,
+that names another device profile, that does not match the partition contract
+of the boot loader, whose hard gate packages are still unproven candidates,
+whose package dependency no locked feed provides, or that hand edits the
+build readiness flag without the evidence behind it.
+
+A lock that is not build ready stops with the repository wide build not ready
+status 3, the same code `uboot_lock.py` and `tools/manifest.py` use, and no
+build plan is rendered for it: nothing may download or compile a source that
+failed this gate.
 
 The configuration check runs against the final .config that the build
 produced, never against the fragment that was fed into it.
@@ -19,7 +26,19 @@ import sys
 from pathlib import Path
 
 
+# The repository wide build not ready status. A lock that fails this gate must
+# not be distinguishable from an unresolved manifest target: both stop with 3.
+BUILD_NOT_READY = 3
+
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+
+# The only source repository this device may be built from. The lock records
+# the rejected bases in source.rejected_sources; naming one of them, or any
+# other tree, stops the build here.
+ALLOWED_SOURCE_REPOSITORY = "https://github.com/hanwckf/immortalwrt-mt798x"
+
+PACKAGE_STATUSES = ("candidate", "available", "partial", "unavailable", "UNRESOLVED")
+UNPROVEN_STATUSES = ("unavailable", "UNRESOLVED")
 
 EXPECTED_PROFILE = "h3c_nx30pro_112M"
 EXPECTED_PROFILE_SYMBOL = "CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y"
@@ -63,9 +82,15 @@ def load_lock(path):
     return lock
 
 
-def validate_lock(lock):
-    """Return the list of reasons why the lock is not build ready."""
-    errors = []
+def locked_revisions(lock):
+    """Map every feed id plus the base tree to the commit that provides it."""
+    revisions = {"base": (lock.get("source") or {}).get("revision")}
+    for feed in lock.get("feeds") or []:
+        revisions[feed.get("id")] = feed.get("revision")
+    return revisions
+
+
+def validate_source(lock, errors):
     source = lock.get("source") or {}
     revision = source.get("revision")
     if not isinstance(revision, str) or not COMMIT_RE.match(revision):
@@ -74,8 +99,163 @@ def validate_lock(lock):
             % (revision,)
         )
     repository = source.get("repository")
-    if not repository or not repository.startswith("https://"):
-        errors.append("the source repository is missing or not a https url")
+    if repository != ALLOWED_SOURCE_REPOSITORY:
+        errors.append(
+            "the source repository must be %s, got %r"
+            % (ALLOWED_SOURCE_REPOSITORY, repository)
+        )
+    for entry in source.get("rejected_sources") or []:
+        if entry.get("status") != "rejected-evidence-only":
+            errors.append(
+                "the rejected source %r must stay rejected-evidence-only"
+                % (entry.get("repository"),)
+            )
+            continue
+        if (
+            repository == entry.get("repository")
+            or revision == entry.get("commit")
+        ):
+            errors.append(
+                "the source %s at %s is recorded as rejected-evidence-only and "
+                "must never be the active build base: %s"
+                % (repository, revision, entry.get("reason"))
+            )
+
+
+def validate_packages(lock, errors):
+    """Check the package table and the dependency index it resolves against."""
+    revisions = locked_revisions(lock)
+    index = lock.get("dependency_index") or {}
+
+    for name, entry in index.items():
+        provider = entry.get("provider")
+        if provider not in revisions:
+            errors.append(
+                "the dependency %s names the unknown provider %r"
+                % (name, provider)
+            )
+            continue
+        if entry.get("revision") != revisions[provider]:
+            errors.append(
+                "the dependency %s is pinned to %r, not to the locked %s commit %r"
+                % (name, entry.get("revision"), provider, revisions[provider])
+            )
+        if not entry.get("path"):
+            errors.append("the dependency %s has no provider path" % name)
+
+    packages = lock.get("packages") or []
+    if not packages:
+        errors.append("the lock has no package table")
+    for entry in packages:
+        name = entry.get("package") or "<unnamed>"
+        status = entry.get("status")
+        if status not in PACKAGE_STATUSES:
+            errors.append(
+                "the package %s has an unknown status %r" % (name, status)
+            )
+            continue
+        for dependency in entry.get("dependencies") or []:
+            if dependency not in index:
+                errors.append(
+                    "the package %s depends on %s, which no locked feed provides"
+                    % (name, dependency)
+                )
+        if entry.get("version_pinned") and (
+            not entry.get("version")
+            or "PKG_VERSION" not in (entry.get("version_evidence") or "")
+        ):
+            errors.append(
+                "the package %s pins a version without PKG_VERSION evidence"
+                % name
+            )
+        elif entry.get("version") and not entry.get("version_evidence"):
+            errors.append(
+                "the package %s records a version without its evidence" % name
+            )
+        if status in UNPROVEN_STATUSES:
+            if entry.get("feed_revision") is not None:
+                errors.append(
+                    "the package %s is %s but still pins the feed commit %r"
+                    % (name, status, entry.get("feed_revision"))
+                )
+            continue
+        provider = entry.get("feed")
+        if provider not in revisions:
+            errors.append(
+                "the package %s names the unknown provider %r" % (name, provider)
+            )
+        elif entry.get("feed_revision") != revisions[provider]:
+            errors.append(
+                "the package %s is pinned to %r, not to the locked %s commit %r"
+                % (
+                    name,
+                    entry.get("feed_revision"),
+                    provider,
+                    revisions[provider],
+                )
+            )
+        if not entry.get("provider_path"):
+            errors.append("the package %s has no provider path" % name)
+        if entry.get("gate") == "hard" and not (entry.get("symbols") or []):
+            errors.append(
+                "the hard gate package %s names no config symbol" % name
+            )
+        if status == "available" and not entry.get("defconfig_evidence"):
+            errors.append(
+                "the package %s is marked available without `make defconfig` "
+                "evidence from the final .config" % name
+            )
+
+
+def validate_readiness(lock, errors):
+    """Recompute build_readiness from the package table.
+
+    The flag is derived, never trusted: a hard gate that is still a candidate
+    keeps the lock build blocked, and a hand edited ready=true is itself an
+    error. This is what stops a candidate from being promoted by editing JSON.
+    """
+    readiness = lock.get("build_readiness")
+    if not isinstance(readiness, dict):
+        errors.append("the lock has no build_readiness record")
+        return
+    unproven = [
+        entry.get("package")
+        for entry in lock.get("packages") or []
+        if entry.get("gate") == "hard"
+        and (
+            entry.get("status") != "available"
+            or not entry.get("defconfig_evidence")
+        )
+    ]
+    if readiness.get("ready"):
+        if unproven:
+            errors.append(
+                "build_readiness claims the lock is ready while %d hard gate "
+                "packages are still unproven: %s"
+                % (len(unproven), ", ".join(str(name) for name in unproven))
+            )
+        return
+    if not readiness.get("blocking"):
+        errors.append(
+            "build_readiness is not ready but lists no blocking reason"
+        )
+    if "defconfig" not in (readiness.get("required_evidence") or ""):
+        errors.append(
+            "build_readiness must name the `make defconfig` evidence it needs"
+        )
+    if unproven:
+        errors.append(
+            "the hard gate packages %s are candidates: no authorized "
+            "`make defconfig` probe proved them in the final .config yet, so "
+            "the lock stays build blocked"
+            % ", ".join(str(name) for name in unproven)
+        )
+
+
+def validate_lock(lock):
+    """Return the list of reasons why the lock is not build ready."""
+    errors = []
+    validate_source(lock, errors)
 
     feeds = {}
     for feed in lock.get("feeds") or []:
@@ -121,17 +301,8 @@ def validate_lock(lock):
             "the partition layout does not match the 112M contract of the boot loader"
         )
 
-    packages = lock.get("packages") or []
-    if not packages:
-        errors.append("the lock has no package table")
-    for entry in packages:
-        if not entry.get("package"):
-            errors.append("a package table entry has no package name")
-        if entry.get("status") not in ("available", "partial", "unavailable"):
-            errors.append(
-                "the package %s has an unknown status %r"
-                % (entry.get("package"), entry.get("status"))
-            )
+    validate_packages(lock, errors)
+    validate_readiness(lock, errors)
 
     return errors
 
@@ -216,13 +387,7 @@ def verify_config(text, lock):
     for entry in lock.get("packages") or []:
         if entry.get("status") != "available":
             continue
-        symbol = entry.get("symbol")
-        if not symbol:
-            continue
-        for name in [part.strip() for part in symbol.split(",")]:
-            if not name:
-                continue
-            key = name.split("=")[0].strip()
+        for key in entry.get("symbols") or []:
             if symbols.get(key) != "y":
                 errors.append(
                     "the required package %s of %s is not enabled"
@@ -291,7 +456,9 @@ def command_check(args):
     if errors:
         for error in errors:
             print("Error: %s" % error, file=sys.stderr)
-        return 1
+        # No plan is rendered for a blocked lock: the caller must not receive
+        # anything it could feed to a download or a compile step.
+        return BUILD_NOT_READY
     print(json.dumps(render_plan(lock), indent=2, sort_keys=True))
     return 0
 
@@ -318,7 +485,7 @@ def command_report(args):
     if errors:
         for error in errors:
             print("Error: %s" % error, file=sys.stderr)
-        return 1
+        return BUILD_NOT_READY
     artifacts = []
     for spec in args.artifact:
         role, path = spec.split(":", 1)
@@ -370,7 +537,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         return args.handler(args)
-    except (LockError, ConfigError) as error:
+    except LockError as error:
+        print("Error: %s" % error, file=sys.stderr)
+        return BUILD_NOT_READY
+    except ConfigError as error:
         print("Error: %s" % error, file=sys.stderr)
         return 1
 
