@@ -216,6 +216,187 @@ class Nx30ProUbootArtifactNameTests(unittest.TestCase):
         self.assertIn("no flash", text.lower())
 
 
+class Nx30ProUbootLayoutSourceTests(unittest.TestCase):
+    """The layout whitelist has to exist in the pinned upstream device tree.
+
+    The verifier must not synthesise a layout the source does not carry, and it
+    must not accept a source that offers a third, arbitrary layout.
+    """
+
+    LAYOUT_112M = (
+        "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)"
+    )
+    LAYOUT_STOCK = (
+        "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),"
+        "65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)"
+    )
+
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+
+    def dts(self, layouts=None):
+        if layouts is None:
+            layouts = [
+                ("layout@0", "default", self.LAYOUT_STOCK),
+                ("layout@1", "immortalwrt-112m", self.LAYOUT_112M),
+            ]
+        body = ""
+        for node, label, parts in layouts:
+            body += (
+                "\t\t%s {\n"
+                '\t\t\tlabel = "%s";\n'
+                '\t\t\tmtdids = "nmbm0=nmbm0";\n'
+                '\t\t\tmtdparts = "%s";\n'
+                "\t\t};\n\n" % (node, label, parts)
+            )
+        return (
+            "// SPDX-License-Identifier: GPL-2.0-or-later OR MIT\n"
+            "/dts-v1/;\n"
+            "/ {\n"
+            '\tmodel = "mt7981-h3c_magic-nx30-pro";\n'
+            "\tmtd-layout {\n"
+            "%s"
+            "\t};\n"
+            "};\n" % body
+        )
+
+    def verify(self, text, lock=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "board.dts"
+            path.write_text(text, encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable, str(HELPER), "verify-layout-source",
+                    "--lock", str(LOCK if lock is None else lock),
+                    "--dts", str(path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+        return result
+
+    def test_the_pinned_device_tree_carries_exactly_the_locked_whitelist(self):
+        result = self.verify(self.dts())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("immortalwrt-112m", result.stdout)
+        self.assertIn("default", result.stdout)
+
+    def test_a_source_without_the_112m_layout_is_rejected(self):
+        result = self.verify(self.dts([("layout@0", "default", self.LAYOUT_STOCK)]))
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("immortalwrt-112m", result.stderr)
+
+    def test_a_source_without_the_stock_layout_is_rejected(self):
+        result = self.verify(self.dts([("layout@0", "immortalwrt-112m", self.LAYOUT_112M)]))
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("default", result.stderr)
+
+    def test_a_source_with_a_third_layout_is_rejected(self):
+        result = self.verify(
+            self.dts(
+                [
+                    ("layout@0", "default", self.LAYOUT_STOCK),
+                    ("layout@1", "immortalwrt-112m", self.LAYOUT_112M),
+                    ("layout@2", "openwrt", "nmbm0:1024k(bl2),120M(firmware)"),
+                ]
+            )
+        )
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("openwrt", result.stderr)
+
+    def test_a_changed_factory_offset_is_rejected(self):
+        changed = self.LAYOUT_112M.replace("2048k(Factory)", "4096k(Factory)")
+        result = self.verify(
+            self.dts(
+                [
+                    ("layout@0", "default", self.LAYOUT_STOCK),
+                    ("layout@1", "immortalwrt-112m", changed),
+                ]
+            )
+        )
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("Factory", result.stderr)
+
+    def test_a_stock_layout_that_lost_an_oem_partition_is_rejected(self):
+        changed = self.LAYOUT_STOCK.replace(",6144k(pdt_data_1)", "")
+        result = self.verify(
+            self.dts(
+                [
+                    ("layout@0", "default", changed),
+                    ("layout@1", "immortalwrt-112m", self.LAYOUT_112M),
+                ]
+            )
+        )
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("pdt_data_1", result.stderr)
+
+    def test_physical_nand_addressing_is_not_accepted_as_nmbm_logical(self):
+        physical = self.LAYOUT_112M.replace("nmbm0:", "spi-nand0:")
+        text = self.dts(
+            [
+                ("layout@0", "default", self.LAYOUT_STOCK),
+                ("layout@1", "immortalwrt-112m", physical),
+            ]
+        ).replace('mtdids = "nmbm0=nmbm0"', 'mtdids = "spi-nand0=spi-nand0"')
+        result = self.verify(text)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("nmbm", result.stderr.lower())
+
+    def test_a_device_tree_without_a_layout_node_is_rejected(self):
+        result = self.verify("/dts-v1/;\n/ {\n\tmodel = \"mt7981-h3c_magic-nx30-pro\";\n};\n")
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("mtd-layout", result.stderr)
+
+    def test_a_lock_with_a_third_whitelisted_layout_is_not_build_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(
+                tmp,
+                **{
+                    "layouts.entries.openwrt": {
+                        "label": "openwrt",
+                        "mtdids": "nmbm0=nmbm0",
+                        "mtdparts": "nmbm0:1024k(bl2),120M(firmware)",
+                        "address_space": "nmbm-logical",
+                        "partitions": [],
+                    }
+                },
+            )
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("layout", result.stderr.lower())
+
+    def test_a_lock_that_makes_the_stock_layout_the_default_is_not_build_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(tmp, **{"layouts.default_label": "default"})
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("immortalwrt-112m", result.stderr)
+
+    def test_a_lock_whose_112m_table_is_the_stock_table_is_not_build_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(
+                tmp,
+                **{"layouts.entries.immortalwrt-112m.mtdparts": self.LAYOUT_STOCK},
+            )
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("112M(ubi)", result.stderr)
+
+
+    def test_a_lock_whose_declared_partitions_disagree_with_its_table_is_not_build_ready(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = write_lock(
+                tmp,
+                **{"layouts.entries.immortalwrt-112m.partitions": [
+                    {"label": "bl2", "offset": 0, "size": 2097152},
+                ]},
+            )
+            result = run_check(lock)
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("partition", result.stderr.lower())
+
+
 class Nx30ProUbootArtifactTests(unittest.TestCase):
     def setUp(self):
         self.helper = load_helper()

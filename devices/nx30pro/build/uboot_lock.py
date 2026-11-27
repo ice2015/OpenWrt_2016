@@ -63,6 +63,27 @@ EXPECTED_MTDPARTS = (
     "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),114688k(ubi)"
 )
 
+# The two layouts the pinned upstream device tree offers for this board. The
+# whitelist is exactly this set: a third label is a partition table nobody
+# verified, and the stock layout must never become the default.
+EXPECTED_DEFAULT_LAYOUT = "immortalwrt-112m"
+EXPECTED_LAYOUT_LABELS = ("immortalwrt-112m", "default")
+EXPECTED_LAYOUT_MTDIDS = "nmbm0=nmbm0"
+EXPECTED_LAYOUT_MTDPARTS = {
+    "immortalwrt-112m": (
+        "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)"
+    ),
+    "default": (
+        "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),"
+        "65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)"
+    ),
+}
+
+SIZE_SUFFIXES = {"k": 1024, "m": 1024 * 1024, "g": 1024 ** 3}
+MTDPART_ENTRY_RE = re.compile(r"^(\d+[kKmMgG]?)(?:@\d+[kKmMgG]?)?\(([^)]+)\)")
+DTS_LAYOUT_NODE_RE = re.compile(r"(layout@[0-9a-fA-F]+)\s*\{(.*?)\n\s*\};", re.S)
+DTS_STRING_RE = lambda name: re.compile(r'%s\s*=\s*"([^"]*)"' % name)
+
 
 TOC_HEADER_NAME = 0xAA640001
 TOC_HEADER = struct.Struct("<IIQ")
@@ -115,6 +136,236 @@ def load_lock(path):
     if not isinstance(lock, dict):
         raise LockError("the source lock is not a JSON object")
     return lock
+
+
+def parse_size(text):
+    """Convert one mtdparts size such as 112M into bytes."""
+    text = text.strip()
+    suffix = text[-1].lower()
+    if suffix in SIZE_SUFFIXES:
+        return int(text[:-1]) * SIZE_SUFFIXES[suffix]
+    return int(text)
+
+
+def parse_mtdparts(mtdparts):
+    """Split an mtdparts string into its device and its partition list."""
+    device, _, remainder = str(mtdparts).partition(":")
+    if not remainder:
+        raise LockError("the partition table %r names no partitions" % (mtdparts,))
+    partitions = []
+    offset = 0
+    for item in remainder.split(","):
+        match = MTDPART_ENTRY_RE.match(item.strip())
+        if not match:
+            raise LockError(
+                "the partition table entry %r of %r cannot be parsed" % (item, mtdparts)
+            )
+        size = parse_size(match.group(1))
+        partitions.append(
+            {"label": match.group(2), "offset": offset, "size": size}
+        )
+        offset += size
+    return device.strip(), partitions, offset
+
+
+def validate_layout_entries(lock, errors):
+    """Check the locked layout whitelist against itself."""
+    layouts = lock.get("layouts") or {}
+    entries = layouts.get("entries") or {}
+
+    if layouts.get("default_label") != EXPECTED_DEFAULT_LAYOUT:
+        errors.append(
+            "the default layout must be %s, the lock selects %r"
+            % (EXPECTED_DEFAULT_LAYOUT, layouts.get("default_label"))
+        )
+    if set(entries) != set(EXPECTED_LAYOUT_LABELS):
+        errors.append(
+            "the layout whitelist must be exactly %s, the lock carries %s"
+            % (
+                " and ".join(EXPECTED_LAYOUT_LABELS),
+                ", ".join(sorted(entries)) or "nothing",
+            )
+        )
+    if layouts.get("mtdids") != EXPECTED_LAYOUT_MTDIDS:
+        errors.append(
+            "the layouts must be addressed through %s, the lock records %r"
+            % (EXPECTED_LAYOUT_MTDIDS, layouts.get("mtdids"))
+        )
+
+    parsed = {}
+    for label in EXPECTED_LAYOUT_LABELS:
+        entry = entries.get(label)
+        if not isinstance(entry, dict):
+            continue
+        expected_table = EXPECTED_LAYOUT_MTDPARTS[label]
+        if entry.get("mtdparts") != expected_table:
+            errors.append(
+                "the layout %s must carry the table %s, the lock carries %r"
+                % (label, expected_table, entry.get("mtdparts"))
+            )
+            continue
+        if entry.get("mtdids") != EXPECTED_LAYOUT_MTDIDS:
+            errors.append(
+                "the layout %s must be addressed through %s, the lock records %r"
+                % (label, EXPECTED_LAYOUT_MTDIDS, entry.get("mtdids"))
+            )
+        device, partitions, end = parse_mtdparts(expected_table)
+        if device != "nmbm0":
+            errors.append(
+                "the layout %s is addressed on %s, not on the nmbm logical device"
+                % (label, device)
+            )
+        declared = [
+            (item.get("label"), item.get("offset"), item.get("size"))
+            for item in entry.get("partitions") or []
+        ]
+        actual = [(item["label"], item["offset"], item["size"]) for item in partitions]
+        if declared != actual:
+            errors.append(
+                "the declared partitions of the layout %s do not follow its table"
+                % (label,)
+            )
+        if entry.get("end_offset") not in (None, end):
+            errors.append(
+                "the layout %s ends at %r, its table ends at %d"
+                % (label, entry.get("end_offset"), end)
+            )
+        parsed[label] = actual
+
+    if set(parsed) == set(EXPECTED_LAYOUT_LABELS):
+        if parsed["immortalwrt-112m"][:4] != parsed["default"][:4]:
+            errors.append(
+                "the two layouts must share the bl2, u-boot-env, Factory and fip "
+                "offsets and sizes"
+            )
+        contract = [
+            (
+                str(item.get("label", "")).lower(),
+                item.get("offset"),
+                item.get("size"),
+            )
+            for item in (lock.get("partition_contract") or {}).get("partitions") or []
+        ]
+        lowered = [
+            (label.lower(), offset, size) for label, offset, size in parsed["immortalwrt-112m"]
+        ]
+        if contract and contract != lowered:
+            errors.append(
+                "the partition contract is not the immortalwrt-112m layout of the "
+                "locked whitelist"
+            )
+    return parsed
+
+
+def verify_layout_source(lock, dts_text):
+    """Check the pinned device tree text against the locked layout whitelist.
+
+    The verifier reads the source, it never synthesises a layout. A device tree
+    that carries another label, another table or physical NAND addressing makes
+    the build stop before anything is compiled.
+    """
+    text = str(dts_text)
+    errors = []
+    entries = (lock.get("layouts") or {}).get("entries") or {}
+
+    if "mtd-layout" not in text:
+        raise LockError(
+            "the device tree has no mtd-layout node, so it offers no layout whitelist"
+        )
+
+    found = {}
+    for node, body in DTS_LAYOUT_NODE_RE.findall(text):
+        label_match = DTS_STRING_RE("label").search(body)
+        ids_match = DTS_STRING_RE("mtdids").search(body)
+        parts_match = DTS_STRING_RE("mtdparts").search(body)
+        if not label_match or not ids_match or not parts_match:
+            errors.append(
+                "the device tree layout %s does not carry label, mtdids and mtdparts"
+                % node
+            )
+            continue
+        found[label_match.group(1)] = {
+            "node": node,
+            "mtdids": ids_match.group(1),
+            "mtdparts": parts_match.group(1),
+        }
+
+    expected = set(EXPECTED_LAYOUT_LABELS)
+    for label in sorted(set(found) - expected):
+        errors.append(
+            "the device tree offers the layout %s, which is not in the locked "
+            "whitelist %s" % (label, " and ".join(EXPECTED_LAYOUT_LABELS))
+        )
+    for label in sorted(expected - set(found)):
+        errors.append(
+            "the device tree does not carry the locked layout %s" % (label,)
+        )
+
+    for label in EXPECTED_LAYOUT_LABELS:
+        entry = found.get(label)
+        if not entry:
+            continue
+        if entry["mtdids"] != EXPECTED_LAYOUT_MTDIDS:
+            errors.append(
+                "the layout %s is addressed with %r, the locked layouts are addressed "
+                "through the nmbm logical device %s"
+                % (label, entry["mtdids"], EXPECTED_LAYOUT_MTDIDS)
+            )
+            continue
+        if entry["mtdparts"] != EXPECTED_LAYOUT_MTDPARTS[label]:
+            errors.append(
+                "the layout %s of the device tree carries the table %r, the lock "
+                "requires %s"
+                % (label, entry["mtdparts"], EXPECTED_LAYOUT_MTDPARTS[label])
+            )
+            continue
+        device, partitions, _end = parse_mtdparts(entry["mtdparts"])
+        if device != "nmbm0":
+            errors.append(
+                "the layout %s is addressed on %s, not on the nmbm logical device"
+                % (label, device)
+            )
+        declared = entries.get(label, {}).get("partitions") or []
+        source_labels = [item["label"] for item in partitions]
+        locked_labels = [item.get("label") for item in declared]
+        for missing in [item for item in locked_labels if item not in source_labels]:
+            errors.append(
+                "the device tree layout %s does not carry the partition %s"
+                % (label, missing)
+            )
+        for extra in [item for item in source_labels if item not in locked_labels]:
+            errors.append(
+                "the device tree layout %s carries the partition %s, which the lock "
+                "does not describe" % (label, extra)
+            )
+        for item in partitions:
+            match = [
+                other for other in declared if other.get("label") == item["label"]
+            ]
+            if not match:
+                continue
+            other = match[0]
+            if other.get("offset") != item["offset"] or other.get("size") != item["size"]:
+                errors.append(
+                    "the device tree layout %s places the partition %s at %d with "
+                    "size %d, the lock records offset %r and size %r"
+                    % (
+                        label,
+                        item["label"],
+                        item["offset"],
+                        item["size"],
+                        other.get("offset"),
+                        other.get("size"),
+                    )
+                )
+
+    if errors:
+        raise LockError("; ".join(errors))
+    return {
+        "default_label": (lock.get("layouts") or {}).get("default_label"),
+        "layouts": sorted(found),
+        "address_space": "nmbm-logical",
+    }
 
 
 def validate_lock(lock):
@@ -223,15 +474,23 @@ def validate_lock(lock):
 
     compatibility = lock.get("compatibility") or {}
     patch = compatibility.get("minimal_device_patch") or {}
+    if patch.get("action") != "none-required-for-the-partition-tables":
+        errors.append(
+            "the pinned device tree already carries both locked layout tables, so "
+            "the lock must not describe a partition patch, got %r"
+            % (patch.get("action"),)
+        )
     if patch.get("value") != EXPECTED_MTDPARTS:
         errors.append(
-            "the minimal device patch does not produce the 112M partition table %r"
+            "the lock does not record the 112M partition table %r"
             % (patch.get("value"),)
         )
     if compatibility.get("layout_matches_upstream_stock") is not False:
         errors.append(
             "the lock must record that the upstream stock layout does not match"
         )
+
+    validate_layout_entries(lock, errors)
 
     artifacts = lock.get("artifacts") or {}
     for kind, suffix in (("fip", ".bin"), ("bl2", ".img")):
@@ -317,6 +576,7 @@ def render_plan(lock):
         "version": source.get("version"),
         "build_env": source.get("build_env"),
         "board": lock.get("board"),
+        "layouts": lock.get("layouts"),
         "toolchain": lock.get("toolchain"),
         "host_packages": lock.get("host_packages"),
         "partition_table": contract.get("partitions"),
@@ -694,6 +954,16 @@ def command_check(args):
     return 0
 
 
+def command_verify_layout_source(args):
+    lock = load_lock(args.lock)
+    errors = validate_lock(lock)
+    if errors:
+        return report_lock_errors(errors)
+    result = verify_layout_source(lock, Path(args.dts).read_text(encoding="utf-8"))
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def command_preflight(args):
     lock = load_lock(args.lock)
     result = preflight(lock, args.source_dir)
@@ -772,6 +1042,14 @@ def main(argv=None):
     check = subparsers.add_parser("check", help="validate the source lock")
     check.add_argument("--lock", required=True)
     check.set_defaults(handler=command_check)
+
+    layout_source = subparsers.add_parser(
+        "verify-layout-source",
+        help="check the pinned device tree against the locked layout whitelist",
+    )
+    layout_source.add_argument("--lock", required=True)
+    layout_source.add_argument("--dts", required=True)
+    layout_source.set_defaults(handler=command_verify_layout_source)
 
     preflight = subparsers.add_parser(
         "preflight", help="run every check that has to pass before the build"

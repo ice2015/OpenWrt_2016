@@ -12,7 +12,11 @@
     "version": "SP1",
     "version_selection": {
       "selected": "SP1",
-      "candidates": ["2025", "SP1", "SP2"],
+      "candidates": [
+        "2025",
+        "SP1",
+        "SP2"
+      ],
       "atf_tree": "atf-20240117-bacca82a8",
       "uboot_tree": "uboot-mtk-20250711",
       "evidence": "The pinned fork documents SP1 as the pairing for a 5.4 kernel system, which is the kernel of the firmware this boot loader is built for.",
@@ -124,6 +128,111 @@
   "features": {
     "status": "UNRESOLVED",
     "note": "Task 3 of the U-Boot plan records the enabled and disabled feature symbols together with the effective configuration check."
+  },
+  "layouts": {
+    "default_label": "immortalwrt-112m",
+    "source": "uboot-mtk-20250711/arch/arm/dts/mt7981-h3c_magic-nx30-pro.dts",
+    "source_note": "The whitelist is the /mtd-layout node of the pinned device tree. verify-layout-source reads that file and refuses a source that carries another layout set, so no layout is ever synthesised here.",
+    "address_space": "nmbm-logical",
+    "address_space_note": "Every table is addressed through the NMBM logical device nmbm0. A table addressed on the physical spi-nand0 device is rejected: the offsets are not physical NAND offsets.",
+    "mtdids": "nmbm0=nmbm0",
+    "entries": {
+      "immortalwrt-112m": {
+        "label": "immortalwrt-112m",
+        "dts_node": "layout@1",
+        "role": "target-system-layout",
+        "mtdids": "nmbm0=nmbm0",
+        "mtdparts": "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)",
+        "address_space": "nmbm-logical",
+        "end_offset": 123207680,
+        "partitions": [
+          {
+            "label": "bl2",
+            "offset": 0,
+            "size": 1048576
+          },
+          {
+            "label": "u-boot-env",
+            "offset": 1048576,
+            "size": 524288
+          },
+          {
+            "label": "Factory",
+            "offset": 1572864,
+            "size": 2097152
+          },
+          {
+            "label": "fip",
+            "offset": 3670016,
+            "size": 2097152
+          },
+          {
+            "label": "ubi",
+            "offset": 5767168,
+            "size": 117440512
+          }
+        ],
+        "note": "The layout the paired 112M firmware is built for. It is the default of this build."
+      },
+      "default": {
+        "label": "default",
+        "dts_node": "layout@0",
+        "role": "stock-layout",
+        "mtdids": "nmbm0=nmbm0",
+        "mtdparts": "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)",
+        "address_space": "nmbm-logical",
+        "end_offset": 125829120,
+        "partitions": [
+          {
+            "label": "bl2",
+            "offset": 0,
+            "size": 1048576
+          },
+          {
+            "label": "u-boot-env",
+            "offset": 1048576,
+            "size": 524288
+          },
+          {
+            "label": "Factory",
+            "offset": 1572864,
+            "size": 2097152
+          },
+          {
+            "label": "fip",
+            "offset": 3670016,
+            "size": 2097152
+          },
+          {
+            "label": "ubi",
+            "offset": 5767168,
+            "size": 67108864
+          },
+          {
+            "label": "pdt_data",
+            "offset": 72876032,
+            "size": 6291456
+          },
+          {
+            "label": "pdt_data_1",
+            "offset": 79167488,
+            "size": 6291456
+          },
+          {
+            "label": "exp",
+            "offset": 85458944,
+            "size": 1048576
+          },
+          {
+            "label": "plugin",
+            "offset": 86507520,
+            "size": 39321600
+          }
+        ],
+        "note": "The stock layout of the device. It stays selectable so that a stock firmware can still be booted, and it is the only layout whose OEM areas can be backed up before a switch."
+      }
+    },
+    "switch_warning": "Switching from the stock layout to immortalwrt-112m reclaims pdt_data, pdt_data_1, exp and plugin into the UBI area. A read-only backup of the whole flash has to exist before the switch; the switch is not reversible from the 112M layout alone."
   },
   "partition_contract": {
     "source_repository": "Yuzhii0718/bl-mt798x-dhcpd",

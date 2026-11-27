@@ -136,7 +136,70 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertEqual(SOURCE_COMMIT, contract["source_commit"])
         self.assertIn("mt7981-h3c_magic-nx30-pro.dts", contract["source_file"])
 
-    def test_lock_records_the_stock_layout_mismatch_and_the_minimal_patch(self):
+    def test_lock_whitelists_exactly_the_two_upstream_layouts(self):
+        lock = self.load_lock()
+        layouts = lock["layouts"]
+        self.assertEqual("immortalwrt-112m", layouts["default_label"])
+        self.assertEqual({"immortalwrt-112m", "default"}, set(layouts["entries"]))
+        self.assertEqual("nmbm0=nmbm0", layouts["mtdids"])
+        self.assertEqual("nmbm-logical", layouts["address_space"])
+        self.assertIn("mt7981-h3c_magic-nx30-pro.dts", layouts["source"])
+        for label, entry in layouts["entries"].items():
+            self.assertEqual(label, entry["label"])
+            self.assertTrue(entry["partitions"])
+        self.assertEqual(
+            "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)",
+            layouts["entries"]["immortalwrt-112m"]["mtdparts"],
+        )
+        self.assertEqual(
+            "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),"
+            "65536k(ubi),6144k(pdt_data),6144k(pdt_data_1),1024k(exp),38400k(plugin)",
+            layouts["entries"]["default"]["mtdparts"],
+        )
+
+    def test_stock_layout_keeps_the_oem_partitions_behind_ubi(self):
+        lock = self.load_lock()
+        stock = lock["layouts"]["entries"]["default"]["partitions"]
+        labels = [entry["label"] for entry in stock]
+        for partition in ("pdt_data", "pdt_data_1", "exp", "plugin"):
+            self.assertIn(partition, labels)
+        self.assertEqual(0x4000000, dict((e["label"], e["size"]) for e in stock)["ubi"])
+
+    def test_both_layouts_share_the_boot_loader_partition_offsets(self):
+        lock = self.load_lock()
+        entries = lock["layouts"]["entries"]
+        shared = {}
+        for label, entry in entries.items():
+            shared[label] = [
+                (partition["label"].lower(), partition["offset"], partition["size"])
+                for partition in entry["partitions"][:4]
+            ]
+        self.assertEqual(shared["default"], shared["immortalwrt-112m"])
+        self.assertEqual(
+            [("bl2", 0, 0x100000), ("u-boot-env", 0x100000, 0x80000),
+             ("factory", 0x180000, 0x200000), ("fip", 0x380000, 0x200000)],
+            shared["immortalwrt-112m"],
+        )
+
+    def test_partition_contract_is_the_locked_112m_layout(self):
+        lock = self.load_lock()
+        contract = [
+            (entry["label"].lower(), entry["offset"], entry["size"])
+            for entry in lock["partition_contract"]["partitions"]
+        ]
+        layout = [
+            (entry["label"].lower(), entry["offset"], entry["size"])
+            for entry in lock["layouts"]["entries"]["immortalwrt-112m"]["partitions"]
+        ]
+        self.assertEqual(layout, contract)
+        # The contract keeps the capitalised labels of the system side; the boot
+        # loader tables spell bl2, Factory and fip as the mtdparts names them.
+        self.assertEqual(
+            [(label.lower(), offset, size) for label, offset, size in EXPECTED_PARTITIONS],
+            contract,
+        )
+
+    def test_lock_records_the_stock_layout_mismatch(self):
         lock = self.load_lock()
         compatibility = lock["compatibility"]
         self.assertFalse(compatibility["layout_matches_upstream_stock"])
@@ -153,11 +216,10 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
             self.assertIn(removed, mismatched)
             self.assertEqual(0, mismatched[removed]["required_size_bytes"])
 
+        # Both required tables already exist in the pinned device tree, so no
+        # partition table has to be patched into the source.
         patch = compatibility["minimal_device_patch"]
-        self.assertEqual(
-            "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),114688k(ubi)",
-            patch["value"],
-        )
+        self.assertEqual("none-required-for-the-partition-tables", patch["action"])
         self.assertIn("mt7981-h3c_magic-nx30-pro.dts", patch["target"])
 
     def test_lock_keeps_nmbm_geometry_and_web_failsafe_facts(self):
