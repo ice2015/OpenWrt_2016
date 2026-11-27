@@ -3,10 +3,17 @@
 状态：**设计文档，不授权刷写**。本文只规划备份、安装、回退与真机验证步骤。
 本文不提供未经核实的写入命令；所有写入动作都需要用户单独、明确的授权。
 
-- 配套事实来源：[`nx30pro-uboot-compatibility.md`](nx30pro-uboot-compatibility.md) 与
+- 启动链来源：`https://github.com/Yuzhii0718/bl-mt798x-dhcpd`，锁定 commit
+  `e4cf4dc72d451dc7a86c9508390ad5a2e50743c4`，版本 `SP1`
+  （`uboot-mtk-20250711` + `atf-20240117-bacca82a8`）。
+- 配套事实来源：[`nx30pro-uboot-compatibility.md`](nx30pro-uboot-compatibility.md)、
+  [`UBOOT-BUILD.md`](UBOOT-BUILD.md)、[`UBOOT-TEST-REPORT.md`](UBOOT-TEST-REPORT.md) 与
   [`../uboot/uboot-source-lock.json`](../uboot/uboot-source-lock.json)。
-- 候选产物：`mt7981_h3c_magic-nx30-pro-bl2.bin`（BL2 预加载镜像）与
-  `mt7981_h3c_magic-nx30-pro-fip-fixed-parts.bin`（含 BL31 与 BL33/U-Boot 的 ATF FIP 包）。
+- 候选产物：BL2 预加载镜像与含 BL31、BL33/U-Boot 的 ATF FIP 包。上游把镜像的 md5
+  写进文件名，因此实际名字与 SHA-256 只能取自构建产物的 `SHA256SUMS` 与
+  `build-report.json`；两者都不是系统镜像。
+- 布局：只有 `immortalwrt-112m`（**默认**）与 `default`（原厂）两套；切换前必须完成
+  第 2 节的只读备份。
 - 状态标记：候选、**未真机验证**。写入前不得把它当作可刷写发布包。
 - 地址约定：本文所有分区地址都是 **NMBM 逻辑地址**，不是物理 NAND 地址。
 
@@ -101,9 +108,14 @@ sha256sum <备份文件列表> > SHA256SUMS
 
 | 入口 | 证据 | 写入对象 |
 |---|---|---|
-| 网页恢复入口 `http://192.168.1.1/` 上传 `fip` | `failsafe/failsafe.c` 的 `upload_handler` 接受 `fip`；`board/mediatek/common/bootmenu_mtd.c` 的 `write_fip` 写入 `fip` 分区并回读校验 | `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB） |
-| 串口 U-Boot 命令 `mtkupgrade fip` | 启动菜单项 "Upgrade ATF FIP" → `cmd_mtkupgrade.c` | `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB） |
-| 网页恢复入口上传 `bl2` | `write_bl2` 写入 `bl2` 分区；上传前会做 BL2 校验 | `bl2` 分区（NMBM 逻辑 `0x000000`，1 MiB） |
+| 网页恢复入口 `http://192.168.1.1/` 上传 `fip` | `failsafe/modules/upgrade.c` 的 `upload_handler` 接受 `fip`；分区名来自 `board/mediatek/common/bootmenu_common.h` 的 `PART_FIP_NAME` | `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB） |
+| 串口 U-Boot 命令 `mtkupgrade fip` | 启动菜单项 → `board/mediatek/common/cmd_mtkupgrade.c` | `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB） |
+| 网页恢复入口上传 `bl2` | 同上，`PART_BL2_NAME`；上传前会做 BL2 校验 | `bl2` 分区（NMBM 逻辑 `0x000000`，1 MiB） |
+
+本候选**不提供**以下入口，因此不得把它们写进操作说明：Factory 写入、Flash Editor、
+通用环境变量编辑、Web 终端、Telnet、UBI 卷管理、单镜像（ROM dump）写入，以及任何
+CPU/DDR 超频设置。网页布局选择器只列出 `immortalwrt-112m` 与 `default` 两个标签，
+没有自由 `mtdparts` 输入；离开原厂布局前会要求确认。
 
 限制（来自源码，必须写进操作说明）：
 
@@ -112,7 +124,8 @@ sha256sum <备份文件列表> > SHA256SUMS
   **不能**证明上传的镜像本身正确，镜像的正确性只能靠构建报告与内容识别来保证。
 - BL2 上传**会**做 BL2 校验，且要求启动介质匹配 `SPINAND!` 头（本板为 SPI-NAND）。
 - 网页恢复入口的地址是 `192.168.1.1`（U-Boot 侧固定 `CONFIG_IPADDR`），端口 80；
-  复位键长按进入的机制在源码中确定（`glbtn` 计数 4 秒），实际按键时序保持 UNRESOLVED。
+  复位键长按进入的机制由 `CONFIG_CMD_GL_BTN` 与设备树的 `button-reset` 提供，
+  实际按键时序保持 UNRESOLVED。
 - 这两个入口只能覆盖启动链与系统镜像，**不能替代**独立恢复路径，也不能代替原厂备份。
 
 ### 3.2 从原厂系统首次安装候选启动链
@@ -138,8 +151,9 @@ BL2 损坏时设备进不了 U-Boot，这两条路径同时失效。可接受的
 
 | 项 | 内容 |
 |---|---|
-| 目标文件 | `mt7981_h3c_magic-nx30-pro-fip-fixed-parts.bin`（FIP）、`mt7981_h3c_magic-nx30-pro-bl2.bin`（BL2） |
+| 目标文件 | 构建产出的 FIP 与 BL2；实际文件名含镜像 md5，必须取自 `SHA256SUMS` |
 | 文件 SHA-256 | 取自构建产物的 `SHA256SUMS` 与 `build-report.json` |
+| 当前布局 | 应为 `immortalwrt-112m`（默认）；若设备仍处于 `default`，先完成整片备份再切换 |
 | 写入对象 | `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB）/ `bl2` 分区（NMBM 逻辑 `0x000000`，1 MiB） |
 | 写入方式 | 网页恢复入口上传，或串口 `mtkupgrade fip`（仅适用于第 3.1 节的场景） |
 | 独立恢复路径 | 必须已证明可用；否则不写入 |
@@ -165,6 +179,9 @@ BL2 损坏时设备进不了 U-Boot，这两条路径同时失效。可接受的
 | 步骤 | 观察点 | 通过标准 |
 |---|---|---|
 | 冷启动 | 串口启动日志 | U-Boot 起来后识别出 `bl2`、`u-boot-env`、`Factory`、`fip`、`ubi`，且 `ubi` 为 112 MiB |
+| 布局白名单 | 网页选择器与 `showlayout` | 只列出 `immortalwrt-112m` 与 `default`，默认是 `immortalwrt-112m`，没有 `custom` 项 |
+| 布局切换 | 从 `default` 切到 `immortalwrt-112m` | 切换前出现数据损失确认，且整片备份已完成 |
+| 受限功能 | 网页界面 | 无 Factory 写入、无 Flash Editor、无环境管理、无 Web 终端、无 Telnet；只读备份可用 |
 | NMBM | 启动日志中的 NMBM 段 | 坏块映射正常，无重复块告警；实测逻辑容量不小于 `0x7580000` |
 | MAC | 各接口 MAC | 与原厂备份一致；系统侧的 `pdt_data_1` 依赖已解决 |
 | 无线校准 | 射频校准读取 | 与原厂备份一致，无校准缺失告警 |

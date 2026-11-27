@@ -42,20 +42,40 @@ manifest `manifests/devices/nx30pro.json` 把设备登记到自带源码的分�
 透明代理用 PassWall + xray（该底座没有 sing-box）；WireGuard 服务端在该底座不可用；
 Tailscale 只有命令行界面。详情见兼容性文档。
 
-## U-Boot 启动链（候选，未真机验证）
+## U-Boot 启动链（源码已锁定，未构建、未真机验证）
+
+来源：`https://github.com/Yuzhii0718/bl-mt798x-dhcpd`，锁定 commit
+`e4cf4dc72d451dc7a86c9508390ad5a2e50743c4`，版本 `SP1`
+（U-Boot 树 `uboot-mtk-20250711` + ATF 树 `atf-20240117-bacca82a8`，依据上游对
+5.4 内核的配对说明）。旧来源 `hanwckf/bl-mt798x` 只作为被拒绝的证据保留。
 
 | 文件 | 职责 |
 |---|---|
-| `uboot/uboot-source-lock.json` | 锁定的上游 commit、板级配置、分区合同、NMBM 几何、网页恢复入口与未决项 |
+| `uboot/uboot-source-lock.json` | 锁定的上游 commit、版本选择、板级配置、两套布局白名单、功能集、设备补丁、产物名字模式与未决项 |
+| `uboot/patches/0001-nx30pro-restrict-recovery-ui.patch` | 使 `immortalwrt-112m` 成为默认布局，并关闭危险的网页恢复功能 |
 | `build/build-uboot.sh` | 从锁定 commit 构建候选 BL2/FIP，输出 build-report 与 SHA256SUMS；只构建，不刷写 |
-| `build/uboot_lock.py` | 源码锁校验、镜像内容识别（ATF FIP 表头、MediaTek BL2 启动头）与构建报告 |
-| `docs/nx30pro-uboot-compatibility.md` | 已核实事实、分区合同逐项对照、最小设备补丁与 UNRESOLVED 清单 |
+| `build/uboot_lock.py` | 源码锁校验、布局白名单校验、补丁合同校验、最终配置校验、镜像内容识别与发布 |
+| `docs/UBOOT-BUILD.md` | 可复现构建输入、构建前后门禁、产物角色与授权边界 |
+| `docs/UBOOT-TEST-REPORT.md` | 实际发生的验证记录；当前只有静态验证 |
+| `docs/nx30pro-uboot-compatibility.md` | 已核实事实、两套分区表逐项对照、受限功能集与 UNRESOLVED 清单 |
 | `docs/nx30pro-uboot-install-and-recovery.md` | 备份、安装、回退与真机验证设计（未授权刷写） |
 
-构建入口在 `.github/workflows/build-nx30pro-uboot.yml`（手动触发，`contents: read`，不使用 Secrets）。
+构建入口在 `.github/workflows/build-nx30pro-uboot.yml`（只有 `workflow_dispatch`
+手动触发，`contents: read`，不使用 Secrets，未授权前不得运行）。
 
-关键结论：上游 U-Boot 的固定分区表是原厂布局（UBI 64 MiB），与所选 112M 系统布局不一致；
-本目录用一条设备级 `CONFIG_MTDPARTS_DEFAULT` 补丁对齐，细节与证据见兼容性文档。
+关键结论：
+
+- 锁定设备树已经携带两套布局：`immortalwrt-112m`（**默认**，UBI 112 MiB）与
+  `default`（原厂，UBI 64 MiB，保留 `pdt_data`、`pdt_data_1`、`exp`、`plugin`）。
+  分区表不需要补丁，`verify-layout-source` 直接对照源码校验，第三个标签会被拒绝。
+- 启用的恢复功能：DHCP 服务器、Web failsafe、系统固件恢复、BL2 与 FIP 升级、TFTP、
+  UART、整机与分区的只读备份。
+- 关闭的功能：`CONFIG_WEBUI_FAILSAFE_FACTORY`、`CONFIG_WEBUI_FAILSAFE_FLASH`、
+  `CONFIG_WEBUI_FAILSAFE_ENV`、`CONFIG_WEBUI_FAILSAFE_CONSOLE`、
+  `CONFIG_WEBUI_FAILSAFE_UBI`、`CONFIG_WEBUI_FAILSAFE_SIMG`、`CONFIG_MTK_TELNETD`，
+  以及任何 CPU/DDR 超频符号。网页选择器不提供自由 `mtdparts` 输入。
+- 产物是 BL2 与 FIP，文件名含镜像 md5；两者都不是系统镜像。所有分区地址都是
+  NMBM 逻辑地址，不是物理 NAND 地址。切换到 112M 布局前必须先完成只读备份。
 
 待核实：厂商、精确型号及硬件修订、闪存容量与启动方式、本机 WAN MAC、软件包策略及验收硬件。
 未知项保持 UNRESOLVED；不得复制其他设备的配置作为已验证事实。

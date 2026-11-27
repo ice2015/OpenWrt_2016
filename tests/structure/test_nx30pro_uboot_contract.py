@@ -332,7 +332,7 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertIn("候选", text)
         self.assertNotIn("真机验证通过", text)
         self.assertIn("h3c_magic-nx30-pro", text)
-        self.assertIn("114688k(ubi)", text)
+        self.assertIn("112M(ubi)", text)
 
 
     def test_install_and_recovery_document_designs_without_authorizing_a_flash(self):
@@ -413,13 +413,16 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
         self.assertIn("122880", compatibility)
         self.assertNotIn("实测容量", compatibility)
 
-    def test_documents_record_the_reset_button_entry_and_the_compiled_dram_setting(self):
+    def test_documents_record_the_button_entry_and_keep_the_dram_type_unresolved(self):
         compatibility = (
             ROOT / "devices" / "nx30pro" / "docs" / "nx30pro-uboot-compatibility.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("glbtn", compatibility)
-        self.assertIn("DDR3", compatibility)
-        self.assertIn("编译期", compatibility)
+        # The button entry is verified in the pinned defconfigs; the DRAM type of
+        # this ATF pairing is not, so it must stay unresolved instead of being
+        # carried over from the rejected candidate.
+        self.assertIn("GL_BTN", compatibility)
+        self.assertIn("UNRESOLVED", compatibility)
+        self.assertNotIn("EMI: Using DDR3/DDR4", compatibility)
 
     def test_toolchain_digest_is_part_of_the_accepted_evidence(self):
         lock = self.load_lock()
@@ -428,6 +431,120 @@ class Nx30ProUbootSourceLockTests(unittest.TestCase):
             ROOT / "devices" / "nx30pro" / "build" / "uboot_lock.py"
         ).read_text(encoding="utf-8")
         self.assertIn("compiler_sha256", helper)
+
+
+class Nx30ProUbootDocumentationTests(unittest.TestCase):
+    """The operator documents must not outrun the evidence.
+
+    A candidate build is not a device validation, a design is not an executed
+    step, and no document may hand out a destructive flash command.
+    """
+
+    DOCS = {
+        "compatibility": "devices/nx30pro/docs/nx30pro-uboot-compatibility.md",
+        "recovery": "devices/nx30pro/docs/nx30pro-uboot-install-and-recovery.md",
+        "build": "devices/nx30pro/docs/UBOOT-BUILD.md",
+        "report": "devices/nx30pro/docs/UBOOT-TEST-REPORT.md",
+        "readme": "devices/nx30pro/README.md",
+    }
+
+    FORBIDDEN_COMMANDS = (
+        "mtd write",
+        "nandwrite",
+        "flash_erase",
+        "mtd_debug",
+        "dd of=",
+        "/dev/mtd0",
+        "ubiformat",
+    )
+
+    def text(self, key):
+        path = ROOT / self.DOCS[key]
+        self.assertTrue(path.is_file(), "missing NX30 Pro U-Boot document: %s" % path)
+        return path.read_text(encoding="utf-8")
+
+    def test_every_document_names_the_pinned_source(self):
+        for key in self.DOCS:
+            text = self.text(key)
+            self.assertIn("Yuzhii0718/bl-mt798x-dhcpd", text, key)
+            self.assertIn(SOURCE_COMMIT, text, key)
+
+    def test_documents_state_the_two_layouts_and_which_one_is_the_default(self):
+        for key in ("compatibility", "recovery", "build", "report", "readme"):
+            text = self.text(key)
+            self.assertIn("immortalwrt-112m", text, key)
+            self.assertIn("default", text, key)
+            self.assertIn("默认", text, key)
+        for key in ("compatibility", "build"):
+            self.assertIn(
+                "nmbm0:1024k(bl2),512k(u-boot-env),2048k(Factory),2048k(fip),112M(ubi)",
+                self.text(key),
+                key,
+            )
+            self.assertIn("65536k(ubi)", self.text(key), key)
+
+    def test_documents_list_the_restricted_recovery_feature_set(self):
+        for key in ("compatibility", "build", "readme"):
+            text = self.text(key)
+            for enabled in ("DHCP", "Web failsafe", "只读备份", "TFTP", "UART", "BL2", "FIP"):
+                self.assertIn(enabled, text, "%s: %s" % (key, enabled))
+            for disabled in (
+                "CONFIG_WEBUI_FAILSAFE_FACTORY",
+                "CONFIG_WEBUI_FAILSAFE_FLASH",
+                "CONFIG_WEBUI_FAILSAFE_ENV",
+                "CONFIG_WEBUI_FAILSAFE_CONSOLE",
+                "CONFIG_WEBUI_FAILSAFE_UBI",
+                "CONFIG_MTK_TELNETD",
+                "超频",
+            ):
+                self.assertIn(disabled, text, "%s: %s" % (key, disabled))
+
+    def test_documents_put_the_backup_before_the_layout_switch(self):
+        for key in ("compatibility", "recovery", "build", "report"):
+            text = self.text(key)
+            self.assertIn("备份", text, key)
+            self.assertIn("NMBM 逻辑", text, key)
+            for partition in ("pdt_data_1", "exp", "plugin"):
+                self.assertIn(partition, text, key)
+
+    def test_documents_separate_artifact_roles(self):
+        for key in ("compatibility", "build", "report"):
+            text = self.text(key)
+            self.assertIn("BL2", text, key)
+            self.assertIn("FIP", text, key)
+            self.assertIn("不是系统镜像", text, key)
+            self.assertIn("md5", text.lower(), key)
+
+    def test_no_document_claims_a_completed_device_validation(self):
+        for key in self.DOCS:
+            text = self.text(key)
+            for claim in ("真机验证通过", "已真机验证", "验证成功", "可以安全刷写"):
+                self.assertNotIn(claim, text, "%s claims %s" % (key, claim))
+            for command in self.FORBIDDEN_COMMANDS:
+                self.assertNotIn(command, text, "%s contains %s" % (key, command))
+
+    def test_the_test_report_records_only_what_actually_happened(self):
+        text = self.text("report")
+        self.assertIn("静态", text)
+        self.assertIn("未触发", text)
+        self.assertIn("未编译", text)
+        self.assertIn("UNRESOLVED", text)
+        self.assertIn("授权", text)
+        # No run id, hash or device result may be invented before it exists.
+        self.assertNotRegex(text, r"run[ _]?id[^\n]*[0-9]{8,}")
+        self.assertNotRegex(text, r"\b[0-9a-f]{64}\b")
+
+    def test_the_build_document_gives_the_reproducible_inputs_and_the_gate(self):
+        text = self.text("build")
+        self.assertIn("devices/nx30pro/build/build-uboot.sh", text)
+        self.assertIn("--check-only", text)
+        self.assertIn(".github/workflows/build-nx30pro-uboot.yml", text)
+        self.assertIn("workflow_dispatch", text)
+        self.assertIn("SP1", text)
+        self.assertIn("MULTI_LAYOUT", text)
+        self.assertIn("FIXED_MTDPARTS", text)
+        self.assertIn("npm", text)
+        self.assertIn("授权", text)
 
 
 if __name__ == "__main__":
