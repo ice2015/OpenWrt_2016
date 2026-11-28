@@ -276,9 +276,17 @@ class WorkflowContractTests(unittest.TestCase):
             "workflow_run:",
         ):
             self.assertNotIn(forbidden, block)
-        # A dispatch takes no input: the lock, not an operator, picks the
-        # source, the feeds and the packages.
-        self.assertNotIn("inputs:", block)
+        # The only dispatch input is the authorized defconfig probe. The lock,
+        # not an operator, still picks the source, the feeds and the packages,
+        # so no input may name any of them.
+        inputs = re.search(
+            r"(?m)^    inputs:\n((?:      .+\n|        .+\n)+)", block
+        )
+        self.assertIsNotNone(inputs, "the probe input is not declared")
+        declared = re.findall(r"(?m)^      ([a-z_]+):", inputs.group(1))
+        self.assertEqual(["probe_defconfig"], declared)
+        for forbidden_input in ("source", "revision", "feed", "package", "device"):
+            self.assertNotIn(forbidden_input, " ".join(declared))
 
     def test_nx30pro_firmware_workflow_pins_every_action_by_sha(self) -> None:
         workflow = self.workflow("build-nx30pro.yml")
@@ -435,7 +443,12 @@ class WorkflowContractTests(unittest.TestCase):
         # The rendered plan is kept and every locked fact of this job is read
         # back from it, so the gate cannot be reduced to a no-op.
         plan_file = "$RUNNER_TEMP/firmware-build-plan.json"
-        self.assertIn('--check-only | tee "%s"' % plan_file, workflow)
+        self.assertIn('--check-only $PROBE_FLAG | tee "%s"' % plan_file, workflow)
+        # The probe flag comes from the dispatch input as environment data, and
+        # it defaults to off, so an ordinary dispatch is a full candidate build.
+        self.assertIn('PROBE_DEFCONFIG: ${{ inputs.probe_defconfig }}', workflow)
+        self.assertIn('if [ "$PROBE_DEFCONFIG" = "true" ]', workflow)
+        self.assertIn("default: false", workflow)
         greps = re.findall(
             r'(?m)^\s*grep -q .+ "%s"$' % re.escape(plan_file), workflow
         )
@@ -615,6 +628,40 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('--include-tailscale "$INCLUDE_TAILSCALE"', workflow)
         self.assertIn('--include-singbox "$INCLUDE_SINGBOX"', workflow)
         self.assertIn('--include-cloudflared "$INCLUDE_CLOUDFLARED"', workflow)
+
+    def test_nx30pro_firmware_workflow_offers_a_default_off_defconfig_probe(self) -> None:
+        """The probe is opt-in: a normal dispatch must never run it."""
+        workflow = self.workflow("build-nx30pro.yml")
+        block = re.search(
+            r"\n      probe_defconfig:\n(?P<body>(?:        .+\n)+)", workflow
+        )
+
+        self.assertIsNotNone(block, "the firmware workflow offers no defconfig probe input")
+        self.assertIn("type: boolean", block.group("body"))
+        self.assertIn("default: false", block.group("body"))
+
+    def test_nx30pro_firmware_workflow_passes_the_probe_input_as_data(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        run_blocks = re.findall(r"run: \|\n((?:          .*\n)+)", workflow)
+
+        self.assertIn("PROBE_DEFCONFIG: ${{ inputs.probe_defconfig }}", workflow)
+        self.assertIn("--probe-defconfig", workflow)
+        self.assertNotIn("${{ inputs.", "\n".join(run_blocks))
+
+    def test_nx30pro_firmware_workflow_keeps_probe_evidence_and_candidate_apart(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+
+        # Probe evidence is kept even when the audit fails: that is its purpose.
+        self.assertRegex(
+            workflow,
+            r"(?s)- name: Upload defconfig probe evidence.*?if: always\(\)",
+        )
+        self.assertIn("firmware-artifact/probe/", workflow)
+        # The candidate upload stays success only, so a probe publishes no image.
+        self.assertRegex(
+            workflow,
+            r"(?s)- name: Upload firmware candidates.*?if: success\(\)",
+        )
 
 
 if __name__ == "__main__":

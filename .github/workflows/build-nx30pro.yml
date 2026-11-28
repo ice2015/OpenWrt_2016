@@ -13,6 +13,17 @@ name: NX30 Pro 112M firmware candidate
 
 on:
   workflow_dispatch:
+    inputs:
+      probe_defconfig:
+        description: >-
+          Run the authorized configuration probe only: stages 1-4 of
+          build.sh, publishing the final .config and the package audit as
+          evidence. No download of the full tree, no compilation, no image and
+          no candidate is produced. Use it to prove the hard gates of a lock
+          that is still build blocked before a full candidate build is
+          authorized.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,6 +40,8 @@ jobs:
       # The lock owns the source and the feeds. This pin exists so build.sh can
       # refuse to run when this workflow drifted from the lock.
       SOURCE_REVISION: 740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6
+      # Passed as data, never interpolated into a shell line.
+      PROBE_DEFCONFIG: ${{ inputs.probe_defconfig }}
       # One capped cache directory for the whole job. No configuration layer
       # of this device pins a cache path of its own, so the documented
       # mismatch between a baked-in path and the runner's real one cannot
@@ -122,9 +135,15 @@ jobs:
             tests.workflows.test_workflows -v
           # The lock gate renders the only description of what this job is
           # allowed to build, or it stops before any source or feed is fetched.
+          # A probe dispatch is the one case where a build blocked lock may
+          # pass this gate, because proving its hard gates is its purpose.
+          PROBE_FLAG=""
+          if [ "$PROBE_DEFCONFIG" = "true" ]; then
+            PROBE_FLAG="--probe-defconfig"
+          fi
           sh devices/nx30pro/build/build.sh \
             --lock devices/nx30pro/source-lock.json \
-            --check-only | tee "$RUNNER_TEMP/firmware-build-plan.json"
+            --check-only $PROBE_FLAG | tee "$RUNNER_TEMP/firmware-build-plan.json"
           grep -q 'https://github.com/hanwckf/immortalwrt-mt798x' "$RUNNER_TEMP/firmware-build-plan.json"
           grep -q 'h3c_nx30pro_112M' "$RUNNER_TEMP/firmware-build-plan.json"
           grep -q "$SOURCE_REVISION" "$RUNNER_TEMP/firmware-build-plan.json"
@@ -141,14 +160,32 @@ jobs:
           # package contract, downloads, compiles, inspects both image roles and
           # packages the evidence. A hard gate that the audit misses stops the
           # job before anything is compiled.
+          #
+          # A probe dispatch stops after that audit and publishes the evidence
+          # instead: it downloads nothing else, compiles nothing and produces
+          # no image, so it can never be mistaken for a candidate build.
+          PROBE_FLAG=""
+          if [ "$PROBE_DEFCONFIG" = "true" ]; then
+            PROBE_FLAG="--probe-defconfig"
+          fi
           sh devices/nx30pro/build/build.sh \
             --lock devices/nx30pro/source-lock.json \
             --source-dir "$RUNNER_TEMP/nx30pro-firmware/source" \
             --feed-dir "$RUNNER_TEMP/nx30pro-firmware/feeds" \
-            --artifact-dir "$GITHUB_WORKSPACE/firmware-artifact"
+            --artifact-dir "$GITHUB_WORKSPACE/firmware-artifact" $PROBE_FLAG
+
+      - name: Upload defconfig probe evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: nx30pro-firmware-defconfig-probe
+          path: |
+            firmware-artifact/probe/
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Upload firmware candidates and provenance
-        if: success()
+        if: success() && inputs.probe_defconfig == false
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nx30pro-firmware-candidate-112m

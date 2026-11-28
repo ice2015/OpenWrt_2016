@@ -1710,3 +1710,159 @@ class Nx30ProFirmwareArtifactTests(unittest.TestCase):
         with self.assertRaises(self.helper.ArtifactError) as caught:
             self.resolve(image_dir=Path(self.tmp.name) / "nowhere")
         self.assertIn("no image directory", str(caught.exception))
+
+
+class Nx30ProFirmwareDefconfigProbeTests(unittest.TestCase):
+    """The authorized `make defconfig` probe of a build-blocked lock.
+
+    The probe is the only path by which a lock whose hard gates are still
+    candidates may fetch a source tree. It stops after the configuration
+    audit: no download of the full tree, no compile, no image, no report, so
+    a probe can never be mistaken for a candidate build.
+    """
+
+    def prepare(self, tmp, drop_symbol=None, lock=None):
+        source, commit = stub_source(tmp)
+        base = real_lock() if lock is None else lock
+        feed_dir, revisions = stub_feeds(tmp, [f["id"] for f in base["feeds"]])
+        mapping = {base["source"]["revision"]: commit}
+        mapping.update(
+            {f["revision"]: revisions[f["id"]] for f in base["feeds"]}
+        )
+        lock = repoint(base, mapping)
+        config = final_config(proven_lock())
+        if drop_symbol:
+            self.assertIn(drop_symbol + "\n", config, drop_symbol)
+            config = config.replace(drop_symbol + "\n", "")
+        fixtures = Path(tmp) / "fixtures"
+        fixtures.mkdir()
+        (fixtures / "config").write_text(config, encoding="utf-8")
+        stub_bin = Path(tmp) / "stub-bin"
+        stub_bin.mkdir()
+        (stub_bin / "make").write_text(FAKE_MAKE, encoding="utf-8")
+        (stub_bin / "make").chmod(0o755)
+        env = dict(os.environ)
+        env.update(
+            {
+                "PATH": "%s:%s" % (stub_bin, env["PATH"]),
+                "FIXTURE_CONFIG": str(fixtures / "config"),
+                "FIXTURE_STAGE_LOG": str(fixtures / "stages.txt"),
+                "FIXTURE_FACTORY": str(source / "unused-factory.bin"),
+                "FIXTURE_SYSUPGRADE": str(source / "unused-sysupgrade.bin"),
+                "FIXTURE_IPK": str(source / "unused.ipk"),
+            }
+        )
+        return {
+            "source": source,
+            "feed_dir": feed_dir,
+            "lock": write_lock(tmp, lock),
+            "lock_data": lock,
+            "env": env,
+            "stages": fixtures / "stages.txt",
+            "artifacts": Path(tmp) / "artifact",
+        }
+
+    def run_probe(self, prepared, probe=True):
+        command = ["sh", str(BUILD_SCRIPT), "--lock", str(prepared["lock"])]
+        if probe:
+            command.append("--probe-defconfig")
+        command += [
+            "--source-dir", str(prepared["source"]),
+            "--feed-dir", str(prepared["feed_dir"]),
+            "--artifact-dir", str(prepared["artifacts"]),
+        ]
+        return subprocess.run(
+            command, capture_output=True, text=True, env=prepared["env"]
+        )
+
+    def stages(self, prepared):
+        if not prepared["stages"].exists():
+            return []
+        return prepared["stages"].read_text(encoding="utf-8").split()
+
+    def test_a_blocked_lock_refuses_a_normal_build_but_allows_a_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            blocked = self.run_probe(prepared, probe=False)
+            self.assertEqual(BUILD_NOT_READY, blocked.returncode)
+            self.assertEqual([], self.stages(prepared))
+            allowed = subprocess.run(
+                [sys.executable, str(HELPER), "check", "--lock", str(prepared["lock"]),
+                 "--allow-probe"],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(0, allowed.returncode, allowed.stderr)
+        plan = json.loads(allowed.stdout)
+        self.assertTrue(plan["probe"])
+        self.assertFalse(plan["build_readiness"]["ready"])
+        self.assertIn("source_revision", plan)
+
+    def test_the_probe_runs_defconfig_and_publishes_no_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_probe(prepared)
+            self.assertEqual(0, result.returncode, result.stderr)
+            # Only the configuration stage ran: no download, no compile.
+            self.assertEqual(["defconfig"], self.stages(prepared))
+            artifacts = prepared["artifacts"]
+            final = (artifacts / "probe" / "final.config").read_text(encoding="utf-8")
+            self.assertIn("CONFIG_PACKAGE_luci-app-passwall=y", final)
+            audit = json.loads(
+                (artifacts / "probe" / "config-audit.json").read_text(encoding="utf-8")
+            )
+            self.assertTrue(audit["hard_gates"])
+            for entry in audit["hard_gates"]:
+                self.assertEqual("enabled", entry["state"], entry)
+            self.assertFalse((artifacts / "images").exists())
+            self.assertFalse((artifacts / "build-report.json").exists())
+            self.assertFalse((artifacts / "source-lock.json").exists())
+            # The probe proves packages; it must not promote the lock itself.
+            still_blocked = subprocess.run(
+                [sys.executable, str(HELPER), "check", "--lock", str(prepared["lock"])],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(BUILD_NOT_READY, still_blocked.returncode)
+
+    def test_the_probe_names_a_hard_gate_that_defconfig_dropped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp, drop_symbol="CONFIG_PACKAGE_luci-app-passwall=y")
+            result = self.run_probe(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("luci-app-passwall", result.stderr)
+            artifacts = prepared["artifacts"]
+            # The evidence survives the failure: that is the point of a probe.
+            self.assertTrue((artifacts / "probe" / "final.config").is_file())
+            audit = json.loads(
+                (artifacts / "probe" / "config-audit.json").read_text(encoding="utf-8")
+            )
+            missing = [
+                entry["package"] for entry in audit["hard_gates"]
+                if entry["state"] != "enabled"
+            ]
+            self.assertIn("luci-app-passwall", missing)
+            self.assertFalse((artifacts / "images").exists())
+            self.assertFalse((artifacts / "build-report.json").exists())
+
+    def test_the_probe_refuses_a_structurally_invalid_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            broken = real_lock()
+            broken["source"]["repository"] = "https://github.com/hanwckf/mt798x"
+            prepared = self.prepare(tmp, lock=broken)
+            result = self.run_probe(prepared)
+            self.assertEqual(BUILD_NOT_READY, result.returncode)
+            self.assertEqual([], self.stages(prepared))
+            self.assertFalse((prepared["artifacts"] / "probe").exists())
+
+    def test_a_hand_edited_ready_flag_is_refused_even_by_the_probe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = real_lock()
+            lock["build_readiness"]["ready"] = True
+            lock["build_readiness"]["blocking"] = []
+            prepared = self.prepare(tmp, lock=lock)
+            result = subprocess.run(
+                [sys.executable, str(HELPER), "check", "--lock", str(prepared["lock"]),
+                 "--allow-probe"],
+                capture_output=True, text=True,
+            )
+        self.assertEqual(BUILD_NOT_READY, result.returncode)
+        self.assertIn("unproven", result.stderr)

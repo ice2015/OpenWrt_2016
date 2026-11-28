@@ -22,9 +22,10 @@ DEVICE_CONFIG="$DEVICE_ROOT/config.config"
 PATCH_DIR="$DEVICE_ROOT/patches"
 OVERLAY_DIR="$DEVICE_ROOT/files"
 LOG_DIR=
+PROBE=
 
 usage() {
-	printf 'Usage: %s --source-dir DIR [--lock FILE] [--config FILE] [--patch-dir DIR] [--overlay-dir DIR] [--log-dir DIR]\n' "$0"
+	printf 'Usage: %s --source-dir DIR [--lock FILE] [--config FILE] [--patch-dir DIR] [--overlay-dir DIR] [--log-dir DIR] [--probe]\n' "$0"
 }
 
 fail() {
@@ -64,6 +65,10 @@ while [ "$#" -gt 0 ]; do
 			LOG_DIR=$2
 			shift 2
 			;;
+		--probe)
+			PROBE=1
+			shift
+			;;
 		--help)
 			usage
 			exit 0
@@ -80,6 +85,15 @@ done
 [ -f "$LOCK" ] || fail "source lock not found: $LOCK"
 [ -f "$DEVICE_CONFIG" ] || fail "device configuration not found: $DEVICE_CONFIG"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+
+# An authorized defconfig probe audits the final .config and reports every
+# missing hard gate instead of stopping at the first one.
+PROBE_FLAG=
+PROBE_CHECK_FLAG=
+if [ "$PROBE" = "1" ]; then
+	PROBE_FLAG=--probe
+	PROBE_CHECK_FLAG=--allow-probe
+fi
 
 SOURCE_DIR=$(CDPATH= cd -- "$SOURCE_DIR" && pwd)
 LOCK=$(CDPATH= cd -- "$(dirname -- "$LOCK")" && pwd)/$(basename -- "$LOCK")
@@ -100,7 +114,7 @@ evidence() {
 	"$@"
 }
 
-python3 "$HELPER" check --lock "$LOCK" >/dev/null || fail "the source lock is not build ready"
+python3 "$HELPER" check --lock "$LOCK" $PROBE_CHECK_FLAG >/dev/null || fail "the source lock is not build ready"
 
 EXPECTED_REVISION=$(python3 - "$LOCK" <<'PY'
 import json
@@ -216,8 +230,18 @@ cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 	make defconfig
 )
 
-evidence final-config.json python3 "$HELPER" verify-config --lock "$LOCK" --config "$SOURCE_DIR/.config" ||
-	fail "the built configuration does not match the source lock"
+evidence final-config.json python3 "$HELPER" verify-config --lock "$LOCK" --config "$SOURCE_DIR/.config" $PROBE_FLAG ||
+	{
+		_status=$?
+		if [ "$PROBE" = "1" ] && [ "$_status" -eq 4 ]; then
+			# A probe reports which hard gates `make defconfig` dropped. The
+			# audit is already in the log directory, so the caller can publish
+			# it; the verdict travels in this distinct status.
+			printf 'Error: the defconfig probe found hard gates missing from the final .config\n' >&2
+			exit 4
+		fi
+		fail "the built configuration does not match the source lock"
+	}
 
 
 # The device overlay belongs into the image, so it is scanned for secrets and

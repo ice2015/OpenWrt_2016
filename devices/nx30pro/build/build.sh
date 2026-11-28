@@ -17,6 +17,10 @@
 # Packaging is the last stage and re-reads the evidence, so a build that only
 # configured successfully is never published as a candidate. This script never
 # flashes anything and never writes to a flash device.
+#
+# --probe-defconfig stops after stage 4 and publishes probe/final.config plus
+# probe/config-audit.json instead of any image: it is the authorized
+# `make defconfig` probe that proves the hard gates of a build-blocked lock.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -30,16 +34,20 @@ FEED_DIR=
 ARTIFACT_DIR=
 JOBS=
 CHECK_ONLY=
+PROBE=
 
 usage() {
 	cat <<EOF
-Usage: $0 --lock FILE --source-dir DIR --feed-dir DIR --artifact-dir DIR [--check-only] [--jobs N] [--repo-root DIR]
+Usage: $0 --lock FILE --source-dir DIR --feed-dir DIR --artifact-dir DIR [--check-only] [--probe-defconfig] [--jobs N] [--repo-root DIR]
 
   --lock FILE         device source lock to build from
   --source-dir DIR    upstream checkout at the locked revision
   --feed-dir DIR      directory that holds the pinned feed checkouts
   --artifact-dir DIR  directory that receives images, evidence, logs and report
   --check-only        validate the lock and print the resolved build plan
+  --probe-defconfig   run the authorized \`make defconfig\` probe: stages 1-4 only,
+                      publish probe/final.config and probe/config-audit.json,
+                      download nothing else, compile nothing, publish no image
   --jobs N            parallelism of the download and the compile stage
   --repo-root DIR     repository root the recorded device patches live in
 EOF
@@ -86,6 +94,10 @@ while [ "$#" -gt 0 ]; do
 			CHECK_ONLY=1
 			shift
 			;;
+		--probe-defconfig)
+			PROBE=1
+			shift
+			;;
 		--help)
 			usage
 			exit 0
@@ -103,11 +115,20 @@ command -v git >/dev/null 2>&1 || fail "git is required"
 
 LOCK=$(CDPATH= cd -- "$(dirname -- "$LOCK")" && pwd)/$(basename -- "$LOCK")
 
+# The probe flags are resolved before any gate so that `--check-only
+# --probe-defconfig` can render the plan of a lock that is still build blocked.
+PROBE_LOCK_FLAG=
+PROBE_CONFIGURE_FLAG=
+if [ "$PROBE" = "1" ]; then
+	PROBE_LOCK_FLAG=--allow-probe
+	PROBE_CONFIGURE_FLAG=--probe
+fi
+
 # --check-only resolves the lock and nothing else: no directory is created, no
 # source or feed is downloaded and no build is started. A lock that is not
 # build ready prints no plan and stops with the build not ready status.
 if [ "$CHECK_ONLY" = "1" ]; then
-	python3 "$HELPER" check --lock "$LOCK" || exit $?
+	python3 "$HELPER" check --lock "$LOCK" $PROBE_LOCK_FLAG || exit $?
 	exit 0
 fi
 
@@ -115,13 +136,24 @@ fi
 [ -n "$FEED_DIR" ] || fail "--feed-dir is required"
 [ -n "$ARTIFACT_DIR" ] || fail "--artifact-dir is required"
 
-mkdir -p "$ARTIFACT_DIR/logs" "$ARTIFACT_DIR/images"
+# A probe publishes evidence, never an image directory: its whole purpose is
+# to prove the hard gates of a lock that is still build blocked.
+mkdir -p "$ARTIFACT_DIR/logs"
 LOGS="$ARTIFACT_DIR/logs"
 
 # Stage 1: the lock gate. Nothing is downloaded before it rendered a plan.
+# A probe accepts a lock whose hard gates are still candidates; every other
+# structural requirement still applies, and a probe never promotes a package.
 PLAN_FILE="$LOGS/build-plan.json"
-python3 "$HELPER" check --lock "$LOCK" > "$PLAN_FILE" ||
-	fail "the source lock is not build ready"
+LOCK_STATUS=0
+python3 "$HELPER" check --lock "$LOCK" $PROBE_LOCK_FLAG > "$PLAN_FILE" ||
+	LOCK_STATUS=$?
+if [ "$LOCK_STATUS" -ne 0 ]; then
+	printf 'Error: the source lock is not build ready\n' >&2
+	# The status of the lock gate travels to the caller, so a workflow can tell
+	# a build blocked lock from any other failure.
+	exit "$LOCK_STATUS"
+fi
 
 plan_value() {
 	python3 - "$PLAN_FILE" "$1" <<'PY'
@@ -248,8 +280,17 @@ PY
 # device patch that does not apply, all before anything is downloaded.
 python3 "$HELPER" preflight --lock "$LOCK" --source-dir "$SOURCE_DIR" \
 	--feed-dir "$FEED_DIR" --repo-root "$REPO_ROOT" --out "$LOGS/preflight.json" \
-	> "$LOGS/preflight.stdout" ||
+	$PROBE_LOCK_FLAG > "$LOGS/preflight.stdout" ||
 	fail "the pre-build verification failed, nothing was downloaded or compiled"
+
+# The output directory of a build is created only after the lock gate passed, so
+# a rejected lock leaves no directory that could be mistaken for a result. A
+# probe publishes evidence and never an image directory.
+if [ "$PROBE" = "1" ]; then
+	mkdir -p "$ARTIFACT_DIR/probe"
+else
+	mkdir -p "$ARTIFACT_DIR/images"
+fi
 
 printf 'Building %s for %s from %s\n' \
 	"$(plan_value target.target)/$(plan_value target.subtarget)" \
@@ -258,12 +299,37 @@ printf 'Building %s for %s from %s\n' \
 # Stage 4: patches, source verifiers, layer merge, `make defconfig`, the audit
 # of the FINAL configuration and the overlay secret scan. Nothing compiles here.
 CONFIGURE_LOG="$LOGS/configure.log"
-if ! sh "$SCRIPT_DIR/configure.sh" --source-dir "$SOURCE_DIR" --lock "$LOCK" \
-	--patch-dir "$PATCH_DIR" --log-dir "$LOGS" > "$CONFIGURE_LOG" 2>&1; then
-	cat "$CONFIGURE_LOG" >&2
+CONFIGURE_STATUS=0
+sh "$SCRIPT_DIR/configure.sh" --source-dir "$SOURCE_DIR" --lock "$LOCK" \
+	--patch-dir "$PATCH_DIR" --log-dir "$LOGS" $PROBE_CONFIGURE_FLAG \
+	> "$CONFIGURE_LOG" 2>&1 || CONFIGURE_STATUS=$?
+cat "$CONFIGURE_LOG" >&2
+
+if [ "$PROBE" = "1" ]; then
+	# Stage 4 is the last stage of a probe. Publish the final configuration
+	# and the audit whether the gates survived or not: a probe that hid the
+	# evidence of a failure would be worthless.
+	[ -f "$SOURCE_DIR/.config" ] ||
+		fail "the probe produced no final configuration, so it cannot report what \`make defconfig\` did"
+	cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/probe/final.config"
+	if [ -f "$LOGS/final-config.json" ]; then
+		cp "$LOGS/final-config.json" "$ARTIFACT_DIR/probe/config-audit.json"
+	fi
+	if [ "$CONFIGURE_STATUS" -eq 0 ]; then
+		printf 'defconfig probe: every hard gate survived the final .config.\n'
+		printf 'Probe evidence is in %s\n' "$ARTIFACT_DIR/probe"
+		exit 0
+	fi
+	if [ "$CONFIGURE_STATUS" -eq 4 ]; then
+		printf 'Error: the defconfig probe found hard gates missing from the final .config; the evidence is in %s\n' "$ARTIFACT_DIR/probe" >&2
+		exit 4
+	fi
+	fail "the defconfig probe failed before it could audit the final configuration"
+fi
+
+if [ "$CONFIGURE_STATUS" -ne 0 ]; then
 	fail "the configuration preflight of the firmware failed"
 fi
-cat "$CONFIGURE_LOG"
 
 # Stage 5 and 6: download and compile. Both keep their full log when they fail.
 DOWNLOAD_LOG="$LOGS/download.log"

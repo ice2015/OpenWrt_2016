@@ -42,6 +42,10 @@ from pathlib import Path
 # The repository wide build not ready status. A lock that fails this gate must
 # not be distinguishable from an unresolved manifest target: both stop with 3.
 BUILD_NOT_READY = 3
+# The verdict of an authorized `make defconfig` probe whose hard gates did not
+# all survive. It is distinct from a blocked lock so that a caller can tell
+# "this candidate is unproven" from "this candidate was proven and failed".
+PROBE_FOUND_MISSING_GATES = 4
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -318,7 +322,7 @@ def validate_packages(lock, errors):
             )
 
 
-def validate_readiness(lock, errors):
+def validate_readiness(lock, errors, allow_probe=False):
     """Recompute build_readiness from the package table.
 
     The flag is derived, never trusted: a hard gate that is still a candidate
@@ -354,7 +358,7 @@ def validate_readiness(lock, errors):
         errors.append(
             "build_readiness must name the `make defconfig` evidence it needs"
         )
-    if unproven:
+    if unproven and not allow_probe:
         errors.append(
             "the hard gate packages %s are candidates: no authorized "
             "`make defconfig` probe proved them in the final .config yet, so "
@@ -421,8 +425,15 @@ def validate_device_port(lock, errors):
         )
 
 
-def validate_lock(lock):
-    """Return the list of reasons why the lock is not build ready."""
+def validate_lock(lock, allow_probe=False):
+    """Return the list of reasons why the lock is not build ready.
+
+    `allow_probe` relaxes exactly one thing: a lock whose hard gates are still
+    candidates is allowed, because proving them is what an authorized
+    `make defconfig` probe is for. Every structural requirement still holds, a
+    hand edited `ready: true` is still an error, and a probe never promotes a
+    package to `available`.
+    """
     errors = []
     validate_source(lock, errors)
 
@@ -472,14 +483,16 @@ def validate_lock(lock):
 
     validate_packages(lock, errors)
     validate_device_port(lock, errors)
-    validate_readiness(lock, errors)
+    validate_readiness(lock, errors, allow_probe=allow_probe)
 
     return errors
 
 
-def render_plan(lock):
+def render_plan(lock, probe=False):
     source = lock["source"]
     return {
+        "probe": bool(probe),
+        "build_readiness": lock.get("build_readiness"),
         "device": lock.get("device"),
         "product": lock.get("product"),
         "status": lock.get("status"),
@@ -787,7 +800,7 @@ def verify_image_rules(text, lock):
     return fields
 
 
-def verify_config(text, lock):
+def verify_config(text, lock, probe=False):
     """Audit the configuration the build really produced.
 
     The input is a final `.config`, the output of a real `make defconfig`,
@@ -928,15 +941,21 @@ def verify_config(text, lock):
                 )
             )
 
-    if errors:
-        raise ConfigError("; ".join(errors))
-    return {
+    report = {
         "profile": EXPECTED_PROFILE,
         "hard_gates": hard_gates,
         "optional": optional,
         "excluded": excluded,
         "symbols": audited,
     }
+    if errors:
+        if not probe:
+            raise ConfigError("; ".join(errors))
+        # A probe reports the whole verdict instead of raising on the first
+        # miss; the key exists only then, so the shape of a passing audit of a
+        # normal build is unchanged.
+        report["errors"] = errors
+    return report
 
 
 def git_head(path):
@@ -1000,7 +1019,7 @@ def locked_patches(lock, repo_root):
     return resolved
 
 
-def preflight(lock, source_dir, feed_dir, repo_root=None):
+def preflight(lock, source_dir, feed_dir, repo_root=None, allow_probe=False):
     """Run every check that has to pass before anything is downloaded.
 
     The gate covers the checkout identity, a dirty tree, the output of an
@@ -1008,7 +1027,7 @@ def preflight(lock, source_dir, feed_dir, repo_root=None):
     every recorded device patch. It only reads; the patches are applied by
     configure.sh, which runs after this gate and before `make download`.
     """
-    errors = validate_lock(lock)
+    errors = validate_lock(lock, allow_probe=allow_probe)
     if errors:
         raise LockError("; ".join(errors))
 
@@ -1541,14 +1560,15 @@ def build_report(lock, artifacts, build_env, extra=None):
 
 def command_check(args):
     lock = load_lock(args.lock)
-    errors = validate_lock(lock)
+    allow_probe = bool(getattr(args, "allow_probe", False))
+    errors = validate_lock(lock, allow_probe=allow_probe)
     if errors:
         for error in errors:
             print("Error: %s" % error, file=sys.stderr)
         # No plan is rendered for a blocked lock: the caller must not receive
         # anything it could feed to a download or a compile step.
         return BUILD_NOT_READY
-    print(json.dumps(render_plan(lock), indent=2, sort_keys=True))
+    print(json.dumps(render_plan(lock, probe=allow_probe), indent=2, sort_keys=True))
     return 0
 
 
@@ -1589,8 +1609,15 @@ def command_verify_config(args):
     if not path.is_file():
         raise LockError("the final configuration is missing: %s" % path)
     text = path.read_text(encoding="utf-8")
-    report = verify_config(text, lock)
+    probe = bool(getattr(args, "probe", False))
+    report = verify_config(text, lock, probe=probe)
     print(json.dumps(report, indent=2, sort_keys=True))
+    if report.get("errors"):
+        for error in report["errors"]:
+            print("Error: %s" % error, file=sys.stderr)
+        # A probe reports what `make defconfig` really did to the hard gates;
+        # the evidence is on stdout, the verdict is this distinct status.
+        return PROBE_FOUND_MISSING_GATES if probe else BUILD_NOT_READY
     return 0
 
 
@@ -1657,7 +1684,8 @@ def command_verify_image_rules(args):
 def command_preflight(args):
     lock = load_lock(args.lock)
     report = preflight(
-        lock, args.source_dir, args.feed_dir, repo_root=args.repo_root or None
+        lock, args.source_dir, args.feed_dir, repo_root=args.repo_root or None,
+        allow_probe=bool(getattr(args, "allow_probe", False)),
     )
     write_json(report, args.out)
     return 0
@@ -1736,6 +1764,12 @@ def main(argv=None):
 
     check = subparsers.add_parser("check", help="validate the source lock")
     check.add_argument("--lock", required=True)
+    check.add_argument(
+        "--allow-probe",
+        action="store_true",
+        help="accept a lock whose hard gates are still candidates, for an "
+        "authorized `make defconfig` probe only",
+    )
     check.set_defaults(handler=command_check)
 
     verify = subparsers.add_parser(
@@ -1743,6 +1777,12 @@ def main(argv=None):
     )
     verify.add_argument("--lock", required=True)
     verify.add_argument("--config", required=True)
+    verify.add_argument(
+        "--probe",
+        action="store_true",
+        help="report every missing hard gate instead of raising on the first "
+        "one, and answer with the probe verdict status",
+    )
     verify.set_defaults(handler=command_verify_config)
 
     merge = subparsers.add_parser(
@@ -1785,6 +1825,12 @@ def main(argv=None):
     report.add_argument("--feed-dir", required=True)
     report.add_argument("--repo-root", default="")
     report.add_argument("--out", default="")
+    report.add_argument(
+        "--allow-probe",
+        action="store_true",
+        help="accept a lock whose hard gates are still candidates, for an "
+        "authorized `make defconfig` probe only",
+    )
     report.set_defaults(handler=command_preflight)
 
     overlay = subparsers.add_parser(
