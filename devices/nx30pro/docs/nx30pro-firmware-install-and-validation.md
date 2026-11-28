@@ -3,7 +3,17 @@
 状态：**设计文档，不授权刷写**。本文只规划备份、部署、部署值录入与真机验证步骤。
 本文不提供未经核实的写入命令；所有写入动作都需要用户单独、明确的授权。
 
+| 项 | 值 |
+|---|---|
+| 系统源码 | `https://github.com/hanwckf/immortalwrt-mt798x`，锁定 commit `740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6`，Linux **5.4** |
+| profile | `h3c_nx30pro_112M`，布局 `immortalwrt-112m`（**默认**，UBI 112 MiB）；备选 `default`（原厂，保留 `pdt_data`、`pdt_data_1`、`exp`、`plugin`） |
+| 镜像角色 | `factory.bin`（112 MiB `ubi` 分区的原始 UBI 镜像）与 `sysupgrade.bin`（带元数据的 sysupgrade tar 包）；两者都**不是启动链镜像** |
+| 配对启动链 | `https://github.com/Yuzhii0718/bl-mt798x-dhcpd`，commit `e4cf4dc72d451dc7a86c9508390ad5a2e50743c4`，版本 `SP1`；两边是**同一份分区合同** |
+| 固件状态 | 候选、未编译、未真机验证（`firmware_lock.py check` 退出 3） |
+
 - 配套事实来源：[`nx30pro-firmware-compatibility.md`](nx30pro-firmware-compatibility.md)、
+  [`BUILD.md`](BUILD.md)、[`FLASH.md`](FLASH.md)、[`RECOVERY.md`](RECOVERY.md)、
+  [`TEST-REPORT.md`](TEST-REPORT.md)、
   [`nx30pro-uboot-install-and-recovery.md`](nx30pro-uboot-install-and-recovery.md) 与
   [`../source-lock.json`](../source-lock.json)。
 - 状态标记：候选、**未真机验证**。
@@ -40,6 +50,12 @@ dd if=<分区设备> bs=1 count=4096 2>/dev/null | grep -a -o 'ethaddr=[0-9a-fA-
 
 把读到的 MAC 写进本次部署记录，并保留原厂分区内容。
 **不要**把 MAC 提交 Git，也不要放进公开 Actions artifact。
+
+设备补丁 `../patches/0002-mediatek-nx30pro-wan-mac-source.patch` 的取值顺序是
+`/etc/nx30pro/wan-mac` → `Factory` 的 ascii `ethaddr`（只读）→ 仍存在的 `pdt_data_1`
+（只读）；三者都取不到时保留 bootloader 交下来的地址并记录日志。补丁同时移除了
+底座把派生 Wi-Fi MAC 写回 `Factory` 偏移 4 的行为，出厂校准区在 112M 布局下只读。
+真机上 `Factory` 是否仍被改写必须用备份比对确认，当前 UNRESOLVED。
 
 ## 3. 备份（只读，先做后动）
 
@@ -79,16 +95,24 @@ sha256sum <备份文件列表> > SHA256SUMS
 
 ## 5. 写入路径（需授权）
 
+写入目标、镜像角色与停止条件在 [`FLASH.md`](FLASH.md)，恢复与回退场景在
+[`RECOVERY.md`](RECOVERY.md)。本节只给出目标分区与入口的对应关系：
+
 | 目标 | 入口 | 写入对象 | 说明 |
 |---|---|---|---|
 | 启动链 | 网页恢复入口 `http://192.168.1.1/` 或串口 `mtkupgrade fip` | `fip` 分区（NMBM 逻辑 `0x380000`，2 MiB） | 见启动链恢复文档；这是升级候选启动链的路径 |
-| 系统固件 | 网页恢复入口上传 `firmware`，或 LuCI 升级页 / `sysupgrade` | `ubi` 分区（NMBM 逻辑 `0x580000`，112 MiB） | 写入 108 MiB 工厂镜像；**这一步会按 112M 布局擦除 `pdt_data`、`pdt_data_1`、`exp`、`plugin`** |
+| 系统固件 | 网页恢复入口上传 `firmware` | `ubi` 分区（NMBM 逻辑 `0x580000`，112 MiB） | 写入 `factory.bin`（上限 110592k）；**这一步会按 112M 布局擦除 `pdt_data`、`pdt_data_1`、`exp`、`plugin`** |
+| 系统固件 | LuCI 升级页 / `sysupgrade` 命令 | `ubi` 分区 | 只在已经运行同一 profile 的本系统时使用，输入是 `sysupgrade.bin`；它与 `factory.bin` 都**不是启动链镜像**，不能互换 |
 | 启动链 | 网页恢复入口上传 `bl2` | `bl2` 分区（NMBM 逻辑 `0x000000`，1 MiB） | 只在确实需要更换 BL2 时使用 |
 
 顺序建议：先备份 → 先写启动链（若需要）→ 确认能启动 → 再写系统固件 → 再做验证。
 任何一步失败先回退，不要叠加写入。
 
 ## 6. 真机验证（授权后执行）
+
+本节是**计划**，不是结果。执行需要用户对刷写与真机测试单独、明确的授权；
+每一步的原始输出必须记进 [`TEST-REPORT.md`](TEST-REPORT.md)，没有 run ID、结论与
+产物哈希的候选构建不得写进本表，没有设备读数的项不得写成已验证。
 
 按顺序执行，每一步保留原始输出：
 
@@ -114,12 +138,19 @@ sha256sum <备份文件列表> > SHA256SUMS
 
 ## 7. 未决项（UNRESOLVED）
 
-1. 原厂分区名、master 行容量与整片备份的可获得性；
-2. 原厂系统的独立恢复入口；
-3. 本机 WAN MAC 的读取方式（第 2 节给出的是方法，不是已验证结果）；
-4. WireGuard 服务端、sing-box 后端、Tailscale 的 LuCI 界面（本底座不具备，见兼容性文档）；
-5. 容器存储驱动在最终可写空间上的表现；
-6. 镜像实际大小、剩余 overlay 空间与内存余量；
-7. 每个服务的实际运行行为与性能（千兆 NAT 不等于千兆代理）。
+与 `../source-lock.json` 的 `unresolved` 对应：
 
-在第 6、7 项完成前，本目录中的固件只能标记为“候选、未真机验证”。
+1. 原厂分区名、master 行容量与整片备份的可获得性；
+2. 原厂系统的独立恢复入口，以及任何独立于候选启动链的恢复途径；
+3. 硬门禁的 `make defconfig` 证明与 112M profile 的构建证据（当前 `check` 退出 3）；
+4. 本机 WAN MAC 的取值与读取方式（第 2 节给出的是方法，不是已验证结果），以及
+   `Factory` 校准数据在 112M 布局下的真实位置与是否被改写；
+5. factory 与 sysupgrade 的最终文件名；
+6. WireGuard 服务端、sing-box 后端、`luci-app-tailscale`、Go 类包在 21.02 工具链上的
+   可构建性（见兼容性文档）；
+7. 容器存储驱动在最终可写空间上的表现（不假定 overlay2 可用）；
+8. 镜像实际大小、剩余 overlay 空间与内存余量；
+9. 每个服务的实际运行行为与性能（千兆 NAT 不等于千兆代理）；
+10. NAND 型号、容量与坏块状态（112M 布局的逻辑容量是推导值，不是实测）。
+
+在第 8、9 项完成前，本目录中的固件只能标记为“候选、未真机验证”。

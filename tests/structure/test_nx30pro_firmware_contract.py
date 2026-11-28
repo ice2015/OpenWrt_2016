@@ -1770,5 +1770,354 @@ class Nx30ProFirmwareFirstBootOverlayTests(unittest.TestCase):
                 self.assertIn(option, text)
 
 
+# The operator documents of the firmware half. They are the deliverable of
+# Task 7 and they must not outrun the evidence the lock records.
+FIRMWARE_DOCS = {
+    "build": "devices/nx30pro/docs/BUILD.md",
+    "flash": "devices/nx30pro/docs/FLASH.md",
+    "recovery": "devices/nx30pro/docs/RECOVERY.md",
+    "report": "devices/nx30pro/docs/TEST-REPORT.md",
+    "compatibility": "devices/nx30pro/docs/nx30pro-firmware-compatibility.md",
+    "validation": "devices/nx30pro/docs/nx30pro-firmware-install-and-validation.md",
+    "readme": "devices/nx30pro/README.md",
+}
+ALL_DOCS = tuple(FIRMWARE_DOCS)
+
+# The boot loader this firmware is paired with. Its commit is part of the
+# pairing contract: a firmware document that names another boot loader, or
+# none, describes an unbootable combination.
+UBOOT_REPOSITORY = "Yuzhii0718/bl-mt798x-dhcpd"
+UBOOT_COMMIT = "e4cf4dc72d451dc7a86c9508390ad5a2e50743c4"
+UBOOT_VERSION = "SP1"
+
+# Commands that write, erase or dump a flash device. No firmware document may
+# hand one out: the offsets of this device are derived from two source tables
+# and were never measured, and the write path is not authorized.
+FORBIDDEN_COMMANDS = (
+    "mtd write",
+    "nandwrite",
+    "flash_erase",
+    "mtd_debug",
+    "dd of=",
+    "/dev/mtd0",
+    "ubiformat",
+)
+
+# The flash and recovery documents may not even name a partition device: they
+# describe targets and prerequisites, and the read-only identification commands
+# live in the install and validation document.
+FORBIDDEN_IN_FLASH_DOCS = FORBIDDEN_COMMANDS + ("/dev/mtd", "nanddump", "dd if=")
+
+# A raw offset such as 0x580000. The flash and recovery documents name
+# partitions by label only; the offsets live in the build and compatibility
+# documents next to their source, and in the boot loader contract.
+RAW_OFFSET = re.compile(r"0x[0-9a-fA-F]{4,}")
+
+FORBIDDEN_CLAIMS = (
+    "真机验证通过",
+    "已真机验证",
+    "验证成功",
+    "可以安全刷写",
+    "已完成真机",
+    "Action 运行成功",
+    "工作流已成功",
+    "候选构建通过",
+)
+
+# One keyword per UNRESOLVED topic of the source lock. The count is compared
+# with the lock, so a new unresolved fact forces the documents to grow.
+UNRESOLVED_KEYWORDS = (
+    "make defconfig",
+    "profile",
+    "WAN MAC",
+    "Factory",
+    "文件名",
+    "WireGuard",
+    "luci-app-tailscale",
+    "Go",
+    "存储驱动",
+    "overlay",
+    "运行行为",
+    "NAND",
+)
+
+# The only address a firmware document may carry: the fixed recovery entry of
+# the locked boot loader, read from its board defconfig.
+ALLOWED_IPV4 = frozenset(("192.168.1.1",))
+
+
+class Nx30ProFirmwareDocumentationTests(unittest.TestCase):
+    """The firmware documents must not outrun the evidence.
+
+    A pinned source is not a compiled image, a green static test is not an
+    Action run, an Action run is not a device validation, and no document may
+    hand out a destructive flash command or a credential.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.lock = json.loads(LOCK.read_text(encoding="utf-8"))
+        cls.uboot_lock = json.loads(UBOOT_LOCK.read_text(encoding="utf-8"))
+        cls.layouts = cls.uboot_lock["layouts"]["entries"]
+
+    def text(self, key):
+        path = ROOT / FIRMWARE_DOCS[key]
+        self.assertTrue(path.is_file(), "missing NX30 Pro firmware document: %s" % path)
+        return path.read_text(encoding="utf-8")
+
+    def test_every_document_names_the_pinned_source(self):
+        for key in ALL_DOCS:
+            text = self.text(key)
+            self.assertIn("hanwckf/immortalwrt-mt798x", text, key)
+            self.assertIn(self.lock["source"]["revision"], text, key)
+            self.assertIn(self.lock["source"]["kernel"], text, key)
+
+    def test_no_document_presents_the_rejected_base_as_the_source(self):
+        markers = ("拒绝", "rejected", "证据", "evidence", "参考", "reference")
+        for key in ALL_DOCS:
+            for line in self.text(key).splitlines():
+                if "jerryhan77" not in line and "Galaxian" not in line:
+                    continue
+                if REJECTED_REVISION in line or "jerryhan77" in line:
+                    self.assertTrue(
+                        any(marker in line for marker in markers),
+                        "%s names the rejected base without marking it rejected: %s"
+                        % (key, line),
+                    )
+
+    def test_build_and_compatibility_documents_pin_every_feed_commit(self):
+        for key in ("build", "compatibility", "report"):
+            text = self.text(key)
+            for feed in self.lock["feeds"]:
+                self.assertIn(feed["id"], text, "%s: %s" % (key, feed["id"]))
+                if key == "report":
+                    continue
+                self.assertIn(
+                    feed["revision"], text, "%s: %s" % (key, feed["revision"])
+                )
+
+    def test_documents_carry_the_exact_package_status_table(self):
+        for key in ("build", "compatibility"):
+            text = self.text(key)
+            for entry in self.lock["packages"]:
+                rows = [
+                    line
+                    for line in text.splitlines()
+                    if "`%s`" % entry["package"] in line
+                ]
+                self.assertTrue(
+                    rows, "%s has no table row for %s" % (key, entry["package"])
+                )
+                self.assertTrue(
+                    any(entry["status"] in row for row in rows),
+                    "%s does not record %s as %s" % (key, entry["package"], entry["status"]),
+                )
+                if entry["symbols"]:
+                    self.assertTrue(
+                        any(symbol in row for row in rows for symbol in entry["symbols"]),
+                        "%s names no symbol of %s" % (key, entry["package"]),
+                    )
+            self.assertIn("candidate", text, key)
+            # A status cell of its own: "unavailable |" must not read as
+            # an "available" claim.
+            self.assertNotRegex(text, r"(?m)\|\s*available\s*\|", key)
+
+    def test_documents_carry_the_exclusions_with_their_clash_handling(self):
+        for key in ("build", "compatibility"):
+            text = self.text(key)
+            for entry in self.lock["excluded_packages"]:
+                self.assertIn(
+                    entry["package"], text, "%s: %s" % (key, entry["package"])
+                )
+                if entry.get("replaced_by"):
+                    self.assertIn(entry["replaced_by"], text, key)
+            for manager in EXCLUDED_MANAGERS:
+                self.assertIn(manager, text, "%s: %s" % (key, manager))
+
+    def test_documents_state_the_two_layouts_and_the_locked_112m_table(self):
+        for key in ALL_DOCS:
+            text = self.text(key)
+            self.assertEqual(sorted(self.layouts), ["default", "immortalwrt-112m"])
+            self.assertIn("immortalwrt-112m", text, key)
+            self.assertIn("default", text, key)
+            self.assertIn("默认", text, key)
+            self.assertIn("NMBM", text, key)
+        for key in ("build", "compatibility"):
+            text = self.text(key)
+            for label in ("immortalwrt-112m", "default"):
+                self.assertIn(self.layouts[label]["mtdparts"], text, "%s: %s" % (key, label))
+            for partition in self.lock["partition_contract"]["partitions"]:
+                self.assertIn(partition["label"], text, "%s: %s" % (key, partition["label"]))
+            self.assertIn("0x580000", text, key)
+
+    def test_documents_separate_the_two_image_roles(self):
+        image = self.lock["image"]
+        for key in ALL_DOCS:
+            text = self.text(key)
+            self.assertIn(image["factory_image"], text, key)
+            self.assertIn(image["sysupgrade_image"], text, key)
+            self.assertIn("不是启动链镜像", text, key)
+        for key in ("build", "compatibility", "report"):
+            text = self.text(key)
+            self.assertIn(image["factory_rule"].replace("$$$$", "$$"), text, key)
+            self.assertIn(image["sysupgrade_rule"], text, key)
+            self.assertIn(image["image_size"], text, key)
+        for key in ("build", "compatibility"):
+            self.assertIn("bin/targets/mediatek/mt7981", self.text(key), key)
+            self.assertIn("UNRESOLVED", self.text(key), key)
+
+    def test_flash_and_recovery_documents_carry_no_offset_and_no_write_command(self):
+        for key in ("flash", "recovery"):
+            text = self.text(key)
+            self.assertNotRegex(text, RAW_OFFSET, "%s states a raw offset" % key)
+            for command in FORBIDDEN_IN_FLASH_DOCS:
+                self.assertNotIn(command, text, "%s contains %s" % (key, command))
+            self.assertIn("明确的授权", text, key)
+            self.assertIn("停止条件", text, key)
+            self.assertIn("备份", text, key)
+            self.assertLess(
+                text.index("备份"),
+                text.index("写入目标"),
+                "%s names a write target before the backup" % key,
+            )
+
+    def test_no_document_hands_out_a_destructive_command_or_a_completed_validation(self):
+        for key in ALL_DOCS:
+            text = self.text(key)
+            for command in FORBIDDEN_COMMANDS:
+                self.assertNotIn(command, text, "%s contains %s" % (key, command))
+            for claim in FORBIDDEN_CLAIMS:
+                self.assertNotIn(claim, text, "%s claims %s" % (key, claim))
+            self.assertNotRegex(text, r"run[ _]?[Ii][Dd][^\n]*[0-9]{6,}", key)
+            self.assertNotRegex(text, r"\b[0-9a-f]{64}\b", key)
+
+    def test_documents_pair_the_firmware_with_the_locked_boot_loader(self):
+        for key in ALL_DOCS:
+            text = self.text(key)
+            self.assertIn(UBOOT_REPOSITORY, text, key)
+            self.assertIn(UBOOT_COMMIT, text, key)
+            self.assertIn(UBOOT_VERSION, text, key)
+            self.assertIn("同一份分区合同", text, key)
+
+    def test_documents_put_the_backup_before_any_write(self):
+        for key in ALL_DOCS:
+            text = self.text(key)
+            self.assertIn("备份", text, key)
+            self.assertIn("整片闪存", text, key)
+            for partition in ("pdt_data_1", "exp", "plugin"):
+                self.assertIn(partition, text, "%s: %s" % (key, partition))
+
+    def test_documents_record_that_every_selected_service_starts_disabled(self):
+        for key in ("build", "compatibility", "report", "readme"):
+            text = self.text(key)
+            self.assertIn("90-nx30pro-defaults", text, key)
+            self.assertIn("默认关闭", text, key)
+            for package, service in SELECTED_SERVICES.items():
+                for init in service["init"]:
+                    self.assertIn(init, text, "%s: %s of %s" % (key, init, package))
+
+    def test_documents_gate_every_action_run_behind_an_explicit_authorization(self):
+        for key in ("build", "report", "readme", "flash", "recovery"):
+            text = self.text(key)
+            self.assertIn("授权", text, key)
+        for key in ("build", "report", "readme"):
+            text = self.text(key)
+            self.assertIn(".github/workflows/build-nx30pro.yml", text, key)
+            self.assertIn("workflow_dispatch", text, key)
+            self.assertIn("明确的授权", text, key)
+            self.assertIn("contents: read", text, key)
+
+    def test_documents_keep_the_unresolved_hardware_facts(self):
+        self.assertEqual(
+            len(self.lock["unresolved"]),
+            len(UNRESOLVED_KEYWORDS),
+            "the lock gained or lost an UNRESOLVED topic: update the documents and this list",
+        )
+        for key in ("build", "compatibility", "report"):
+            text = self.text(key)
+            self.assertIn("UNRESOLVED", text, key)
+            for keyword in UNRESOLVED_KEYWORDS:
+                self.assertIn(keyword, text, "%s: %s" % (key, keyword))
+
+    def test_documents_carry_no_credential_and_no_deployment_value(self):
+        for key in ALL_DOCS:
+            text = self.text(key)
+            self.assertNotRegex(text, PRIVATE_KEY_BLOCK, key)
+            self.assertNotRegex(text, IPV6_ADDRESS, key)
+            for address in set(IPV4_ADDRESS.findall(text)):
+                self.assertIn(address, ALLOWED_IPV4, "%s carries %s" % (key, address))
+            for mac in MAC_ADDRESS.findall(text):
+                self.assertEqual(MAC_PLACEHOLDER, mac, "%s carries a MAC" % key)
+            for match in ASSIGNMENT.finditer(text):
+                name = (
+                    match.group("shell")
+                    or match.group("uci")
+                    or match.group("config")
+                    or match.group("yaml")
+                )
+                if name.lower() not in DEPLOYMENT_OPTIONS:
+                    continue
+                value = (match.group("value") or "").strip()
+                self.assertTrue(
+                    value in ("", "0") or value.startswith("<") or value.startswith("无"),
+                    "%s assigns a value to the deployment option %s"
+                    % (key, name),
+                )
+
+    def test_the_test_report_records_only_what_actually_happened(self):
+        text = self.text("report")
+        headings = [line for line in text.splitlines() if line.startswith("## ")]
+        self.assertTrue(headings, "the test report has no section")
+        self.assertIn("静态", headings[0])
+        for fact in ("未触发", "未编译", "未授权", "make defconfig", "退出 3"):
+            self.assertIn(fact, text)
+        self.assertIn("firmware_lock.py check", text)
+        self.assertIn("build.sh", text)
+        self.assertIn("--check-only", text)
+        self.assertRegex(text, r"Ran \d+ tests")
+        self.assertIn("OK", text)
+        for phrase in ("should pass", "应该通过", "预计通过", "将会通过"):
+            self.assertNotIn(phrase, text)
+
+    def test_the_build_document_gives_the_reproducible_inputs_and_the_gates(self):
+        text = self.text("build")
+        self.assertIn("devices/nx30pro/build/build.sh", text)
+        self.assertIn("--check-only", text)
+        self.assertIn("--source-dir", text)
+        self.assertIn("--feed-dir", text)
+        self.assertIn("--artifact-dir", text)
+        self.assertIn("devices/nx30pro/build/configure.sh", text)
+        self.assertIn("devices/nx30pro/build/firmware_lock.py", text)
+        self.assertIn("verify-config", text)
+        self.assertIn("verify-device-tree", text)
+        self.assertIn("verify-image-rules", text)
+        self.assertIn("merge-config", text)
+        self.assertIn("common -> distribution -> device", text)
+        for stage in ("build-plan.json", "preflight.json", "configure.log", "build.log", "artifacts.json", "build-report.json", "SHA256SUMS", "IMAGE-ROLES.txt", "final.config", "packages.txt", "feeds-lock.json"):
+            self.assertIn(stage, text, stage)
+        self.assertIn(self.lock["target"]["profile"], text)
+        self.assertIn(self.lock["target"]["profile_symbol"], text)
+        for patch in self.lock["device_port"]["patches"]:
+            self.assertIn(patch["path"], text)
+
+    def test_the_flash_document_names_the_targets_and_the_data_loss(self):
+        text = self.text("flash")
+        self.assertIn("ubi", text)
+        self.assertIn("112 MiB", text)
+        self.assertIn("/etc/nx30pro/wan-mac", text)
+        self.assertIn("数据损失", text)
+        self.assertIn("独立恢复路径", text)
+
+    def test_the_recovery_document_separates_the_three_scenarios(self):
+        text = self.text("recovery")
+        self.assertIn("LuCI", text)
+        self.assertIn("sysupgrade", text)
+        self.assertIn("initramfs", text)
+        self.assertIn("串口", text)
+        self.assertIn("独立恢复路径", text)
+        self.assertIn("UNRESOLVED", text)
+        self.assertIn("回退", text)
+
+
 if __name__ == "__main__":
     unittest.main()

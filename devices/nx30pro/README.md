@@ -19,28 +19,63 @@ nx30pro/
 
 尚未划分 Lite/Full 等变体。
 
-## 系统固件（候选，未真机验证）
+## 系统固件（候选，未编译、未真机验证）
+
+源码：`https://github.com/hanwckf/immortalwrt-mt798x`，锁定 commit
+`740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6`（分支 `openwrt-21.02` 仅供追溯），
+Linux **5.4**；四个 feed（`packages`、`luci`、`routing`、`telephony`）同样固定到 commit。
+被拒绝的旧底座 `jerryhan77/immortalwrt-mt798x`（revision
+`78cf22edddf07443d8f0506c9f361d3498475189`，与 Galaxian 112M 参考树同源）只作为
+**被拒绝的证据**与移植**参考**保留，不是构建输入。
+
+源码锁状态是 `source-candidate-build-blocked`：`build/firmware_lock.py check` 以仓库统一的
+构建未就绪状态码 **3** 拒绝它，`tools/manifest.py resolve --require-build-ready` 同样退出 3，
+直到一次 `make defconfig` 探针被单独授权。
 
 | 文件 | 职责 |
 |---|---|
 | `source-lock.json` | 锁定的系统源码 commit、四个 feed 的 revision、目标/profile、镜像规则、分区合同、软件包兼容表与未决项 |
 | `config.config` | 设备层的原生 Kconfig 片段：唯一 profile、需求表中的软件包、刻意排除的软件包 |
 | `feeds.conf` | 设备层 feed：四个 feed 固定到 commit |
-| `patches/0001-mediatek-nx30pro-wan-mac-source.patch` | 112M 布局没有 `pdt_data_1`，因此 WAN MAC 改从部署值/Factory/原厂分区依次取值 |
-| `files/etc/uci-defaults/90-nx30pro-defaults` | 首次启动默认值：所有服务默认关闭，WAN 区不开放路由器端口 |
+| `patches/0001-mediatek-add-nx30pro-112m-profile.patch` | 移植 112M 设备树与 `h3c_nx30pro_112M` profile（锁定 commit 里没有） |
+| `patches/0002-mediatek-nx30pro-wan-mac-source.patch` | 112M 布局没有 `pdt_data_1`，因此 WAN MAC 改从部署值/Factory/原厂分区依次取值，并且 `Factory` 只读 |
+| `files/etc/uci-defaults/90-nx30pro-defaults` | 首次启动默认值：选中的服务全部默认关闭，WAN 区不开放路由器端口 |
 | `files/etc/nx30pro/README` | 部署值目录说明（WAN MAC 不进入镜像） |
-| `build/configure.sh` | 合并设备层、应用设备补丁、`make defconfig`、按最终 `.config` 校验 |
-| `build/build.sh` | 拉取锁定源码与 feed、配置、编译、产出镜像与 build-report；只构建，不刷写 |
-| `build/firmware_lock.py` | 源码锁校验、最终配置校验与构建报告 |
+| `build/configure.sh` | 应用设备补丁、源码校验、按 `common -> distribution -> device` 合并配置层、`make defconfig`、审计最终 `.config`、扫描 overlay |
+| `build/build.sh` | 锁门禁、拉取锁定源码与 feed、配置、下载、编译、镜像检查、产出 build-report；只构建，不刷写 |
+| `build/firmware_lock.py` | 源码锁校验、设备树/镜像规则校验、配置层合并、最终配置审计、镜像检查与发布 |
+| `docs/BUILD.md` | 可复现构建输入、逐阶段门禁、软件包合同、镜像角色与授权边界 |
+| `docs/FLASH.md` | 刷写目标与前置条件（备份优先），不含任何写入命令 |
+| `docs/RECOVERY.md` | 三种恢复场景、回退输入与停止条件 |
+| `docs/TEST-REPORT.md` | 实际发生的验证记录；当前只有静态证据 |
 | `docs/nx30pro-firmware-compatibility.md` | 已核实事实、软件包兼容表、源码级冲突与 UNRESOLVED 清单 |
 | `docs/nx30pro-firmware-install-and-validation.md` | 备份、部署值录入、写入路径与真机验证顺序（未授权刷写） |
 
-构建入口在 `.github/workflows/build-nx30pro.yml`（手动触发，`contents: read`，不使用 Secrets）。
+构建入口在 `.github/workflows/build-nx30pro.yml`（只有 `workflow_dispatch` 手动触发，
+`permissions: contents: read`，不使用 Secrets，不含刷写命令）。
 manifest `manifests/devices/nx30pro.json` 把设备登记到自带源码的分发 `immortalwrt-mt798x`。
+**触发任何 Action、以及任何刷写，都需要用户单独、明确的授权。**
 
-目标：MT7981 / `h3c_nx30pro_112M` profile，112 MiB UBI 布局，镜像上限 108 MiB。
-透明代理用 PassWall + xray（该底座没有 sing-box）；WireGuard 服务端在该底座不可用；
-Tailscale 只有命令行界面。详情见兼容性文档。
+目标：MT7981 / `h3c_nx30pro_112M` profile，布局 `immortalwrt-112m`（**默认**，UBI 112 MiB），
+镜像上限 108 MiB；备选布局 `default` 是原厂表，保留 `pdt_data`、`pdt_data_1`、`exp`、
+`plugin`，切换到 112M 布局前必须先完成**整片闪存**与关键分区的只读**备份**。
+分区合同与启动链是**同一份分区合同**，地址都是 NMBM 逻辑地址，不是物理 NAND 地址。
+
+镜像两个角色：`factory.bin`（`ubi` 分区的原始 UBI 镜像，`append-ubi | check-size`）与
+`sysupgrade.bin`（带元数据的 tar 包，供 LuCI 升级页与 `sysupgrade` 使用）。
+两者都**不是启动链镜像**，也不能互换；启动链镜像是 BL2 与 FIP。最终文件名保持
+UNRESOLVED（名字前缀含只在真实构建里解析的版本变量）。
+
+首次启动默认值把所有选中的服务**默认关闭**：`passwall`、`passwall_server`、`ddns`、
+`tailscale`、`zerotier`、`dockerd`、`cloudflared`、`frpc`、`nlbwmon`、`ttyd`、`sqm`、
+`etherwake`；基线服务（`dnsmasq`、`network`、`firewall`、`system` 等）一个不碰，
+overlay 也不附带 `/etc/config` 模板（避免丢掉 `loopback` 段），只用镜像里真有的
+busybox 命令。镜像里没有账号、令牌、域名、密码或任何设备的 MAC。
+
+透明代理用 PassWall 4.68 + xray（该底座没有 sing-box）；WireGuard 服务端保持
+UNRESOLVED（backport 与 `KernelPackage/wireguard` 存在，但 5.4 出厂配置未开启，
+可构建性未证）；Tailscale 只有命令行界面（锁定 luci feed 没有 `luci-app-tailscale`）。
+详情见兼容性文档。
 
 ## U-Boot 启动链（源码已锁定，未构建、未真机验证）
 
