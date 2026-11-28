@@ -396,6 +396,19 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.index("--source-dir"),
         )
 
+    def test_nx30pro_workflows_only_use_expressions_github_accepts(self) -> None:
+        """The `runner` context is not available in a job level `env:`.
+
+        A workflow that uses it there does not merely misbehave: GitHub fails to
+        parse the file, rejects every dispatch with HTTP 422 and records a
+        zero second failed run for each push. Steps that need the runner temp
+        directory read the `$RUNNER_TEMP` shell variable instead.
+        """
+        for name in ("build-nx30pro.yml", "build-nx30pro-uboot.yml"):
+            workflow = self.workflow(name)
+            self.assertNotIn("${{ runner.", workflow, name)
+            self.assertNotIn("${{ secrets.", workflow, name)
+
     def test_nx30pro_firmware_workflow_caps_ccache_and_pins_no_foreign_cache_dir(self) -> None:
         workflow = self.workflow("build-nx30pro.yml")
 
@@ -406,7 +419,7 @@ class WorkflowContractTests(unittest.TestCase):
         # and no configuration layer pins another one.
         self.assertRegex(
             workflow,
-            r"CCACHE_DIR: \$\{\{ runner\.temp \}\}/nx30pro-firmware/ccache",
+            r"CCACHE_DIR: \$\{\{ github\.workspace \}\}/\.ccache-nx30pro",
         )
         self.assertIn('mkdir -p "$CCACHE_DIR"', workflow)
         self.assertIn("ccache -M 5G", workflow)

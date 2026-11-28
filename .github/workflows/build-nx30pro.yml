@@ -45,8 +45,11 @@ jobs:
       # One capped cache directory for the whole job. No configuration layer
       # of this device pins a cache path of its own, so the documented
       # mismatch between a baked-in path and the runner's real one cannot
-      # reappear here.
-      CCACHE_DIR: ${{ runner.temp }}/nx30pro-firmware/ccache
+      # reappear here. The `runner` context is not available in a job level
+      # env (GitHub refuses to parse the file), so this uses `github.workspace`,
+      # which resolves to the same directory in every step of the job; steps
+      # that need the runner temp directory read $RUNNER_TEMP in shell.
+      CCACHE_DIR: ${{ github.workspace }}/.ccache-nx30pro
     steps:
       - name: Check out this build project
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
