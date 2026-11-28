@@ -328,7 +328,7 @@ if [ "$PROBE" = "1" ]; then
 	fi
 	# The seed and the diff defconfig produced are the evidence that says
 	# whether a lost package was never requested or was dropped.
-	for evidence in seed.config pre-defconfig.config defconfig-diff.txt configure.log; do
+	for evidence in seed.config pre-defconfig.config pre-defconfig-context.txt defconfig-diff.txt configure.log; do
 		if [ -f "$LOGS/$evidence" ]; then
 			cp "$LOGS/$evidence" "$ARTIFACT_DIR/probe/$evidence"
 		fi

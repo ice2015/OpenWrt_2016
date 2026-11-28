@@ -244,6 +244,19 @@ keep_evidence "$TEMP_CONFIG" seed.config
 	if [ -n "$LOG_DIR" ]; then
 		mkdir -p "$LOG_DIR"
 		cp .config "$LOG_DIR/pre-defconfig.config"
+		{
+			printf 'pwd: %s\n' "$PWD"
+			printf '.config lines: %s\n' "$(wc -l < .config)"
+			printf '.config =y lines: %s\n' "$(grep -c '=y$' .config || true)"
+			printf 'feed symlink directories:\n'
+			ls -1 package/feeds 2>&1
+			printf 'installed feed packages: %s\n' \
+				"$(find package/feeds -maxdepth 2 -mindepth 2 2>/dev/null | wc -l)"
+			printf 'metadata files:\n'
+			ls -1 tmp/.config-package.in tmp/.config-build.in 2>&1
+			printf 'coreutils in package metadata: %s\n' \
+				"$(grep -c 'PACKAGE_coreutils$' tmp/.config-package.in 2>/dev/null || echo 0)"
+		} > "$LOG_DIR/pre-defconfig-context.txt" 2>&1
 	fi
 	make defconfig
 )
