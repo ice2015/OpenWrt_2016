@@ -37,7 +37,7 @@
     {
       "id": "immortalwrt-mt798x",
       "repository": "https://github.com/hanwckf/immortalwrt-mt798x",
-      "revision": "UNRESOLVED",
+      "revision": "740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6",
       "config_layers": [],
       "feed_layers": []
     }

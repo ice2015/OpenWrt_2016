@@ -1,9 +1,10 @@
 # NX30 Pro 固件兼容性核实记录
 
-状态：**候选、未编译、未真机验证**。本文只记录在锁定 commit 上可复核的事实，
-以及仍然 UNRESOLVED 的项。本文不构成刷写许可，也不代表任何镜像可以在本机设备上工作。
-源码锁当前是 `source-candidate-build-blocked`：`firmware_lock.py check` 以状态码 **3**
-拒绝构建，直到一次 `make defconfig` 探针被单独授权。
+状态：**配置合同已被真实 `make defconfig` 证明；固件候选未构建、未真机验证**。
+本文只记录在锁定 commit 上可复核的事实，以及仍然 UNRESOLVED 的项。本文不构成刷写许可，
+也不代表任何镜像可以在本机设备上工作。源码锁当前是 `source-locked-defconfig-proven`，
+`firmware_lock.py check` 退出 **0**；提升它的唯一依据是被授权的 `make defconfig` 探针（GitHub Actions run `46108752994`，artifact `nx30pro-firmware-defconfig-probe`，conclusion success）。
+探针只跑配置阶段，没有编译固件，也没有产出任何 candidate 镜像。
 
 | 项 | 值 |
 |---|---|
@@ -125,31 +126,32 @@ UBI 与其后的 OEM 区域：`ubi` 从 64 MiB 变成 112 MiB，`pdt_data`、`pd
 
 底座是 2021 年的 ImmortalWrt 21.02（Linux 5.4），近年的插件很多不在这一层。
 下表逐项记录在锁定 commit 上**实际读到**的包、来源与状态，不按名称猜测。
-状态与 `source-lock.json` 逐项一致：`candidate` 表示“在锁定 feed 索引里读到了它”，
-**不是**可用；没有一次被授权的 `make defconfig` 证明之前，任何包都不得写成可用。
+状态与 `source-lock.json` 逐项一致：`available` 表示被授权的 `make defconfig` 探针（GitHub Actions run `46108752994`，artifact `nx30pro-firmware-defconfig-probe`，conclusion success）的
+`probe/final.config` 里该包全部符号都是 `=y` 且审计无报错；`candidate` 表示
+“只在锁定 feed 索引里读到了它”，没有 defconfig 证据就不得写成可用。
 
 ### 4.1 硬门禁（18 项）
 
 | 需求 | 包 | 符号 | 来源 | 版本 | 状态 |
 |---|---|---|---|---|---|
-| LuCI 管理界面 | `luci` | `CONFIG_PACKAGE_luci` | luci feed | — | candidate |
-| 界面 HTTPS | `luci-ssl-openssl` | `CONFIG_PACKAGE_luci-ssl-openssl` | luci feed | — | candidate |
-| 简体中文界面 | `luci-i18n-base-zh-cn` | `CONFIG_PACKAGE_luci-i18n-base-zh-cn`、`CONFIG_LUCI_LANG_zh_Hans` | luci feed | — | candidate |
-| Argon 主题 | `luci-theme-argon` | `CONFIG_PACKAGE_luci-theme-argon` | luci feed | 2.3.1 | candidate |
-| Bootstrap 兜底主题 | `luci-theme-bootstrap` | `CONFIG_PACKAGE_luci-theme-bootstrap` | luci feed | — | candidate |
-| 透明代理管理器（锁定 4.68） | `luci-app-passwall` | `CONFIG_PACKAGE_luci-app-passwall`、`..._INCLUDE_Xray`、`..._INCLUDE_Xray_Plugin` | luci feed | 4.68-1 | candidate |
-| PassWall 代理内核 | `xray-core` | `CONFIG_PACKAGE_xray-core` | packages feed | 1.8.3 | candidate |
-| PassWall 插件集 | `xray-plugin` | `CONFIG_PACKAGE_xray-plugin` | packages feed | 1.8.3 | candidate |
-| DDNS 脚本 | `ddns-scripts` | `CONFIG_PACKAGE_ddns-scripts` | packages feed | 2.8.2 | candidate |
-| DDNS 管理界面 | `luci-app-ddns` | `CONFIG_PACKAGE_luci-app-ddns` | luci feed | — | candidate |
-| 异地组网 Tailscale | `tailscale` | `CONFIG_PACKAGE_tailscale` | packages feed | 1.32.3 | candidate |
-| 异地组网 ZeroTier | `zerotier` | `CONFIG_PACKAGE_zerotier` | packages feed | 1.12.2 | candidate |
-| ZeroTier 管理界面 | `luci-app-zerotier` | `CONFIG_PACKAGE_luci-app-zerotier` | luci feed | — | candidate |
-| 容器引擎守护进程 | `dockerd` | `CONFIG_PACKAGE_dockerd` | packages feed | 20.10.26 | candidate |
-| 容器命令行客户端 | `docker` | `CONFIG_PACKAGE_docker` | packages feed | 20.10.26 | candidate |
-| 容器管理界面 | `luci-app-docker` | `CONFIG_PACKAGE_luci-app-docker` | luci feed | 1 | candidate |
-| 容器存储驱动 | `fuse-overlayfs` | `CONFIG_PACKAGE_fuse-overlayfs` | packages feed | 1.7.1 | candidate |
-| Argo 隧道 | `cloudflared` | `CONFIG_PACKAGE_cloudflared` | packages feed | 2023.8.1 | candidate |
+| LuCI 管理界面 | `luci` | `CONFIG_PACKAGE_luci` | luci feed | — | available |
+| 界面 HTTPS | `luci-ssl-openssl` | `CONFIG_PACKAGE_luci-ssl-openssl` | luci feed | — | available |
+| 简体中文界面 | `luci-i18n-base-zh-cn` | `CONFIG_PACKAGE_luci-i18n-base-zh-cn`、`CONFIG_LUCI_LANG_zh_Hans` | luci feed | — | available |
+| Argon 主题 | `luci-theme-argon` | `CONFIG_PACKAGE_luci-theme-argon` | luci feed | 2.3.1 | available |
+| Bootstrap 兜底主题 | `luci-theme-bootstrap` | `CONFIG_PACKAGE_luci-theme-bootstrap` | luci feed | — | available |
+| 透明代理管理器（锁定 4.68） | `luci-app-passwall` | `CONFIG_PACKAGE_luci-app-passwall`、`..._INCLUDE_Xray`、`..._INCLUDE_Xray_Plugin` | luci feed | 4.68-1 | available |
+| PassWall 代理内核 | `xray-core` | `CONFIG_PACKAGE_xray-core` | packages feed | 1.8.3 | available |
+| PassWall 插件集 | `xray-plugin` | `CONFIG_PACKAGE_xray-plugin` | packages feed | 1.8.3 | available |
+| DDNS 脚本 | `ddns-scripts` | `CONFIG_PACKAGE_ddns-scripts` | packages feed | 2.8.2 | available |
+| DDNS 管理界面 | `luci-app-ddns` | `CONFIG_PACKAGE_luci-app-ddns` | luci feed | — | available |
+| 异地组网 Tailscale | `tailscale` | `CONFIG_PACKAGE_tailscale` | packages feed | 1.32.3 | available |
+| 异地组网 ZeroTier | `zerotier` | `CONFIG_PACKAGE_zerotier` | packages feed | 1.12.2 | available |
+| ZeroTier 管理界面 | `luci-app-zerotier` | `CONFIG_PACKAGE_luci-app-zerotier` | luci feed | — | available |
+| 容器引擎守护进程 | `dockerd` | `CONFIG_PACKAGE_dockerd` | packages feed | 20.10.26 | available |
+| 容器命令行客户端 | `docker` | `CONFIG_PACKAGE_docker` | packages feed | 20.10.26 | available |
+| 容器管理界面 | `luci-app-docker` | `CONFIG_PACKAGE_luci-app-docker` | luci feed | 1 | available |
+| 容器存储驱动 | `fuse-overlayfs` | `CONFIG_PACKAGE_fuse-overlayfs` | packages feed | 1.7.1 | available |
+| Argo 隧道 | `cloudflared` | `CONFIG_PACKAGE_cloudflared` | packages feed | 2023.8.1 | available |
 
 PassWall 的后端只有 **Xray**（`INCLUDE_Xray` 与 `INCLUDE_Xray_Plugin` 两个开关），
 版本正好是需求要求的 4.68（`PKG_VERSION:=4.68-1`）。`tailscale` 只有守护进程与命令行：
@@ -169,17 +171,17 @@ PassWall 的后端只有 **Xray**（`INCLUDE_Xray` 与 `INCLUDE_Xray_Plugin` 两
 
 | 需求 | 包 | 符号 | 来源 | 状态 |
 |---|---|---|---|---|
-| Cloudflare DDNS 提供者 | `ddns-scripts-cloudflare` | `CONFIG_PACKAGE_ddns-scripts-cloudflare` | packages feed | candidate |
-| FRPC 内网穿透客户端 | `frpc` | `CONFIG_PACKAGE_frpc` | packages feed | candidate |
-| 完整 dnsmasq 功能集 | `dnsmasq-full` | `CONFIG_PACKAGE_dnsmasq-full` | 主树 | candidate |
-| SQM/QoS | `sqm-scripts` | `CONFIG_PACKAGE_sqm-scripts` | packages feed | candidate |
-| 流量监控 | `nlbwmon` | `CONFIG_PACKAGE_nlbwmon` | packages feed | candidate |
-| 网络唤醒 | `etherwake` | `CONFIG_PACKAGE_etherwake` | packages feed | candidate |
-| 网页终端 | `ttyd` | `CONFIG_PACKAGE_ttyd` | packages feed | candidate |
-| SFTP 服务 | `openssh-sftp-server` | `CONFIG_PACKAGE_openssh-sftp-server` | packages feed | candidate |
-| 抓包（mini 变体） | `tcpdump-mini` | `CONFIG_PACKAGE_tcpdump-mini` | 主树 | candidate |
-| 吞吐测量 | `iperf3` | `CONFIG_PACKAGE_iperf3` | packages feed | candidate |
-| 路由诊断 | `mtr` | `CONFIG_PACKAGE_mtr` | packages feed | candidate |
+| Cloudflare DDNS 提供者 | `ddns-scripts-cloudflare` | `CONFIG_PACKAGE_ddns-scripts-cloudflare` | packages feed | available |
+| FRPC 内网穿透客户端 | `frpc` | `CONFIG_PACKAGE_frpc` | packages feed | available |
+| 完整 dnsmasq 功能集 | `dnsmasq-full` | `CONFIG_PACKAGE_dnsmasq-full` | 主树 | available |
+| SQM/QoS | `sqm-scripts` | `CONFIG_PACKAGE_sqm-scripts` | packages feed | available |
+| 流量监控 | `nlbwmon` | `CONFIG_PACKAGE_nlbwmon` | packages feed | available |
+| 网络唤醒 | `etherwake` | `CONFIG_PACKAGE_etherwake` | packages feed | available |
+| 网页终端 | `ttyd` | `CONFIG_PACKAGE_ttyd` | packages feed | available |
+| SFTP 服务 | `openssh-sftp-server` | `CONFIG_PACKAGE_openssh-sftp-server` | packages feed | available |
+| 抓包（mini 变体） | `tcpdump-mini` | `CONFIG_PACKAGE_tcpdump-mini` | 主树 | available |
+| 吞吐测量 | `iperf3` | `CONFIG_PACKAGE_iperf3` | packages feed | available |
+| 路由诊断 | `mtr` | `CONFIG_PACKAGE_mtr` | packages feed | available |
 | WireGuard 服务端 | `wireguard` | `CONFIG_PACKAGE_kmod-wireguard`、`CONFIG_PACKAGE_wireguard-tools` | — | UNRESOLVED |
 | sing-box 后端 | `sing-box` | 无（锁定 feed 中不存在） | — | unavailable |
 

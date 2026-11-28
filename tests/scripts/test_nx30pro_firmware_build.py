@@ -35,6 +35,11 @@ SOURCE_REPOSITORY = "https://github.com/hanwckf/immortalwrt-mt798x"
 REJECTED_REPOSITORY = "https://github.com/jerryhan77/immortalwrt-mt798x.git"
 REJECTED_REVISION = "78cf22edddf07443d8f0506c9f361d3498475189"
 BUILD_NOT_READY = 3
+# The authorized `make defconfig` probe that promoted the committed lock: a
+# GitHub Actions run of .github/workflows/build-nx30pro.yml whose artifact
+# nx30pro-firmware-defconfig-probe carries probe/final.config.
+PROBE_RUN = "46108752994"
+PROBE_ARTIFACT = "nx30pro-firmware-defconfig-probe"
 
 
 def load_helper():
@@ -49,7 +54,12 @@ def real_lock():
 
 
 def proven_lock(lock=None):
-    """The same lock after an authorized defconfig probe proved every gate."""
+    """The same lock after an authorized defconfig probe proved every gate.
+
+    The committed lock carries that evidence since probe run 46108752994, so
+    this is now the identity for the hard gates; it stays the place where a
+    modified lock is turned into a buildable one.
+    """
     lock = copy.deepcopy(lock if lock is not None else real_lock())
     for entry in lock["packages"]:
         if entry.get("gate") == "hard" and entry["status"] == "candidate":
@@ -57,6 +67,30 @@ def proven_lock(lock=None):
             entry["defconfig_evidence"] = "final .config of the authorized probe run"
     lock["build_readiness"]["ready"] = True
     lock["build_readiness"]["blocking"] = []
+    return lock
+
+
+def unproven_lock(lock=None):
+    """The same lock with the hard gate evidence of the probe taken back out.
+
+    The committed lock is build ready, so the blocked path is exercised on a
+    copy of it: a hard gate that is still a candidate has to keep any lock
+    build blocked, exactly as it did before the probe ran.
+    """
+    lock = copy.deepcopy(lock if lock is not None else real_lock())
+    for entry in lock["packages"]:
+        if entry.get("gate") == "hard":
+            entry["status"] = "candidate"
+            entry.pop("defconfig_evidence", None)
+    readiness = lock["build_readiness"]
+    readiness["ready"] = False
+    readiness["blocking"] = [
+        "No `make defconfig` probe proved the hard gates in the final .config."
+    ]
+    readiness["required_evidence"] = (
+        "An authorized `make defconfig` probe that proves every hard gate "
+        "symbol is still =y in the final .config."
+    )
     return lock
 
 
@@ -435,16 +469,47 @@ def sysupgrade_image(
 
 
 class Nx30ProFirmwareLockGateTests(unittest.TestCase):
-    def test_candidate_lock_is_build_blocked_with_the_repository_status(self):
-        result = run_check(LOCK)
+    def test_an_unproven_lock_is_build_blocked_with_the_repository_status(self):
+        result = check_lock(unproven_lock())
         self.assertEqual(BUILD_NOT_READY, result.returncode, result.stdout)
         self.assertIn("defconfig", result.stderr)
         self.assertIn("hard gate", result.stderr.lower())
         self.assertNotIn("build ready", result.stdout)
 
-    def test_candidate_lock_never_renders_a_build_plan(self):
-        result = run_check(LOCK)
+    def test_an_unproven_lock_never_renders_a_build_plan(self):
+        result = check_lock(unproven_lock())
         self.assertEqual("", result.stdout.strip())
+
+    def test_the_committed_lock_is_build_ready_from_the_probe_evidence(self):
+        """The promotion rests on the probe artifact, and on nothing else.
+
+        Every package the lock calls available has to name the probe run and
+        its final .config, and the two packages the probe did not prove keep
+        their unproven status.
+        """
+        result = run_check(LOCK)
+        self.assertEqual(0, result.returncode, result.stderr)
+        plan = json.loads(result.stdout)
+        self.assertTrue(plan["build_readiness"]["ready"])
+        self.assertEqual([], plan["build_readiness"]["blocking"])
+        self.assertIn("h3c_nx30pro_112M", result.stdout)
+        self.assertIn(SOURCE_REPOSITORY, result.stdout)
+        self.assertIn(PROBE_RUN, plan["build_readiness"]["required_evidence"])
+        statuses = {}
+        for entry in real_lock()["packages"]:
+            statuses[entry["package"]] = entry["status"]
+            if entry["status"] != "available":
+                continue
+            evidence = entry.get("defconfig_evidence") or ""
+            self.assertIn(PROBE_RUN, evidence, entry["package"])
+            self.assertIn(PROBE_ARTIFACT, evidence, entry["package"])
+            self.assertIn("final.config", evidence, entry["package"])
+            for symbol in entry["symbols"]:
+                self.assertIn("%s=y" % symbol, evidence, entry["package"])
+        # The probe proved WireGuard stays off, not that it builds, and it
+        # found no sing-box symbol at all.
+        self.assertEqual("UNRESOLVED", statuses["wireguard"])
+        self.assertEqual("unavailable", statuses["sing-box"])
 
     def test_proven_lock_is_accepted(self):
         result = check_lock(proven_lock())
@@ -564,7 +629,7 @@ class Nx30ProFirmwareLockGateTests(unittest.TestCase):
         self.assertIn("dockerd", result.stderr)
 
     def test_a_hand_edited_readiness_flag_is_rejected(self):
-        lock = real_lock()
+        lock = unproven_lock()
         lock["build_readiness"]["ready"] = True
         lock["build_readiness"]["blocking"] = []
         result = check_lock(lock)
@@ -683,15 +748,16 @@ class Nx30ProFirmwareConfigTests(unittest.TestCase):
                     self.assertIn(entry["requirement"], message)
 
     def test_hard_gates_are_gated_while_the_lock_is_still_a_candidate(self):
-        """The real lock has no defconfig evidence yet and must still gate.
+        """An unproven lock is still audited symbol by symbol.
 
         `verify-config` is the gate that runs after an authorized probe; if it
         only checked packages already marked `available` it would audit nothing
         at all before the very run that is supposed to produce the evidence.
         """
-        candidate = real_lock()
+        candidate = unproven_lock()
         for entry in candidate["packages"]:
-            self.assertNotEqual("available", entry["status"], entry["package"])
+            if entry["gate"] == "hard":
+                self.assertNotEqual("available", entry["status"], entry["package"])
         self.helper.verify_config(self.good_config(candidate), candidate)
         text = self.without(
             self.good_config(candidate), "CONFIG_PACKAGE_cloudflared=y"
@@ -862,10 +928,17 @@ class Nx30ProFirmwareConfigTests(unittest.TestCase):
             self.assertEqual([], entry["missing_symbols"])
             self.assertIn("requirement", entry)
         optional = {entry["package"]: entry for entry in report["optional"]}
-        self.assertEqual("candidate", optional["mtr"]["status"])
+        # The report carries the status of the lock, never one of its own: mtr
+        # was proven by the defconfig probe, WireGuard was not, and sing-box has
+        # no symbol at all.
+        self.assertEqual("available", optional["mtr"]["status"])
+        self.assertEqual(
+            hard_gate_entry(self.lock, "mtr")["status"], optional["mtr"]["status"]
+        )
         self.assertEqual("enabled", optional["mtr"]["state"])
         self.assertEqual("UNRESOLVED", optional["wireguard"]["status"])
         self.assertEqual("disabled", optional["wireguard"]["state"])
+        self.assertEqual("unsymbolled", optional["sing-box"]["state"])
         excluded = {entry["package"]: entry for entry in report["excluded"]}
         self.assertEqual("disabled", excluded["luci-app-openclash"]["state"])
         self.assertIn("reason", excluded["luci-app-openclash"])
@@ -1267,7 +1340,7 @@ class Nx30ProFirmwareDevicePortVerifierTests(unittest.TestCase):
             self.assertIn("h3c_nx30pro_112M", result.stderr)
 
     def test_the_device_port_does_not_make_the_lock_build_ready(self):
-        result = run_check(LOCK)
+        result = check_lock(unproven_lock())
         self.assertEqual(BUILD_NOT_READY, result.returncode, result.stdout)
         self.assertEqual("", result.stdout.strip())
         self.assertIn("defconfig", result.stderr)
@@ -1379,10 +1452,14 @@ class Nx30ProFirmwareOrchestrationTests(unittest.TestCase):
             self.assertFalse(prepared["artifacts"].exists())
             self.assertFalse((prepared["source"] / "bin").exists())
 
-    def test_check_only_keeps_the_candidate_lock_build_blocked(self):
+    def test_check_only_keeps_an_unproven_lock_build_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:
             prepared = self.prepare(tmp)
-            result = self.run_build(prepared, lock=LOCK, check_only=True)
+            unproven = Path(tmp) / "unproven-lock.json"
+            unproven.write_text(
+                json.dumps(unproven_lock(), indent=2), encoding="utf-8"
+            )
+            result = self.run_build(prepared, lock=unproven, check_only=True)
             self.assertEqual(BUILD_NOT_READY, result.returncode)
             self.assertFalse(prepared["artifacts"].exists())
 
@@ -1899,7 +1976,7 @@ class Nx30ProFirmwareDefconfigProbeTests(unittest.TestCase):
 
     def test_a_blocked_lock_refuses_a_normal_build_but_allows_a_probe(self):
         with tempfile.TemporaryDirectory() as tmp:
-            prepared = self.prepare(tmp)
+            prepared = self.prepare(tmp, lock=unproven_lock())
             blocked = self.run_probe(prepared, probe=False)
             self.assertEqual(BUILD_NOT_READY, blocked.returncode)
             self.assertEqual([], self.stages(prepared))
@@ -1916,7 +1993,7 @@ class Nx30ProFirmwareDefconfigProbeTests(unittest.TestCase):
 
     def test_the_probe_runs_defconfig_and_publishes_no_image(self):
         with tempfile.TemporaryDirectory() as tmp:
-            prepared = self.prepare(tmp)
+            prepared = self.prepare(tmp, lock=unproven_lock())
             result = self.run_probe(prepared)
             self.assertEqual(0, result.returncode, result.stderr)
             # Only the configuration stage ran: no download, no compile.
@@ -1985,7 +2062,7 @@ class Nx30ProFirmwareDefconfigProbeTests(unittest.TestCase):
 
     def test_a_hand_edited_ready_flag_is_refused_even_by_the_probe(self):
         with tempfile.TemporaryDirectory() as tmp:
-            lock = real_lock()
+            lock = unproven_lock()
             lock["build_readiness"]["ready"] = True
             lock["build_readiness"]["blocking"] = []
             prepared = self.prepare(tmp, lock=lock)

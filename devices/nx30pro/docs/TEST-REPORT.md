@@ -6,8 +6,9 @@
 | 层级 | 当前状态 |
 |---|---|
 | 静态实现 | 已完成（源码锁、设备补丁、配置层、最终配置审计、构建编排、工作流定义、文档） |
-| 固件候选构建 | **未触发**：没有运行任何 GitHub Action，本地也**未编译**任何固件或 U-Boot |
-| `make defconfig` 探针 | **未运行**：真实的 `make defconfig` 从未在本仓库执行过。探针入口已实现（`build.sh --probe-defconfig` 与工作流输入 `probe_defconfig`，默认 false），运行它需要单独授权 |
+| 固件候选构建 | **未触发**：至今没有运行过完整构建，本地与 CI 都**未编译**任何固件镜像 |
+| `make defconfig` 探针 | **已通过**：授权运行 run ID `46108752994`，conclusion `success`；18 个硬门禁与 11 个可选工具在真实 `make defconfig` 之后全部 `=y`。见第 1.1 节 |
+| 源码锁 | 由 `source-candidate-build-blocked` 提升为 `source-locked-defconfig-proven`；`firmware_lock.py check` 从退出 **3** 变为退出 **0**，提升依据只有第 1.1 节的探针证据 |
 | 真机验证 | **未授权**，未执行，没有任何设备被接触 |
 | 配对启动链候选构建 | 已通过一次授权运行，产出 BL2 与 FIP，默认布局 `immortalwrt-112m`；运行编号、URL、哈希与门禁证据只记在 [`UBOOT-TEST-REPORT.md`](UBOOT-TEST-REPORT.md)。本文件在固件自己跑过之前不记任何运行编号。这不代表本固件已构建，也不代表两者成对可用 |
 
@@ -27,20 +28,61 @@ Action 连续失败（需求文档记录的最新一次在配置阶段停止，�
 
 ## 1. 已执行的静态验证
 
-以下命令在本次文档任务的工作区里**实际运行**并观察到结果。它们不编译固件，
-不获取源码，不运行真实的 `make defconfig`，也不触发任何工作流。
+以下命令在本工作区**实际运行**并观察到结果。它们不编译固件，也不产出镜像。
+表中带“提升前”的行是探针之前的历史状态，保留它是为了说明这道门禁真的拦过。
 
 | 命令 | 实际结果 |
 |---|---|
-| `python3 -m unittest tests.structure.test_nx30pro_firmware_contract tests.scripts.test_nx30pro_firmware_build tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build tests.workflows.test_workflows` | `Ran 352 tests ... OK`（设备限定的五个模块） |
+| `python3 -m unittest tests.structure.test_nx30pro_firmware_contract tests.scripts.test_nx30pro_firmware_build tests.structure.test_nx30pro_uboot_contract tests.scripts.test_nx30pro_uboot_build tests.workflows.test_workflows` | `Ran 365 tests ... OK`（设备限定的五个模块） |
 | `bash scripts/validate.sh` | 退出 0，输出 `Manifest catalog is valid.` |
-| `python3 devices/nx30pro/build/firmware_lock.py check --lock devices/nx30pro/source-lock.json` | 退出 **3**，stdout 为空（不打印构建计划）；stderr 逐个列出 18 个硬门禁是 candidate，理由是没有任何被授权的 `make defconfig` 探针证明它们在最终 `.config` 里 |
-| `sh devices/nx30pro/build/build.sh --lock devices/nx30pro/source-lock.json --check-only` | 退出 **3**，与上一条同一条错误；没有创建产物目录、没有克隆源码或 feed |
-| `python3 tools/manifest.py resolve --distribution immortalwrt-mt798x --device nx30pro --require-build-ready` | 退出 **3**，输出 `source revision is UNRESOLVED` |
+| `python3 devices/nx30pro/build/firmware_lock.py check --lock devices/nx30pro/source-lock.json` | 提升前退出 **3**（stdout 为空，stderr 逐个列出 18 个硬门禁只是 candidate）；探针通过后退出 **0** 并渲染构建计划 |
+| `sh devices/nx30pro/build/build.sh --lock devices/nx30pro/source-lock.json --check-only` | 提升前退出 **3**，与上一条同因；探针通过后退出 **0** |
+| `python3 tools/manifest.py resolve --distribution immortalwrt-mt798x --device nx30pro --require-build-ready` | 提升前退出 **3**，输出 `source revision is UNRESOLVED`；`manifests/sources.json` 落实锁定 revision 后退出 **0** |
 
-即：**构建被阻止**。`manifests/sources.json` 里 `immortalwrt-mt798x` 的 revision 保持
-UNRESOLVED，只有被授权的探针通过之后才会写成锁定 commit；在那之前
-`--require-build-ready` 与 `scripts/build.sh` 都停在状态码 3。
+提升之前构建是被阻止的：`manifests/sources.json` 里 `immortalwrt-mt798x` 的 revision
+是 UNRESOLVED，`--require-build-ready` 与 `scripts/build.sh` 都停在状态码 3。
+探针通过之后该 revision 才写成锁定 commit `740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6`。
+`firmware_lock.py` 的 `build_readiness` 是从软件包表**重算**的，手改 `ready` 而硬门禁
+仍未证明本身就是错误，所以这道门不能被绕过。
+
+### 1.1 已执行的远程验证：`make defconfig` 探针
+
+| 项 | 值 |
+|---|---|
+| run ID | `46108752994` |
+| URL | https://github.com/ice2015/OpenWrt_2016/actions/runs/46108752994 |
+| 触发方式 | `.github/workflows/build-nx30pro.yml`，`workflow_dispatch`，输入 `probe_defconfig=true` |
+| 分支 / commit | `codex/nx30pro-firmware-build` @ `01140b6` |
+| 结论 | `success` |
+| 产物 | `nx30pro-firmware-defconfig-probe`（`probe/final.config`、`probe/config-audit.json`、`probe/seed.config`、`probe/pre-defconfig.config`、`probe/pre-defconfig-context.txt`、`probe/defconfig-diff.txt`、`probe/configure.log`） |
+
+探针做了什么：按锁定 commit 取源码与四个锁定 feed → 应用两个设备补丁 →
+`verify-device-tree` 与 `verify-image-rules` → 合并三层配置 → `./scripts/feeds update/install`
+→ 真实 `make defconfig` → `verify-config --probe` 审计**最终** `.config`。
+
+探针证明了什么：
+
+| 结论 | 证据 |
+|---|---|
+| 112M profile 在真实 buildroot 里成立 | `final.config` 有 `CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y` |
+| 18 个硬门禁全部存活 | `config-audit.json` 的 `errors` 为空，18 个硬门禁 `state` 全为 `enabled` |
+| 41 个枚举依赖全部存活 | 同一审计里 `luci-ssl-openssl`、`luci-app-passwall`、`dockerd` 的依赖无缺失 |
+| 11 个可选工具可用 | 审计中 `ddns-scripts-cloudflare`、`frpc`、`dnsmasq-full`、`sqm-scripts`、`nlbwmon`、`etherwake`、`ttyd`、`openssh-sftp-server`、`tcpdump-mini`、`iperf3`、`mtr` 全为 `enabled` |
+| 排除项没有被启用 | `luci-app-openclash`、`adguardhome` 显式 `is not set`；`homeproxy`、`passwall2`、`sing-box` 在 `final.config` 中不存在 |
+| seed 确实送达 defconfig | `pre-defconfig-context.txt`：`.config` 148 行、35 个 `=y`；四个 feed 符号链接树齐备，1826 个已安装 feed 包 |
+
+探针**没有**证明什么：没有编译任何固件，没有产出 `factory.bin` 或 `sysupgrade.bin`，
+没有镜像大小、没有 SHA-256、没有最终文件名；WireGuard 在 `final.config` 里是
+`is not set`，这证明它没被启用，**不**证明它能为本目标构建，因此保持 UNRESOLVED；
+`luci-app-tailscale` 在锁定 luci feed 中不存在，仍是缺口。
+
+前四次探针运行失败，每次都从 runner 日志定位到 NX30PRO 范围内的真实缺陷并修复：
+job 级 `env` 里用了不可用的 `runner` 上下文（工作流无法解析，dispatch 被 422 拒绝）、
+`set -o pipefail` 下 `make --version | head -1` 触发 SIGPIPE、`build.sh` 从环境变量读取
+revision pin 导致工作流内测试互相污染、preflight 把该底座**纳入版本控制的** `dl/`
+误判为上次构建残留。第五次失败给出了根因：`./scripts/feeds update/install` 会重新生成
+`.config`，把 seed 冲掉（defconfig 前一刻实测 3287 行、552 个 `=y`），因此 seed 改为在
+feed 步骤之后、`make defconfig` 之前写入。
 
 工作流的静态前置检查也是设备限定的：`bash scripts/validate.sh` 加上三个模块
 （`tests.structure.test_nx30pro_firmware_contract`、`tests.scripts.test_nx30pro_firmware_build`、
@@ -57,7 +99,7 @@ UNRESOLVED，只有被授权的探针通过之后才会写成锁定 commit；在
 
 | 项 | 状态 | 需要什么 |
 |---|---|---|
-| `make defconfig` 硬门禁探针 | 未运行 | 用户单独授权后，以 `probe_defconfig=true` 手动运行 `.github/workflows/build-nx30pro.yml`（或等价的 `build.sh --probe-defconfig`）：装齐四个锁定 feed，对 mediatek/mt7981 跑真实 `make defconfig`，并用 `verify-config --probe` 证明 18 个硬门禁仍是 `=y`。探针只产出 `probe/final.config` 与 `probe/config-audit.json`，不编译、不产出镜像 |
+| `make defconfig` 硬门禁探针 | **已通过**，见第 1.1 节 | 无；证据已归档在 `nx30pro-firmware-defconfig-probe` |
 | GitHub Actions 候选构建 | **未触发** | 用户明确授权后手动运行 `.github/workflows/build-nx30pro.yml`（只有 `workflow_dispatch`，`permissions: contents: read`，不使用 Secrets） |
 | 镜像产物与 SHA-256 | 不存在 | 授权构建产出的 `images/SHA256SUMS`、`build-report.json`、`final.config`、`packages.txt`、`feeds-lock.json`、`IMAGE-ROLES.txt` 与 `logs/` |
 | 最终镜像文件名 | UNRESOLVED | 第一次真实构建列出的 `bin/targets/mediatek/mt7981` 目录内容 |

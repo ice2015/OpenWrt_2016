@@ -40,6 +40,14 @@ REJECTED_REVISION = "78cf22edddf07443d8f0506c9f361d3498475189"
 FEED_IDS = ("packages", "luci", "routing", "telephony")
 PACKAGE_STATUSES = ("candidate", "available", "partial", "unavailable", "UNRESOLVED")
 
+# The authorized `make defconfig` probe that promoted the source lock: one
+# GitHub Actions run of .github/workflows/build-nx30pro.yml, dispatched with
+# probe_defconfig=true, whose artifact carries the final .config the lock cites
+# as its evidence. Pinned here so no document or lock entry can name another run.
+PROBE_RUN = "46108752994"
+PROBE_RUN_URL = "https://github.com/ice2015/OpenWrt_2016/actions/runs/46108752994"
+PROBE_ARTIFACT = "nx30pro-firmware-defconfig-probe"
+
 # The release hard gates of the approved design. Every one of them has to
 # survive a real `make defconfig`, otherwise the source/feed combination is
 # rejected before compilation.
@@ -660,20 +668,40 @@ class Nx30ProFirmwareSourceLockTests(unittest.TestCase):
         self.assertTrue(selection["api_generation"])
         self.assertIn("frozen", selection["drift_note"].lower())
 
-    def test_lock_stays_build_blocked_until_a_defconfig_probe_is_authorized(self):
+    def test_lock_records_the_probe_that_made_it_build_ready(self):
         lock = self.load_lock()
         readiness = lock["build_readiness"]
-        self.assertIs(False, readiness["ready"])
-        self.assertTrue(readiness["blocking"])
-        self.assertIn("defconfig", readiness["required_evidence"])
-        # Nothing may claim a proven package before the probe ran.
+        self.assertIs(True, readiness["ready"])
+        self.assertEqual([], readiness["blocking"])
+        # The readiness record names the run and the files it produced, so the
+        # promotion stays traceable to one authorized probe.
+        for fact in (
+            PROBE_RUN,
+            PROBE_RUN_URL,
+            PROBE_ARTIFACT,
+            "final.config",
+            "config-audit.json",
+            "make defconfig",
+        ):
+            self.assertIn(fact, readiness["required_evidence"])
+        # What the probe did not prove stays recorded next to what it proved.
+        self.assertIn("compil", readiness["not_proved_by_this_evidence"].lower())
+        self.assertIn("image", readiness["not_proved_by_this_evidence"].lower())
+        # Only a package the probe proved may call itself available, and it has
+        # to name the run and the final .config that proved it.
+        statuses = {}
         for entry in lock["packages"]:
-            self.assertNotEqual(
-                "available",
-                entry["status"],
-                "%s claims to be available without defconfig evidence"
-                % entry["package"],
-            )
+            statuses[entry["package"]] = entry["status"]
+            if entry["status"] != "available":
+                continue
+            evidence = entry.get("defconfig_evidence") or ""
+            self.assertIn(PROBE_RUN, evidence, entry["package"])
+            self.assertIn(PROBE_ARTIFACT, evidence, entry["package"])
+            self.assertIn("final.config", evidence, entry["package"])
+        # The probe proved WireGuard stays off, not that it builds, and it found
+        # no sing-box symbol in the pinned feeds or in the final configuration.
+        self.assertEqual("UNRESOLVED", statuses["wireguard"])
+        self.assertEqual("unavailable", statuses["sing-box"])
 
     def test_lock_uses_the_same_partition_contract_as_the_boot_loader(self):
         lock = self.load_lock()
@@ -748,7 +776,12 @@ class Nx30ProFirmwareSourceLockTests(unittest.TestCase):
             self.assertTrue(item.get("needed"))
             topics.append(item["topic"])
         self.assertTrue(any("WireGuard" in topic for topic in topics), topics)
-        self.assertTrue(any("defconfig" in topic for topic in topics), topics)
+        # The hard gate proof is no longer an open item: the probe ran, so the
+        # lock records what it produced instead of still asking for it.
+        self.assertFalse(any("defconfig" in topic for topic in topics), topics)
+        evidence = self.load_lock()["build_readiness"]["required_evidence"]
+        self.assertIn(PROBE_RUN, evidence)
+        self.assertIn("final.config", evidence)
 
 
 class Nx30ProFirmwarePackageGateTests(unittest.TestCase):
@@ -973,13 +1006,13 @@ class Nx30ProFirmwareDeviceLayerTests(unittest.TestCase):
         self.assertEqual(["devices/nx30pro/config.config"], manifest["config_layers"])
         self.assertEqual(["devices/nx30pro/feeds.conf"], manifest["feed_layers"])
 
-    def test_manifest_keeps_the_unproven_candidate_build_blocked(self):
-        """The generic build entry point must not accept an unproven source.
+    def test_manifest_carries_the_locked_revision_only_because_the_probe_passed(self):
+        """The generic build entry point follows the device lock, never leads it.
 
-        `manifests/sources.json` becomes equal to the device source lock only
-        after a defconfig probe proved every hard gate. Until then it keeps the
-        repository wide UNRESOLVED gate closed, so `scripts/build.sh` and
-        `tools/manifest.py resolve --require-build-ready` stop with status 3
+        `manifests/sources.json` is equal to the device source lock only after a
+        defconfig probe proved every hard gate; while the lock is not ready it
+        keeps the repository wide UNRESOLVED gate closed, so `scripts/build.sh`
+        and `tools/manifest.py resolve --require-build-ready` stop with status 3
         instead of downloading the rejected or unproven source.
         """
         sources = json.loads(SOURCES.read_text(encoding="utf-8"))
@@ -990,9 +1023,10 @@ class Nx30ProFirmwareDeviceLayerTests(unittest.TestCase):
         self.assertEqual(SOURCE_REPOSITORY, entry["repository"])
         if lock["build_readiness"]["ready"]:
             self.assertEqual(lock["source"]["revision"], entry["revision"])
+            self.assertIn(PROBE_RUN, lock["build_readiness"]["required_evidence"])
         else:
             self.assertEqual("UNRESOLVED", entry["revision"])
-            self.assertNotEqual(REJECTED_REVISION, entry["revision"])
+        self.assertNotEqual(REJECTED_REVISION, entry["revision"])
 
 
 class Nx30ProFirmwareDocumentTests(unittest.TestCase):
@@ -1199,7 +1233,12 @@ class Nx30ProFirmwareDevicePortTests(unittest.TestCase):
         port = self.lock["device_port"]
         self.assertEqual("static-source-check", port["verification"])
         self.assertIn("not", port["verification_note"].lower())
-        self.assertFalse(self.lock["build_readiness"]["ready"])
+        # The port record still claims no compile of its own: what makes the
+        # lock build ready is the defconfig probe recorded in build_readiness.
+        self.assertIn("no firmware was compiled", port["verification_note"])
+        self.assertIn(
+            PROBE_RUN, self.lock["build_readiness"]["required_evidence"]
+        )
 
     def test_mac_patch_documents_a_source_that_survives_the_missing_pdt_data_1(self):
         added = added_lines(self.mac_patch, NETWORK_FILE)
@@ -1813,6 +1852,12 @@ FORBIDDEN_IN_FLASH_DOCS = FORBIDDEN_COMMANDS + ("/dev/mtd", "nanddump", "dd if="
 # documents next to their source, and in the boot loader contract.
 RAW_OFFSET = re.compile(r"0x[0-9a-fA-F]{4,}")
 
+# A line that states a run id, and an Actions run link. Both are matched per
+# line so the authorized probe run can be pinned while every other number stays
+# forbidden.
+RUN_ID_LINE = re.compile(r"run[ _]?[Ii][Dd][^\n]*[0-9]{6,}")
+ACTIONS_RUN_URL = re.compile(r"actions/runs/(\d+)")
+
 FORBIDDEN_CLAIMS = (
     "真机验证通过",
     "已真机验证",
@@ -1825,9 +1870,10 @@ FORBIDDEN_CLAIMS = (
 )
 
 # One keyword per UNRESOLVED topic of the source lock. The count is compared
-# with the lock, so a new unresolved fact forces the documents to grow.
+# with the lock, so a new unresolved fact forces the documents to grow. The
+# hard gate `make defconfig` proof is gone from this list on purpose: the
+# authorized probe run supplied it, so it is recorded evidence now, not a gap.
 UNRESOLVED_KEYWORDS = (
-    "make defconfig",
     "profile",
     "WAN MAC",
     "Factory",
@@ -1896,6 +1942,19 @@ class Nx30ProFirmwareDocumentationTests(unittest.TestCase):
                     feed["revision"], text, "%s: %s" % (key, feed["revision"])
                 )
 
+    def status_cells(self, row):
+        """The package status cells of one markdown table row.
+
+        A cell has to match a status exactly, so the `unavailable` cell of the
+        sing-box row can never read as an `available` claim.
+        """
+        cells = []
+        for cell in row.split("|"):
+            value = cell.strip().strip("`").strip()
+            if value in PACKAGE_STATUSES:
+                cells.append(value)
+        return cells
+
     def test_documents_carry_the_exact_package_status_table(self):
         for key in ("build", "compatibility"):
             text = self.text(key)
@@ -1917,10 +1976,16 @@ class Nx30ProFirmwareDocumentationTests(unittest.TestCase):
                         any(symbol in row for row in rows for symbol in entry["symbols"]),
                         "%s names no symbol of %s" % (key, entry["package"]),
                     )
+                # Every status cell of those rows is the status of the lock, so
+                # a document may not promote a package the probe did not prove.
+                for row in rows:
+                    for cell in self.status_cells(row):
+                        self.assertEqual(
+                            entry["status"], cell, "%s: %s" % (key, row)
+                        )
+            # The candidate state stays named: no build produced a firmware
+            # candidate yet, and the documents have to keep saying so.
             self.assertIn("candidate", text, key)
-            # A status cell of its own: "unavailable |" must not read as
-            # an "available" claim.
-            self.assertNotRegex(text, r"(?m)\|\s*available\s*\|", key)
 
     def test_documents_carry_the_exclusions_with_their_clash_handling(self):
         for key in ("build", "compatibility"):
@@ -1988,7 +2053,19 @@ class Nx30ProFirmwareDocumentationTests(unittest.TestCase):
                 self.assertNotIn(command, text, "%s contains %s" % (key, command))
             for claim in FORBIDDEN_CLAIMS:
                 self.assertNotIn(claim, text, "%s claims %s" % (key, claim))
-            self.assertNotRegex(text, r"run[ _]?[Ii][Dd][^\n]*[0-9]{6,}", key)
+            # A run id may only be the one an authorized run really produced,
+            # so it can never be invented or silently replaced in a document.
+            for line in text.splitlines():
+                if RUN_ID_LINE.search(line):
+                    self.assertIn(
+                        PROBE_RUN, line, "%s names a foreign run id: %s" % (key, line)
+                    )
+                for run in ACTIONS_RUN_URL.findall(line):
+                    self.assertEqual(
+                        PROBE_RUN, run, "%s links a foreign run: %s" % (key, line)
+                    )
+            # No firmware document carries an artifact digest: no firmware
+            # candidate was built, so there is nothing to hash yet.
             self.assertNotRegex(text, r"\b[0-9a-f]{64}\b", key)
 
     def test_documents_pair_the_firmware_with_the_locked_boot_loader(self):
@@ -2076,6 +2153,13 @@ class Nx30ProFirmwareDocumentationTests(unittest.TestCase):
         self.assertIn("--check-only", text)
         self.assertRegex(text, r"Ran \d+ tests")
         self.assertIn("OK", text)
+        # The defconfig probe is the one run this report may name, and it has to
+        # stay a configuration probe: no candidate build, no image, no device.
+        self.assertIn(PROBE_RUN, text)
+        self.assertIn(PROBE_RUN_URL, text)
+        self.assertIn(PROBE_ARTIFACT, text)
+        self.assertIn("final.config", text)
+        self.assertIn("success", text)
         for phrase in ("should pass", "应该通过", "预计通过", "将会通过"):
             self.assertNotIn(phrase, text)
 
