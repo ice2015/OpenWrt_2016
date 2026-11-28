@@ -548,16 +548,46 @@ class Nx30ProUbootDocumentationTests(unittest.TestCase):
             # and where it reads the WAN MAC from stays unresolved.
             self.assertIn("UNRESOLVED", row)
 
+    # Evidence of the first authorized candidate build. The literals are pinned
+    # here so that a digest or a run id can never be invented or silently
+    # replaced in the report: every value the report carries must be one that
+    # an actual run produced and that a reviewer copied from its artifact.
+    AUTHORIZED_UBOOT_RUN = "46096386417"
+    AUTHORIZED_UBOOT_RUN_URL = (
+        "https://github.com/ice2015/OpenWrt_2016/actions/runs/46096386417"
+    )
+    AUTHORIZED_UBOOT_SHA256 = {
+        # bl2-mt7981_h3c_magic-nx30-pro_SP1_md5-d790ec64347cf25ace5ec867f0bbb113.img
+        "6498a8e73fc331dd533d9466839453cc9ef66e2464b0a179c95d7950e4e7298e",
+        # fip-...-SP1-Yuzhii-dhcpd-fixed-parts-multi-layout_md5-b89addb7e585fe8848948a3af85512b2.bin
+        "c0ea269471d40a2431ba3dcf067123098b122dbe1000d8e1bc12f423d3b6bd43",
+        # the aarch64-linux-gnu-gcc binary of the runner that produced them
+        "cd90adc7801f4595267f61a5d25bd3a0c6beb2f9f1f107ab919a97a12972dc9a",
+    }
+
     def test_the_test_report_records_only_what_actually_happened(self):
         text = self.text("report")
         self.assertIn("静态", text)
-        self.assertIn("未触发", text)
-        self.assertIn("未编译", text)
         self.assertIn("UNRESOLVED", text)
         self.assertIn("授权", text)
-        # No run id, hash or device result may be invented before it exists.
-        self.assertNotRegex(text, r"run[ _]?id[^\n]*[0-9]{8,}")
-        self.assertNotRegex(text, r"\b[0-9a-f]{64}\b")
+        # A candidate build is still not a device validation.
+        self.assertIn("candidate-not-verified-on-device", text)
+        self.assertIn("真机验证", text)
+        self.assertIn("未授权", text)
+        # The authorized run has to stay traceable.
+        self.assertIn(self.AUTHORIZED_UBOOT_RUN, text)
+        self.assertIn(self.AUTHORIZED_UBOOT_RUN_URL, text)
+        # Every 64 hex digest in the report must be one a real run produced.
+        digests = set(re.findall(r"\b[0-9a-f]{64}\b", text))
+        self.assertTrue(digests, "the report records no artifact digest at all")
+        self.assertLessEqual(
+            digests,
+            self.AUTHORIZED_UBOOT_SHA256,
+            "the report carries a digest that no recorded run produced",
+        )
+        # A run id may only appear as the recorded one.
+        for line in re.findall(r"(?mi)^.*run\s*id[:：].*$", text):
+            self.assertIn(self.AUTHORIZED_UBOOT_RUN, line)
 
     def test_the_build_document_gives_the_reproducible_inputs_and_the_gate(self):
         text = self.text("build")
