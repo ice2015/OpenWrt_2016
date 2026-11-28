@@ -355,8 +355,19 @@ def stub_source(directory):
     feeds.chmod(0o755)
     # The pinned tree ignores the generated feeds.conf, the image output and
     # the overlay directory as well, so they are not local changes.
-    (source / ".gitignore").write_text("/bin\n/feeds.conf\n/files\n", encoding="utf-8")
+    (source / ".gitignore").write_text(
+        "/bin\n/build_dir\n/staging_dir\n/dl/*\n/feeds.conf\n/files\n",
+        encoding="utf-8",
+    )
+    # The pinned base TRACKS a dl directory with pre-downloaded vendor blobs
+    # (mt79xx, datconf, warp tarballs) even though .gitignore lists /dl/*.
+    # A pristine checkout therefore has one, and it is not build output.
+    (source / "dl").mkdir(parents=True, exist_ok=True)
+    (source / "dl" / "mt79xx_20231229-4012a0.tar.xz").write_bytes(b"vendored blob")
     init_repo(source)
+    # Upstream tracks those blobs although .gitignore lists /dl/*, so a
+    # faithful pristine checkout has to force-add them.
+    git(source, "add", "-f", "dl")
     return source, commit_all(source, "pinned")
 
 
@@ -1537,6 +1548,42 @@ class Nx30ProFirmwareOrchestrationTests(unittest.TestCase):
             hashes = (artifact / "images" / "SHA256SUMS").read_text(encoding="utf-8")
             self.assertIn(FACTORY_NAME, hashes)
             self.assertIn(SYSUPGRADE_NAME, hashes)
+
+    def test_a_tracked_download_directory_of_the_pinned_base_is_not_stale_output(self):
+        """The pinned base tracks dl/ with vendor blobs; a fresh checkout has it.
+
+        Probe run 46102715404 died here: preflight refused the pristine clone
+        with "the source directory holds output of an earlier build: dl".
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            self.assertTrue((prepared["source"] / "dl").is_dir())
+            result = self.run_build(prepared)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertNotIn("earlier build", result.stderr)
+
+    def test_untracked_content_in_an_output_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            # Ignored by the tree's .gitignore, so the dirty check stays quiet;
+            # only the stale output gate can see it.
+            (prepared["source"] / "dl" / "leftover.tar.xz").write_bytes(b"stale")
+            result = self.run_build(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("earlier build", result.stderr)
+            self.assertIn("leftover.tar.xz", result.stderr)
+            self.assertEqual([], self.stages(prepared))
+
+    def test_a_stale_image_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            stale = prepared["source"] / "bin" / "targets" / "mediatek" / "mt7981"
+            stale.mkdir(parents=True)
+            (stale / "old-image.bin").write_bytes(b"stale")
+            result = self.run_build(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("earlier build", result.stderr)
+            self.assertEqual([], self.stages(prepared))
 
     def test_an_ambient_source_revision_in_the_environment_changes_nothing(self):
         """Regression from the authorized probe run 46100893835.

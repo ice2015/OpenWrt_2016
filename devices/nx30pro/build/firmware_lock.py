@@ -1019,6 +1019,37 @@ def locked_patches(lock, repo_root):
     return resolved
 
 
+def untracked_output(source_dir, name):
+    """Return the entries of a build directory that git does not track.
+
+    The pinned base TRACKS a `dl` directory with pre-downloaded vendor blobs
+    even though its .gitignore lists `/dl/*`, so a pristine checkout has one.
+    Existence alone therefore proves nothing: only content that git does not
+    track is the output of an earlier build. Ignored files never appear in
+    `git status`, which is why the dirty tree check cannot catch them.
+    """
+    directory = Path(source_dir) / name
+    if not directory.exists():
+        return []
+    result = subprocess.run(
+        ["git", "-C", str(source_dir), "ls-files", "--", name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise LockError(
+            "the tracked content of %s cannot be listed, so an earlier build "
+            "output cannot be told apart from the pinned source" % name
+        )
+    tracked = {
+        line.split("/")[1] for line in result.stdout.splitlines()
+        if line.strip() and "/" in line
+    }
+    actual = {entry.name for entry in directory.iterdir()}
+    return sorted(actual - tracked)
+
+
 def preflight(lock, source_dir, feed_dir, repo_root=None, allow_probe=False):
     """Run every check that has to pass before anything is downloaded.
 
@@ -1049,10 +1080,11 @@ def preflight(lock, source_dir, feed_dir, repo_root=None, allow_probe=False):
             "the source checkout carries local changes: %s" % ", ".join(dirty[:5])
         )
     for leftover in ("bin", "build_dir", "staging_dir", "dl"):
-        if (source_dir / leftover).exists():
+        untracked = untracked_output(source_dir, leftover)
+        if untracked:
             raise LockError(
-                "the source directory holds output of an earlier build: %s"
-                % leftover
+                "the source directory holds output of an earlier build: %s (%s)"
+                % (leftover, ", ".join(untracked[:5]))
             )
 
     feeds = []
