@@ -1622,6 +1622,28 @@ class Nx30ProFirmwareOrchestrationTests(unittest.TestCase):
             self.assertIn("does not match the lock", result.stderr)
             self.assertEqual([], self.stages(prepared))
 
+    def test_the_configuration_stage_keeps_the_seed_it_fed_to_defconfig(self):
+        """Probe run 46104392303 could not be diagnosed without this.
+
+        The audit showed 24 of the 35 requested symbols off in the final
+        .config, and nothing proved what defconfig actually received. The
+        merged seed, the .config handed to defconfig and the diff defconfig
+        produced are all evidence now.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_build(prepared)
+            self.assertEqual(0, result.returncode, result.stderr)
+            logs = prepared["artifacts"] / "logs"
+            seed = (logs / "seed.config").read_text(encoding="utf-8")
+            self.assertIn("CONFIG_PACKAGE_luci-app-passwall=y", seed)
+            self.assertIn(
+                "CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y", seed
+            )
+            before = (logs / "pre-defconfig.config").read_text(encoding="utf-8")
+            self.assertEqual(seed, before)
+            self.assertTrue((logs / "defconfig-diff.txt").is_file())
+
     def test_a_build_that_only_configured_is_never_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             prepared = self.prepare(tmp)
@@ -1926,6 +1948,19 @@ class Nx30ProFirmwareDefconfigProbeTests(unittest.TestCase):
             self.assertIn("luci-app-passwall", missing)
             self.assertFalse((artifacts / "images").exists())
             self.assertFalse((artifacts / "build-report.json").exists())
+
+    def test_the_probe_publishes_the_seed_next_to_the_final_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_probe(prepared)
+            self.assertEqual(0, result.returncode, result.stderr)
+            probe = prepared["artifacts"] / "probe"
+            self.assertTrue((probe / "seed.config").is_file())
+            self.assertIn(
+                "CONFIG_PACKAGE_luci-app-passwall=y",
+                (probe / "seed.config").read_text(encoding="utf-8"),
+            )
+            self.assertTrue((probe / "defconfig-diff.txt").is_file())
 
     def test_the_probe_refuses_a_structurally_invalid_lock(self):
         with tempfile.TemporaryDirectory() as tmp:

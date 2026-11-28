@@ -221,6 +221,18 @@ trap 'rm -f "$TEMP_CONFIG"' EXIT HUP INT TERM
 merge_layers "$TEMP_CONFIG"
 cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 
+# Evidence of what defconfig received. Without it a final configuration that
+# lost a requested package cannot be diagnosed: nothing shows whether the seed
+# asked for it or defconfig dropped it.
+keep_evidence() {
+	if [ -n "$LOG_DIR" ]; then
+		mkdir -p "$LOG_DIR"
+		cp "$1" "$LOG_DIR/$2"
+	fi
+}
+keep_evidence "$TEMP_CONFIG" seed.config
+keep_evidence "$SOURCE_DIR/.config" pre-defconfig.config
+
 (
 	cd "$SOURCE_DIR"
 	./scripts/feeds update -a
@@ -229,6 +241,13 @@ cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 	./scripts/feeds install -a -f
 	make defconfig
 )
+
+if [ -n "$LOG_DIR" ]; then
+	mkdir -p "$LOG_DIR"
+	# What defconfig changed relative to the seed it was given.
+	diff -u "$LOG_DIR/pre-defconfig.config" "$SOURCE_DIR/.config" \
+		> "$LOG_DIR/defconfig-diff.txt" || true
+fi
 
 evidence final-config.json python3 "$HELPER" verify-config --lock "$LOCK" --config "$SOURCE_DIR/.config" $PROBE_FLAG ||
 	{

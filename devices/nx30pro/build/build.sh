@@ -326,6 +326,13 @@ if [ "$PROBE" = "1" ]; then
 	if [ -f "$LOGS/final-config.json" ]; then
 		cp "$LOGS/final-config.json" "$ARTIFACT_DIR/probe/config-audit.json"
 	fi
+	# The seed and the diff defconfig produced are the evidence that says
+	# whether a lost package was never requested or was dropped.
+	for evidence in seed.config pre-defconfig.config defconfig-diff.txt configure.log; do
+		if [ -f "$LOGS/$evidence" ]; then
+			cp "$LOGS/$evidence" "$ARTIFACT_DIR/probe/$evidence"
+		fi
+	done
 	if [ "$CONFIGURE_STATUS" -eq 0 ]; then
 		printf 'defconfig probe: every hard gate survived the final .config.\n'
 		printf 'Probe evidence is in %s\n' "$ARTIFACT_DIR/probe"
