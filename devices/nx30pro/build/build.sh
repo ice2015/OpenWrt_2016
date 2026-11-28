@@ -35,6 +35,7 @@ ARTIFACT_DIR=
 JOBS=
 CHECK_ONLY=
 PROBE=
+PINNED_REVISION=
 
 usage() {
 	cat <<EOF
@@ -48,6 +49,9 @@ Usage: $0 --lock FILE --source-dir DIR --feed-dir DIR --artifact-dir DIR [--chec
   --probe-defconfig   run the authorized \`make defconfig\` probe: stages 1-4 only,
                       publish probe/final.config and probe/config-audit.json,
                       download nothing else, compile nothing, publish no image
+  --pinned-revision R source revision the caller pins; it has to equal the lock.
+                      Deliberately an argument and not an environment variable:
+                      an ambient value must not change what a build refuses to do
   --jobs N            parallelism of the download and the compile stage
   --repo-root DIR     repository root the recorded device patches live in
 EOF
@@ -97,6 +101,11 @@ while [ "$#" -gt 0 ]; do
 		--probe-defconfig)
 			PROBE=1
 			shift
+			;;
+		--pinned-revision)
+			[ "$#" -ge 2 ] || fail "--pinned-revision requires a value"
+			PINNED_REVISION=$2
+			shift 2
 			;;
 		--help)
 			usage
@@ -188,9 +197,11 @@ PY
 )"
 
 # The caller may pin the revision as well. When it does, both records have to
-# agree, so a stale workflow cannot build another input.
-if [ -n "${SOURCE_REVISION:-}" ] && [ "$SOURCE_REVISION" != "$LOCK_REVISION" ]; then
-	fail "the pinned revision $SOURCE_REVISION does not match the lock $LOCK_REVISION"
+# agree, so a stale workflow cannot build another input. The pin is an explicit
+# argument: reading it from the environment let a job level variable of the
+# workflow leak into every test that ran inside it (probe run 46100893835).
+if [ -n "$PINNED_REVISION" ] && [ "$PINNED_REVISION" != "$LOCK_REVISION" ]; then
+	fail "the pinned revision $PINNED_REVISION does not match the lock $LOCK_REVISION"
 fi
 
 if [ -z "$JOBS" ]; then

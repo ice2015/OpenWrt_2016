@@ -1538,6 +1538,43 @@ class Nx30ProFirmwareOrchestrationTests(unittest.TestCase):
             self.assertIn(FACTORY_NAME, hashes)
             self.assertIn(SYSUPGRADE_NAME, hashes)
 
+    def test_an_ambient_source_revision_in_the_environment_changes_nothing(self):
+        """Regression from the authorized probe run 46100893835.
+
+        The workflow exports SOURCE_REVISION as job level data. When build.sh
+        read that ambient variable as a pin, every orchestration test that ran
+        inside the workflow step inherited it and failed against its repointed
+        stub lock, while the same tests passed locally. A pin has to be an
+        explicit argument; the environment of the caller must not be able to
+        change what a build refuses to do.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            # A value that is a valid commit shape but is not the lock's pin:
+            # an ambient variable like this one must be ignored entirely.
+            prepared["env"]["SOURCE_REVISION"] = "0" * 40
+            result = self.run_build(prepared)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertNotIn("does not match the lock", result.stderr)
+
+    def test_an_explicitly_pinned_revision_that_disagrees_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            command = [
+                "sh", str(BUILD_SCRIPT),
+                "--lock", str(prepared["lock"]),
+                "--source-dir", str(prepared["source"]),
+                "--feed-dir", str(prepared["feed_dir"]),
+                "--artifact-dir", str(prepared["artifacts"]),
+                "--pinned-revision", "0" * 40,
+            ]
+            result = subprocess.run(
+                command, capture_output=True, text=True, env=prepared["env"]
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("does not match the lock", result.stderr)
+            self.assertEqual([], self.stages(prepared))
+
     def test_a_build_that_only_configured_is_never_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             prepared = self.prepare(tmp)

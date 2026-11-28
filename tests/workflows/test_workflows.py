@@ -498,18 +498,34 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("make download", workflow)
         self.assertNotRegex(workflow, r"(?m)^\s*make\s+-j")
 
+    def test_nx30pro_firmware_workflow_pins_the_revision_as_an_argument(self) -> None:
+        """The drift guard is an explicit flag, never an ambient variable.
+
+        build.sh used to read $SOURCE_REVISION from the environment, which made
+        every test that ran inside this workflow inherit the pin and fail.
+        """
+        workflow = self.workflow("build-nx30pro.yml")
+
+        self.assertEqual(
+            2,
+            workflow.count('--pinned-revision "$SOURCE_REVISION"'),
+            "both the lock gate and the build step have to pass the pin",
+        )
+        self.assertIn("SOURCE_REVISION: 740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6", workflow)
+
     def test_nx30pro_firmware_workflow_calls_the_exact_build_interface(self) -> None:
         workflow = self.workflow("build-nx30pro.yml")
 
-        # The interface of the build script, with its four required arguments
-        # and nothing else: no flag that changes the parallelism or the
-        # repository root the recorded device patches are read from.
+        # The interface of the build script: its four required arguments plus
+        # the explicit revision pin, and nothing else. No flag may change the
+        # parallelism or the repository root the device patches are read from.
         self.assertRegex(
             workflow,
             r"sh devices/nx30pro/build/build\.sh \\\n"
             r"\s+--lock devices/nx30pro/source-lock\.json \\\n"
             r"\s+--source-dir [^\n]+\\\n"
             r"\s+--feed-dir [^\n]+\\\n"
+            r"\s+--pinned-revision \"\$SOURCE_REVISION\" \\\n"
             r"\s+--artifact-dir [^\n]+\n",
         )
         for flag in ("--jobs", "--repo-root"):

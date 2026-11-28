@@ -146,6 +146,7 @@ jobs:
           fi
           sh devices/nx30pro/build/build.sh \
             --lock devices/nx30pro/source-lock.json \
+            --pinned-revision "$SOURCE_REVISION" \
             --check-only $PROBE_FLAG | tee "$RUNNER_TEMP/firmware-build-plan.json"
           grep -q 'https://github.com/hanwckf/immortalwrt-mt798x' "$RUNNER_TEMP/firmware-build-plan.json"
           grep -q 'h3c_nx30pro_112M' "$RUNNER_TEMP/firmware-build-plan.json"
@@ -175,6 +176,7 @@ jobs:
             --lock devices/nx30pro/source-lock.json \
             --source-dir "$RUNNER_TEMP/nx30pro-firmware/source" \
             --feed-dir "$RUNNER_TEMP/nx30pro-firmware/feeds" \
+            --pinned-revision "$SOURCE_REVISION" \
             --artifact-dir "$GITHUB_WORKSPACE/firmware-artifact" $PROBE_FLAG
 
       - name: Upload defconfig probe evidence
