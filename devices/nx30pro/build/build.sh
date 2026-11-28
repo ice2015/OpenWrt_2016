@@ -1,9 +1,22 @@
 #!/bin/sh
 # Build the NX30 Pro firmware candidate from the locked source.
 #
-# The script fetches the pinned source and the pinned feeds, prepares the
-# configuration, builds the images and writes the build report. It never
-# flashes anything and it never writes to a flash device.
+# The stages are separated and each one writes its own evidence into
+# <artifact-dir>/logs, so a rejected build can be diagnosed from the uploaded
+# logs alone and a stage that failed keeps what it produced:
+#
+#   1. lock gate              check --lock           logs/build-plan.json
+#   2. source acquisition     git clone/checkout     logs/source.json
+#   3. pre-build verification preflight              logs/preflight.json
+#   4. patch/config preflight configure.sh           logs/configure.log
+#   5. download               make download          logs/download.log
+#   6. compile                make                   logs/build.log
+#   7. image inspection       artifacts              logs/artifacts.json
+#   8. evidence packaging     publish                build-report.json
+#
+# Packaging is the last stage and re-reads the evidence, so a build that only
+# configured successfully is never published as a candidate. This script never
+# flashes anything and never writes to a flash device.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -11,14 +24,25 @@ DEVICE_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$DEVICE_ROOT/../.." && pwd)
 HELPER="$SCRIPT_DIR/firmware_lock.py"
 
-LOCK="$DEVICE_ROOT/source-lock.json"
+LOCK=
 SOURCE_DIR=
-ARTIFACT_DIR=
 FEED_DIR=
+ARTIFACT_DIR=
 JOBS=
+CHECK_ONLY=
 
 usage() {
-	printf 'Usage: %s --artifact-dir DIR [--source-dir DIR] [--feed-dir DIR] [--lock FILE] [--jobs N]\n' "$0"
+	cat <<EOF
+Usage: $0 --lock FILE --source-dir DIR --feed-dir DIR --artifact-dir DIR [--check-only] [--jobs N] [--repo-root DIR]
+
+  --lock FILE         device source lock to build from
+  --source-dir DIR    upstream checkout at the locked revision
+  --feed-dir DIR      directory that holds the pinned feed checkouts
+  --artifact-dir DIR  directory that receives images, evidence, logs and report
+  --check-only        validate the lock and print the resolved build plan
+  --jobs N            parallelism of the download and the compile stage
+  --repo-root DIR     repository root the recorded device patches live in
+EOF
 }
 
 fail() {
@@ -53,6 +77,15 @@ while [ "$#" -gt 0 ]; do
 			JOBS=$2
 			shift 2
 			;;
+		--repo-root)
+			[ "$#" -ge 2 ] || fail "--repo-root requires a value"
+			REPO_ROOT=$2
+			shift 2
+			;;
+		--check-only)
+			CHECK_ONLY=1
+			shift
+			;;
 		--help)
 			usage
 			exit 0
@@ -63,37 +96,64 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
-[ -n "$ARTIFACT_DIR" ] || fail "--artifact-dir is required"
+[ -n "$LOCK" ] || fail "--lock is required"
 [ -f "$LOCK" ] || fail "source lock not found: $LOCK"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v git >/dev/null 2>&1 || fail "git is required"
 
-mkdir -p "$ARTIFACT_DIR/logs" "$ARTIFACT_DIR/images"
-
 LOCK=$(CDPATH= cd -- "$(dirname -- "$LOCK")" && pwd)/$(basename -- "$LOCK")
-PLAN_FILE="$ARTIFACT_DIR/logs/build-plan.json"
-python3 "$HELPER" check --lock "$LOCK" > "$PLAN_FILE" || fail "the source lock is not build ready"
 
-lock_value() {
-	python3 - "$LOCK" "$1" <<'PY'
+# --check-only resolves the lock and nothing else: no directory is created, no
+# source or feed is downloaded and no build is started. A lock that is not
+# build ready prints no plan and stops with the build not ready status.
+if [ "$CHECK_ONLY" = "1" ]; then
+	python3 "$HELPER" check --lock "$LOCK" || exit $?
+	exit 0
+fi
+
+[ -n "$SOURCE_DIR" ] || fail "--source-dir is required"
+[ -n "$FEED_DIR" ] || fail "--feed-dir is required"
+[ -n "$ARTIFACT_DIR" ] || fail "--artifact-dir is required"
+
+mkdir -p "$ARTIFACT_DIR/logs" "$ARTIFACT_DIR/images"
+LOGS="$ARTIFACT_DIR/logs"
+
+# Stage 1: the lock gate. Nothing is downloaded before it rendered a plan.
+PLAN_FILE="$LOGS/build-plan.json"
+python3 "$HELPER" check --lock "$LOCK" > "$PLAN_FILE" ||
+	fail "the source lock is not build ready"
+
+plan_value() {
+	python3 - "$PLAN_FILE" "$1" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
-    lock = json.load(handle)
-value = lock
+    plan = json.load(handle)
 for key in sys.argv[2].split("."):
-    value = value[key]
-print(value)
+    plan = plan[key]
+print(plan)
 PY
 }
 
-SOURCE_REPOSITORY=$(lock_value source.repository)
-LOCK_REVISION=$(lock_value source.revision)
-PROFILE=$(lock_value target.profile)
-SUBTARGET=$(lock_value target.subtarget)
-TARGET=$(lock_value target.target)
-IMAGE_SIZE_KIB=$(lock_value image.image_size_kib)
+SOURCE_REPOSITORY=$(plan_value source_repository)
+LOCK_REVISION=$(plan_value source_revision)
+PROFILE=$(python3 - "$LOCK" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["target"]["profile"])
+PY
+)
+PATCH_DIR="$REPO_ROOT/$(python3 - "$LOCK" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(json.load(handle)["device_port"]["patch_layer"])
+PY
+)"
 
 # The caller may pin the revision as well. When it does, both records have to
 # agree, so a stale workflow cannot build another input.
@@ -109,120 +169,161 @@ if [ -z "$JOBS" ]; then
 	[ "$JOBS" -gt 3 ] && JOBS=3
 fi
 
-# The source is prepared in a clean directory. A checkout that carries local
-# changes or an earlier build is refused, so that a result can always be
-# attributed to the pinned commit.
-if [ -z "$SOURCE_DIR" ]; then
-	SOURCE_DIR="$ARTIFACT_DIR/source"
-fi
-mkdir -p "$SOURCE_DIR"
+# Stage 2: source and feed acquisition at the pinned revisions. A checkout that
+# already exists is verified in the next stage instead of being re-created, so
+# a result can always be attributed to the pinned commit.
+mkdir -p "$SOURCE_DIR" "$FEED_DIR"
 if [ ! -d "$SOURCE_DIR/.git" ]; then
 	printf 'Cloning the pinned source %s\n' "$LOCK_REVISION"
-	git clone --filter=blob:none --no-checkout "$SOURCE_REPOSITORY" "$SOURCE_DIR" ||
+	git clone --filter=blob:none --no-checkout "$SOURCE_REPOSITORY" "$SOURCE_DIR" >>"$LOGS/source.json.log" 2>&1 ||
 		fail "the source could not be cloned"
-fi
-git -C "$SOURCE_DIR" checkout --detach "$LOCK_REVISION" ||
-	fail "the pinned source revision could not be checked out"
-ACTUAL_REVISION=$(git -C "$SOURCE_DIR" rev-parse HEAD)
-[ "$ACTUAL_REVISION" = "$LOCK_REVISION" ] ||
-	fail "the source checkout is at $ACTUAL_REVISION, the lock pins $LOCK_REVISION"
-if [ -n "$(git -C "$SOURCE_DIR" status --porcelain)" ]; then
-	fail "the source checkout carries local changes"
-fi
-if [ -d "$SOURCE_DIR/output" ] && [ -n "$(ls -A "$SOURCE_DIR/output" 2>/dev/null)" ]; then
-	fail "the source directory holds output of an earlier build"
+	git -C "$SOURCE_DIR" checkout --detach "$LOCK_REVISION" >>"$LOGS/source.json.log" 2>&1 ||
+		fail "the pinned source revision could not be checked out"
 fi
 
-# The feeds are pinned to their commits, so the build input does not drift
-# with the moving branches.
-if [ -z "$FEED_DIR" ]; then
-	FEED_DIR="$ARTIFACT_DIR/feeds"
+# The feeds are pinned to their commits, so the build input does not drift with
+# the moving branches. Every locked feed is mirrored here and the same pin is
+# handed to the buildroot through feeds.conf.
+python3 - "$LOCK" "$FEED_DIR" "$SOURCE_DIR" <<'PY' || fail "the pinned feeds could not be acquired"
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+lock_path, feed_dir, source_dir = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+with open(lock_path, encoding="utf-8") as handle:
+    lock = json.load(handle)
+
+lines = []
+for feed in lock["feeds"]:
+    lines.append(
+        "src-git-full %s %s^%s" % (feed["id"], feed["repository"], feed["revision"])
+    )
+    target = feed_dir / feed["id"]
+    if (target / ".git").is_dir():
+        continue
+    subprocess.run(
+        ["git", "clone", "--filter=blob:none", "--no-checkout",
+         feed["repository"], str(target)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(target), "checkout", "--detach", feed["revision"]],
+        check=True,
+    )
+
+(source_dir / "feeds.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
+(feed_dir / "feeds.conf").write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+
+python3 - "$LOCK" "$SOURCE_DIR" "$FEED_DIR" "$JOBS" > "$LOGS/source.json" <<'PY'
+import json
+import subprocess
+import sys
+
+
+def head(path):
+    return subprocess.run(
+        ["git", "-C", path, "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+
+
+lock_path, source_dir, feed_dir, jobs = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+with open(lock_path, encoding="utf-8") as handle:
+    lock = json.load(handle)
+print(json.dumps(
+    {
+        "source_revision": head(source_dir),
+        "locked_revision": lock["source"]["revision"],
+        "feeds": {feed["id"]: head("%s/%s" % (feed_dir, feed["id"])) for feed in lock["feeds"]},
+        "jobs": int(jobs),
+    },
+    indent=2,
+    sort_keys=True,
+))
+PY
+
+# Stage 3: the pre-build verification. It refuses a wrong source revision, a
+# dirty checkout, the output of an earlier build, a feed that moved and a
+# device patch that does not apply, all before anything is downloaded.
+python3 "$HELPER" preflight --lock "$LOCK" --source-dir "$SOURCE_DIR" \
+	--feed-dir "$FEED_DIR" --repo-root "$REPO_ROOT" --out "$LOGS/preflight.json" \
+	> "$LOGS/preflight.stdout" ||
+	fail "the pre-build verification failed, nothing was downloaded or compiled"
+
+printf 'Building %s for %s from %s\n' \
+	"$(plan_value target.target)/$(plan_value target.subtarget)" \
+	"$PROFILE" "$LOCK_REVISION"
+
+# Stage 4: patches, source verifiers, layer merge, `make defconfig`, the audit
+# of the FINAL configuration and the overlay secret scan. Nothing compiles here.
+CONFIGURE_LOG="$LOGS/configure.log"
+if ! sh "$SCRIPT_DIR/configure.sh" --source-dir "$SOURCE_DIR" --lock "$LOCK" \
+	--patch-dir "$PATCH_DIR" --log-dir "$LOGS" > "$CONFIGURE_LOG" 2>&1; then
+	cat "$CONFIGURE_LOG" >&2
+	fail "the configuration preflight of the firmware failed"
 fi
-mkdir -p "$FEED_DIR"
-python3 - "$LOCK" "$FEED_DIR/feeds.conf" <<'PY'
+cat "$CONFIGURE_LOG"
+
+# Stage 5 and 6: download and compile. Both keep their full log when they fail.
+DOWNLOAD_LOG="$LOGS/download.log"
+if ( cd "$SOURCE_DIR" && make download -j "$JOBS" ) > "$DOWNLOAD_LOG" 2>&1; then
+	tail -5 "$DOWNLOAD_LOG"
+else
+	tail -40 "$DOWNLOAD_LOG" >&2
+	fail "the package download failed, the log is kept in $DOWNLOAD_LOG"
+fi
+
+BUILD_LOG="$LOGS/build.log"
+if ( cd "$SOURCE_DIR" && make -j "$JOBS" ) > "$BUILD_LOG" 2>&1; then
+	tail -20 "$BUILD_LOG"
+else
+	tail -60 "$BUILD_LOG" >&2
+	fail "the firmware build failed, the first stable error is in $BUILD_LOG"
+fi
+
+# Stage 7: image inspection. Both image roles are resolved by their role
+# pattern and profile segment, never by an exact file name, because the
+# buildroot resolves the name prefix only at build time. A missing, empty,
+# ambiguous, oversized or wrongly typed image stops the build here.
+python3 "$HELPER" artifacts --lock "$LOCK" --source-dir "$SOURCE_DIR" \
+	--out "$LOGS/artifacts.json" > "$LOGS/artifacts.stdout" ||
+	fail "the build did not produce the two inspected firmware image roles"
+cat "$LOGS/artifacts.json"
+
+# The package manifest of the build: every package the buildroot produced. It
+# is evidence packaging, so it is collected only after both image roles exist:
+# a run that only configured must fail on the missing image, not on the
+# missing manifest.
+PACKAGES="$LOGS/packages.txt"
+( cd "$SOURCE_DIR" && find bin -name '*.ipk' -type f | LC_ALL=C sort ) > "$PACKAGES" || true
+[ -s "$PACKAGES" ] ||
+	fail "the build produced no package manifest, no image can be published"
+
+# Stage 8: evidence packaging. It re-reads the images, the final
+# configuration, the package manifest, the feed revisions and the logs.
+BUILD_ENV_JSON=$(python3 - "$PLAN_FILE" "$JOBS" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], encoding="utf-8") as handle:
-    lock = json.load(handle)
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
-    for feed in lock["feeds"]:
-        handle.write(
-            "src-git-full %s %s^%s\n" % (feed["id"], feed["repository"], feed["revision"])
-        )
+    plan = json.load(handle)
+target = plan.get("target") or {}
+print(json.dumps(
+    {
+        "target": target.get("target"),
+        "subtarget": target.get("subtarget"),
+        "profile": target.get("profile"),
+        "jobs": sys.argv[2],
+    },
+    sort_keys=True,
+))
 PY
-cp "$FEED_DIR/feeds.conf" "$SOURCE_DIR/feeds.conf"
+)
 
-printf 'Building %s/%s/%s from %s\n' "$TARGET" "$SUBTARGET" "$PROFILE" "$LOCK_REVISION"
-
-CONFIGURE_LOG="$ARTIFACT_DIR/logs/configure.log"
-if ! sh "$SCRIPT_DIR/configure.sh" --source-dir "$SOURCE_DIR" --lock "$LOCK" \
-	> "$CONFIGURE_LOG" 2>&1; then
-	cat "$CONFIGURE_LOG" >&2
-	fail "the configuration of the firmware failed"
-fi
-cat "$CONFIGURE_LOG"
-
-BUILD_LOG="$ARTIFACT_DIR/logs/build.log"
-if (
-	cd "$SOURCE_DIR"
-	make download -j "$JOBS"
-	make -j "$JOBS"
-) > "$BUILD_LOG" 2>&1; then
-	tail -20 "$BUILD_LOG"
-else
-	tail -60 "$BUILD_LOG" >&2
-	fail "the firmware build failed, the first stable error is in the build log"
-fi
-
-IMAGE_DIR="$SOURCE_DIR/bin/targets/$TARGET/$SUBTARGET"
-[ -d "$IMAGE_DIR" ] || fail "the build produced no image directory"
-
-FACTORY_IMAGE=$(find "$IMAGE_DIR" -maxdepth 1 -type f -name "$PROFILE-factory.bin" -size +0c)
-SYSUPGRADE_IMAGE=$(find "$IMAGE_DIR" -maxdepth 1 -type f -name "$PROFILE-sysupgrade.bin" -size +0c)
-[ "$(printf '%s\n' "$FACTORY_IMAGE" | grep -c . || :)" -eq 1 ] ||
-	fail "expected exactly one non-empty factory image"
-[ "$(printf '%s\n' "$SYSUPGRADE_IMAGE" | grep -c . || :)" -eq 1 ] ||
-	fail "expected exactly one non-empty sysupgrade image"
-
-# The factory image has to fit the 112 MiB UBI area. The limit of the image
-# rules is the upper bound of the file.
-FACTORY_SIZE_KIB=$(( ($(wc -c < "$FACTORY_IMAGE") + 1023) / 1024 ))
-[ "$FACTORY_SIZE_KIB" -le "$IMAGE_SIZE_KIB" ] ||
-	fail "the factory image is $FACTORY_SIZE_KIB KiB and does not fit the $IMAGE_SIZE_KIB KiB limit"
-
-install -m 0644 "$FACTORY_IMAGE" "$ARTIFACT_DIR/images/"
-install -m 0644 "$SYSUPGRADE_IMAGE" "$ARTIFACT_DIR/images/"
-cp "$SOURCE_DIR/.config" "$ARTIFACT_DIR/logs/final.config"
-cp "$SOURCE_DIR/feeds.lock" "$ARTIFACT_DIR/logs/feeds.lock" 2>/dev/null || true
-if [ -f "$SOURCE_DIR/tmp/.packageinfo" ]; then
-	grep -E '^(Package|Version):' "$SOURCE_DIR/tmp/.packageinfo" > "$ARTIFACT_DIR/logs/package-info.txt" || true
-fi
-
-BUILD_ENV_JSON=$(printf '{"profile":"%s","target":"%s","subtarget":"%s","jobs":"%s"}' \
-	"$PROFILE" "$TARGET" "$SUBTARGET" "$JOBS")
-
-python3 "$HELPER" report \
-	--lock "$LOCK" \
-	--out "$ARTIFACT_DIR/build-report.json" \
-	--build-env "$BUILD_ENV_JSON" \
-	--artifact "factory:$ARTIFACT_DIR/images/$PROFILE-factory.bin" \
-	--artifact "sysupgrade:$ARTIFACT_DIR/images/$PROFILE-sysupgrade.bin" \
-	--packages "$ARTIFACT_DIR/logs/package-info.txt" \
-	--final-config "$ARTIFACT_DIR/logs/final.config" ||
-	fail "the build report could not be written"
-
-(cd "$ARTIFACT_DIR/images" && sha256sum *.bin) > "$ARTIFACT_DIR/images/SHA256SUMS"
-cp "$LOCK" "$ARTIFACT_DIR/source-lock.json"
-
-cat > "$ARTIFACT_DIR/IMAGE-ROLES.txt" <<EOF
-factory image: $PROFILE-factory.bin, the UBI image that the boot loader
-writes into the ubi partition. It is not a boot loader image.
-sysupgrade image: $PROFILE-sysupgrade.bin, the archive that the LuCI upgrade
-page or the sysupgrade command consumes. It is not a boot loader image.
-The boot loader images are built by devices/nx30pro/build/build-uboot.sh and
-are not part of this build.
-The partition offsets of the boot loader contract are NMBM logical addresses.
-EOF
+python3 "$HELPER" publish --lock "$LOCK" --artifact-dir "$ARTIFACT_DIR" \
+	--source-dir "$SOURCE_DIR" --feed-dir "$FEED_DIR" --packages "$PACKAGES" \
+	--logs-dir "$LOGS" --build-env "$BUILD_ENV_JSON" ||
+	fail "the firmware candidate could not be published"
 
 printf 'Firmware candidates are in %s\n' "$ARTIFACT_DIR/images"

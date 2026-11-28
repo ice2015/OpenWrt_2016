@@ -5,9 +5,10 @@
 # source level verifiers that read what the patches created, then the layer
 # merge in the repository precedence common -> distribution -> device, then
 # the real `make defconfig`, and only then the audit of the FINAL .config.
-# Nothing here compiles firmware; a missing hard gate stops the build before
-# build.sh is allowed to start one. The script never touches another device
-# and never edits the common or the distribution layer.
+# The overlay is scanned for secrets and deployment values before it is copied
+# into the tree. Nothing here compiles firmware; a missing hard gate stops the
+# build before build.sh is allowed to start one. The script never touches
+# another device and never edits the common or the distribution layer.
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -20,9 +21,10 @@ LOCK="$DEVICE_ROOT/source-lock.json"
 DEVICE_CONFIG="$DEVICE_ROOT/config.config"
 PATCH_DIR="$DEVICE_ROOT/patches"
 OVERLAY_DIR="$DEVICE_ROOT/files"
+LOG_DIR=
 
 usage() {
-	printf 'Usage: %s --source-dir DIR [--lock FILE] [--config FILE]\n' "$0"
+	printf 'Usage: %s --source-dir DIR [--lock FILE] [--config FILE] [--patch-dir DIR] [--overlay-dir DIR] [--log-dir DIR]\n' "$0"
 }
 
 fail() {
@@ -47,6 +49,21 @@ while [ "$#" -gt 0 ]; do
 			DEVICE_CONFIG=$2
 			shift 2
 			;;
+		--patch-dir)
+			[ "$#" -ge 2 ] || fail "--patch-dir requires a value"
+			PATCH_DIR=$2
+			shift 2
+			;;
+		--overlay-dir)
+			[ "$#" -ge 2 ] || fail "--overlay-dir requires a value"
+			OVERLAY_DIR=$2
+			shift 2
+			;;
+		--log-dir)
+			[ "$#" -ge 2 ] || fail "--log-dir requires a value"
+			LOG_DIR=$2
+			shift 2
+			;;
 		--help)
 			usage
 			exit 0
@@ -67,6 +84,21 @@ command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 SOURCE_DIR=$(CDPATH= cd -- "$SOURCE_DIR" && pwd)
 LOCK=$(CDPATH= cd -- "$(dirname -- "$LOCK")" && pwd)/$(basename -- "$LOCK")
 DEVICE_CONFIG=$(CDPATH= cd -- "$(dirname -- "$DEVICE_CONFIG")" && pwd)/$(basename -- "$DEVICE_CONFIG")
+
+# Every gate writes its evidence into the log directory of the caller, so a
+# rejected configuration can be diagnosed from the uploaded logs alone.
+evidence() {
+	_name=$1
+	shift
+	if [ -n "$LOG_DIR" ]; then
+		mkdir -p "$LOG_DIR"
+		"$@" > "$LOG_DIR/$_name"
+		_status=$?
+		cat "$LOG_DIR/$_name"
+		return $_status
+	fi
+	"$@"
+}
 
 python3 "$HELPER" check --lock "$LOCK" >/dev/null || fail "the source lock is not build ready"
 
@@ -109,10 +141,10 @@ fi
 # The ported device tree and the ported profile exist only after the patch
 # loop, so both are compared with the lock here and not before.
 [ -f "$DTS" ] || fail "the 112M device tree is missing: $DTS"
-python3 "$HELPER" verify-device-tree --lock "$LOCK" --dts "$DTS" ||
+evidence device-tree.json python3 "$HELPER" verify-device-tree --lock "$LOCK" --dts "$DTS" ||
 	fail "the 112M device tree does not carry the partition contract"
 [ -f "$IMAGE_RULES" ] || fail "the image rules are missing: $IMAGE_RULES"
-python3 "$HELPER" verify-image-rules --lock "$LOCK" --image-rules "$IMAGE_RULES" ||
+evidence image-rules.json python3 "$HELPER" verify-image-rules --lock "$LOCK" --image-rules "$IMAGE_RULES" ||
 	fail "the image rules do not carry the locked profile, image limit and image roles"
 
 # The configuration layers are the ones the repository manifest declares for
@@ -184,12 +216,15 @@ cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
 	make defconfig
 )
 
-python3 "$HELPER" verify-config --lock "$LOCK" --config "$SOURCE_DIR/.config" ||
+evidence final-config.json python3 "$HELPER" verify-config --lock "$LOCK" --config "$SOURCE_DIR/.config" ||
 	fail "the built configuration does not match the source lock"
 
 
-# The device overlay belongs into the image. It holds no secret.
+# The device overlay belongs into the image, so it is scanned for secrets and
+# deployment values first and copied only when the scan found nothing.
 if [ -d "$OVERLAY_DIR" ]; then
+	evidence overlay.json python3 "$HELPER" verify-overlay --overlay-dir "$OVERLAY_DIR" ||
+		fail "the device overlay carries a secret or a deployment value"
 	mkdir -p "$SOURCE_DIR/files"
 	cp -R "$OVERLAY_DIR/." "$SOURCE_DIR/files/"
 fi

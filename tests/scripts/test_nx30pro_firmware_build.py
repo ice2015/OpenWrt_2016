@@ -15,6 +15,7 @@ produced, never against the fragment that was fed into it.
 import copy
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -194,6 +195,221 @@ def hard_gate_entry(lock, package):
         if entry["package"] == package:
             return entry
     raise AssertionError("no package entry for %s" % package)
+
+
+def final_config(lock):
+    """A final configuration that carries the whole contract.
+
+    Hard gates are selected with the dependencies the lock enumerates for
+    them, optional tools are selected unless the lock records them as
+    unproven, and the excluded packages are switched off explicitly.
+    """
+    lines = [
+        "CONFIG_TARGET_mediatek=y",
+        "CONFIG_TARGET_mediatek_mt7981=y",
+        "CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y",
+        "CONFIG_LUCI_LANG_zh_Hans=y",
+    ]
+    for entry in lock["packages"]:
+        if entry["status"] in ("unavailable", "UNRESOLVED"):
+            lines.extend(
+                "# %s is not set" % symbol for symbol in entry.get("symbols") or []
+            )
+            continue
+        if entry["gate"] not in ("hard", "optional"):
+            continue
+        for symbol in entry.get("symbols") or []:
+            lines.append("%s=y" % symbol)
+        for dependency in entry.get("dependencies") or []:
+            lines.append("CONFIG_PACKAGE_%s=y" % dependency)
+    for entry in lock["excluded_packages"]:
+        lines.append("# CONFIG_PACKAGE_%s is not set" % entry["package"])
+    return "\n".join(lines) + "\n"
+
+
+# The stub of the buildroot entry point. It compiles nothing; it only leaves
+# behind the files a real build leaves behind, so the orchestration of
+# build.sh can be exercised end to end without a toolchain.
+FAKE_MAKE = '''#!/bin/sh
+set -e
+case "$1" in
+\tdownload)
+\t\techo "download" >> "$FIXTURE_STAGE_LOG"
+\techo "downloading the pinned package sources"
+\t\texit 0
+\t\t;;
+\tdefconfig)
+\t\techo "defconfig" >> "$FIXTURE_STAGE_LOG"
+\t\tcp "$FIXTURE_CONFIG" .config
+\t\texit 0
+\t\t;;
+esac
+echo "compile" >> "$FIXTURE_STAGE_LOG"
+echo "compiling the pinned source"
+if [ -n "$FIXTURE_NO_IMAGES" ]; then
+\texit 0
+fi
+python3 - "$FIXTURE_FACTORY" "$FIXTURE_SYSUPGRADE" "$FIXTURE_IPK" <<'PY'
+import sys
+from pathlib import Path
+
+factory, sysupgrade, ipk = (Path(item) for item in sys.argv[1:4])
+factory.parent.mkdir(parents=True, exist_ok=True)
+ipk.parent.mkdir(parents=True, exist_ok=True)
+factory.write_bytes(b"UBI#" + b"\\xff" * (262144 - 4))
+blob = bytearray(4096)
+blob[257:262] = b"ustar"
+sysupgrade.write_bytes(
+    bytes(blob)
+    + b'{ "metadata_version": "1.1", "supported_devices": ["h3c,nx30pro"] }'
+)
+ipk.write_bytes(b"package\\n")
+PY
+'''
+
+# Image names of the stub build. The real prefix is resolved by the buildroot
+# at build time and stays UNRESOLVED in the lock, which is exactly why the
+# orchestration resolves both roles by pattern and never by an exact name.
+FACTORY_NAME = "immortalwrt-21.02-r0-mediatek-mt7981-h3c_nx30pro_112M-factory.bin"
+SYSUPGRADE_NAME = (
+    "immortalwrt-21.02-r0-mediatek-mt7981-h3c_nx30pro_112M-sysupgrade.bin"
+)
+IPK_PATH = "bin/packages/aarch64_cortex-a53/base/luci_2.0-1_all.ipk"
+
+
+def git(directory, *args):
+    return subprocess.run(
+        ["git", "-C", str(directory), *args], capture_output=True, text=True, check=True
+    ).stdout.strip()
+
+
+def commit_all(directory, message):
+    git(directory, "add", "-A")
+    git(directory, "commit", "-q", "-m", message)
+    return git(directory, "rev-parse", "HEAD")
+
+
+def init_repo(directory):
+    Path(directory).mkdir(parents=True, exist_ok=True)
+    git(directory, "init", "-q")
+    git(directory, "config", "user.email", "t@example.invalid")
+    git(directory, "config", "user.name", "Test")
+
+
+def pre_image(patch_text, source_path):
+    """Reconstruct the pre-patch content of one file out of the port patch.
+
+    The stub checkout is derived from the recorded patch itself, so the real
+    device patches apply to it and no upstream file is copied or guessed. A
+    file the patch adds has no pre-image and must not exist beforehand.
+    """
+    text = []
+    for chunk in re.split(r"^diff --git ", patch_text, flags=re.M)[1:]:
+        if not chunk.splitlines()[0].endswith(" b/%s" % source_path):
+            continue
+        lines = chunk.splitlines()
+        index = 0
+        while index < len(lines) and not lines[index].startswith("@@"):
+            index += 1
+        body = []
+        for line in lines[index + 1:]:
+            if line.startswith("+") or line.startswith("\\"):
+                continue
+            if not (line.startswith("-") or line.startswith(" ")):
+                break
+            body.append(line[1:])
+        text.append("\n".join(body) + "\n")
+    return "".join(text)
+
+
+def patched_files():
+    """Every upstream file the recorded device patches touch, in patch order."""
+    files = []
+    for patch in sorted(PATCHES.glob("*.patch")):
+        for match in re.finditer(
+            r"^diff --git a/\S+ b/(\S+)$",
+            patch.read_text(encoding="utf-8"),
+            flags=re.M,
+        ):
+            if match.group(1) not in files:
+                files.append(match.group(1))
+    return files
+
+
+def stub_source(directory):
+    """A git checkout of the pinned tree the recorded device patches apply to."""
+    source = Path(directory) / "source"
+    patches = sorted(PATCHES.glob("*.patch"))
+    for relative in patched_files():
+        text = "".join(
+            pre_image(patch.read_text(encoding="utf-8"), relative) for patch in patches
+        )
+        if not text.strip():
+            continue
+        target = source / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    (source / "scripts").mkdir(parents=True, exist_ok=True)
+    feeds = source / "scripts" / "feeds"
+    feeds.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    feeds.chmod(0o755)
+    # The pinned tree ignores the generated feeds.conf, the image output and
+    # the overlay directory as well, so they are not local changes.
+    (source / ".gitignore").write_text("/bin\n/feeds.conf\n/files\n", encoding="utf-8")
+    init_repo(source)
+    return source, commit_all(source, "pinned")
+
+
+def stub_feeds(directory, ids):
+    """One checkout per locked feed, each at a commit of its own."""
+    feed_dir = Path(directory) / "feeds"
+    revisions = {}
+    for feed_id in ids:
+        path = feed_dir / feed_id
+        (path / "net").mkdir(parents=True, exist_ok=True)
+        (path / "README.md").write_text("%s feed\n" % feed_id, encoding="utf-8")
+        init_repo(path)
+        revisions[feed_id] = commit_all(path, feed_id)
+    return feed_dir, revisions
+
+
+def repoint(lock, mapping):
+    """Rewrite every pinned revision of a lock to a stub commit.
+
+    The lock records the same feed commit in the package entries and in the
+    dependency index, so all occurrences are replaced together: a lock whose
+    feeds moved stays internally consistent and still passes `check`.
+    """
+    text = json.dumps(lock)
+    for old, new in mapping.items():
+        text = text.replace(old, new)
+    return json.loads(text)
+
+
+def factory_image(path, size=262144, magic=b"UBI#"):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(magic + b"\xff" * (size - len(magic)))
+    return path
+
+
+def sysupgrade_image(
+    path, metadata=True, supported="h3c,nx30pro", tar=True, size=4096
+):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    blob = bytearray(size)
+    if tar:
+        blob[257:262] = b"ustar"
+    trailer = b""
+    if metadata:
+        trailer = (
+            b'{ "metadata_version": "1.1", "supported_devices": ["'
+            + supported.encode("utf-8")
+            + b'"] }'
+        )
+    path.write_bytes(bytes(blob) + trailer)
+    return path
 
 
 class Nx30ProFirmwareLockGateTests(unittest.TestCase):
@@ -385,35 +601,8 @@ class Nx30ProFirmwareConfigTests(unittest.TestCase):
         self.lock = proven_lock()
 
     def good_config(self, lock=None):
-        """A final configuration that carries the whole contract.
-
-        Hard gates are selected with the dependencies the lock enumerates for
-        them, optional tools are selected unless the lock records them as
-        unproven, and the excluded packages are switched off explicitly.
-        """
-        lock = self.lock if lock is None else lock
-        lines = [
-            "CONFIG_TARGET_mediatek=y",
-            "CONFIG_TARGET_mediatek_mt7981=y",
-            "CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_nx30pro_112M=y",
-            "CONFIG_LUCI_LANG_zh_Hans=y",
-        ]
-        for entry in lock["packages"]:
-            if entry["status"] in ("unavailable", "UNRESOLVED"):
-                lines.extend(
-                    "# %s is not set" % symbol
-                    for symbol in entry.get("symbols") or []
-                )
-                continue
-            if entry["gate"] != "hard" and entry["gate"] != "optional":
-                continue
-            for symbol in entry.get("symbols") or []:
-                lines.append("%s=y" % symbol)
-            for dependency in entry.get("dependencies") or []:
-                lines.append("CONFIG_PACKAGE_%s=y" % dependency)
-        for entry in lock["excluded_packages"]:
-            lines.append("# CONFIG_PACKAGE_%s is not set" % entry["package"])
-        return "\n".join(lines) + "\n"
+        """A final configuration that carries the whole contract."""
+        return final_config(self.lock if lock is None else lock)
 
     def without(self, text, *lines):
         for line in lines:
@@ -1064,3 +1253,460 @@ class Nx30ProFirmwareDevicePortVerifierTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Nx30ProFirmwareOrchestrationTests(unittest.TestCase):
+    """End to end gates of build.sh against a stub of the pinned source.
+
+    The stub checkout is reconstructed from the recorded device patches, so
+    the real patches apply to it and every source verifier runs for real.
+    `make` is a stub on PATH that writes the files a build would leave behind;
+    nothing is compiled and no toolchain is needed. The real download and the
+    real compile of the pinned buildroot are not faked here, they need the
+    authorized GitHub Actions run of the plan.
+    """
+
+    def prepare(self, tmp, drop_symbol=None, patch=None):
+        source, commit = stub_source(tmp)
+        lock = proven_lock()
+        feed_dir, revisions = stub_feeds(
+            tmp, [feed["id"] for feed in lock["feeds"]]
+        )
+        mapping = {lock["source"]["revision"]: commit}
+        mapping.update(
+            {feed["revision"]: revisions[feed["id"]] for feed in lock["feeds"]}
+        )
+        lock = repoint(lock, mapping)
+        repo_root = None
+        if patch is not None:
+            repo_root = Path(tmp) / "repo"
+            patch_file = repo_root / patch[0]
+            patch_file.parent.mkdir(parents=True, exist_ok=True)
+            patch_file.write_text(patch[1], encoding="utf-8")
+            lock["device_port"]["patches"] = [
+                {
+                    "path": patch[0],
+                    "applies_to_commit": commit,
+                    "upstream_files": [DEVICE_TREE_FILE],
+                    "purpose": "stub of a port that carries another table",
+                }
+            ]
+        config = final_config(lock)
+        if drop_symbol:
+            self.assertIn(drop_symbol + "\n", config, drop_symbol)
+            config = config.replace(drop_symbol + "\n", "")
+        fixtures = Path(tmp) / "fixtures"
+        fixtures.mkdir()
+        (fixtures / "config").write_text(config, encoding="utf-8")
+        stub_bin = Path(tmp) / "stub-bin"
+        stub_bin.mkdir()
+        (stub_bin / "make").write_text(FAKE_MAKE, encoding="utf-8")
+        (stub_bin / "make").chmod(0o755)
+        image_dir = source / "bin" / "targets" / "mediatek" / "mt7981"
+        env = dict(os.environ)
+        env.update(
+            {
+                "PATH": "%s:%s" % (stub_bin, env["PATH"]),
+                "FIXTURE_CONFIG": str(fixtures / "config"),
+                "FIXTURE_STAGE_LOG": str(fixtures / "stages.txt"),
+                "FIXTURE_FACTORY": str(image_dir / FACTORY_NAME),
+                "FIXTURE_SYSUPGRADE": str(image_dir / SYSUPGRADE_NAME),
+                "FIXTURE_IPK": str(source / IPK_PATH),
+            }
+        )
+        stages = fixtures / "stages.txt"
+        return {
+            "source": source,
+            "feed_dir": feed_dir,
+            "lock": write_lock(tmp, lock),
+            "lock_data": lock,
+            "env": env,
+            "stages": stages,
+            "repo_root": repo_root,
+            "artifacts": Path(tmp) / "artifact",
+        }
+
+    def run_build(self, prepared, lock=None, check_only=False):
+        command = ["sh", str(BUILD_SCRIPT), "--lock", str(lock or prepared["lock"])]
+        if check_only:
+            command.append("--check-only")
+        else:
+            command += [
+                "--source-dir", str(prepared["source"]),
+                "--feed-dir", str(prepared["feed_dir"]),
+                "--artifact-dir", str(prepared["artifacts"]),
+            ]
+        if prepared["repo_root"]:
+            command += ["--repo-root", str(prepared["repo_root"])]
+        return subprocess.run(
+            command, capture_output=True, text=True, env=prepared["env"]
+        )
+
+    def stages(self, prepared):
+        if not prepared["stages"].exists():
+            return []
+        return prepared["stages"].read_text(encoding="utf-8").split()
+
+    def test_check_only_resolves_the_lock_and_downloads_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_build(prepared, check_only=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("source_revision", result.stdout)
+            self.assertEqual([], self.stages(prepared))
+            self.assertFalse(prepared["artifacts"].exists())
+            self.assertFalse((prepared["source"] / "bin").exists())
+
+    def test_check_only_keeps_the_candidate_lock_build_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_build(prepared, lock=LOCK, check_only=True)
+            self.assertEqual(BUILD_NOT_READY, result.returncode)
+            self.assertFalse(prepared["artifacts"].exists())
+
+    def test_a_source_at_the_wrong_revision_is_refused_before_the_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_build(prepared, lock=write_lock(tmp, proven_lock()))
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("pins", result.stderr)
+            self.assertEqual([], self.stages(prepared))
+            self.assertFalse(
+                (prepared["artifacts"] / "logs" / "download.log").exists()
+            )
+
+    def test_a_dirty_source_is_refused_before_the_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            (prepared["source"] / "tampered.txt").write_text("x\n", encoding="utf-8")
+            result = self.run_build(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("local changes", result.stderr)
+            self.assertEqual([], self.stages(prepared))
+
+    def test_a_feed_at_the_wrong_revision_is_refused_before_the_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            lock = prepared["lock_data"]
+            moved = json.dumps(lock).replace(
+                lock["feeds"][0]["revision"], "0" * 40
+            )
+            moved_path = Path(tmp) / "moved-lock.json"
+            moved_path.write_text(moved, encoding="utf-8")
+            result = self.run_build(prepared, lock=moved_path)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(lock["feeds"][0]["id"], result.stderr)
+            self.assertEqual([], self.stages(prepared))
+
+    def test_a_device_patch_that_does_not_apply_is_refused_before_the_download(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            rules = prepared["source"] / IMAGE_RULES_FILE
+            rules.write_text("define Device/h3c_nx30pro\nendef\n", encoding="utf-8")
+            # The moved file is committed, so the checkout stays clean and the
+            # patch gate is the one that has to refuse the port.
+            moved = commit_all(prepared["source"], "an upstream file moved")
+            lock = Path(tmp) / "moved-lock.json"
+            lock.write_text(
+                json.dumps(prepared["lock_data"]).replace(
+                    prepared["lock_data"]["source"]["revision"], moved
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_build(prepared, lock=lock)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("does not apply", result.stderr)
+            self.assertEqual([], self.stages(prepared))
+
+    def test_a_partition_table_that_is_not_the_locked_one_stops_the_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, _commit = stub_source(Path(tmp) / "patch-generator")
+            # A port patch that carries the stock 64M table instead of the
+            # locked 112M one, written as the new file diff it is.
+            lines = STOCK_DEVICE_TREE.splitlines()
+            patch_text = (
+                "diff --git a/%s b/%s\n" % (DEVICE_TREE_FILE, DEVICE_TREE_FILE)
+                + "new file mode 100644\n--- /dev/null\n+++ b/%s\n"
+                % DEVICE_TREE_FILE
+                + "@@ -0,0 +1,%d @@\n" % len(lines)
+                + "".join("+%s\n" % line for line in lines)
+            )
+            prepared = self.prepare(
+                tmp, patch=("devices/nx30pro/patches/0001-stock-table.patch", patch_text)
+            )
+            result = self.run_build(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("partition contract", result.stderr)
+            self.assertNotIn("download", self.stages(prepared))
+            self.assertFalse(
+                (prepared["artifacts"] / "build-report.json").exists()
+            )
+
+    def test_a_missing_hard_gate_stops_the_build_before_the_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(
+                tmp, drop_symbol="CONFIG_PACKAGE_luci-app-passwall=y"
+            )
+            result = self.run_build(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("luci-app-passwall", result.stderr)
+            stages = self.stages(prepared)
+            self.assertIn("defconfig", stages)
+            self.assertNotIn("compile", stages)
+            self.assertNotIn("download", stages)
+            self.assertFalse(
+                (prepared["artifacts"] / "build-report.json").exists()
+            )
+
+    def test_a_secret_bearing_overlay_is_refused_before_the_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            overlay = Path(tmp) / "overlay" / "etc" / "config"
+            overlay.mkdir(parents=True)
+            (overlay / "cloudflared").write_text(
+                "config cloudflared 'cloudflared'\n"
+                "\toption token 'abcd1234abcd1234abcd1234abcd1234'\n",
+                encoding="utf-8",
+            )
+            logs = Path(tmp) / "configure-logs"
+            result = subprocess.run(
+                [
+                    "sh", str(CONFIGURE_SCRIPT),
+                    "--source-dir", str(prepared["source"]),
+                    "--lock", str(prepared["lock"]),
+                    "--overlay-dir", str(Path(tmp) / "overlay"),
+                    "--log-dir", str(logs),
+                ],
+                capture_output=True, text=True, env=prepared["env"],
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("deployment", result.stderr)
+            self.assertNotIn("compile", self.stages(prepared))
+            self.assertFalse((prepared["source"] / "files" / "etc").exists())
+
+    def test_a_successful_build_publishes_the_whole_evidence_bundle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            result = self.run_build(prepared)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(
+                ["defconfig", "download", "compile"], self.stages(prepared)
+            )
+            artifact = prepared["artifacts"]
+            self.assertEqual(
+                sorted([FACTORY_NAME, SYSUPGRADE_NAME, "SHA256SUMS"]),
+                sorted(path.name for path in (artifact / "images").iterdir()),
+            )
+            for name in (
+                "build-report.json", "source-lock.json", "IMAGE-ROLES.txt",
+                "final.config", "packages.txt", "feeds-lock.json",
+            ):
+                self.assertTrue((artifact / name).is_file(), name)
+            for name in (
+                "build-plan.json", "preflight.json", "configure.log",
+                "device-tree.json", "image-rules.json", "final-config.json",
+                "overlay.json", "download.log", "build.log", "artifacts.json",
+                "packages.txt",
+            ):
+                self.assertTrue((artifact / "logs" / name).is_file(), name)
+
+            report = json.loads(
+                (artifact / "build-report.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("candidate-not-verified-on-device", report["status"])
+            self.assertEqual(2, len(report["artifacts"]))
+            self.assertEqual(
+                ["factory", "sysupgrade"],
+                [entry["role"] for entry in report["artifacts"]],
+            )
+            for entry in report["artifacts"]:
+                self.assertEqual(64, len(entry["sha256"]))
+                self.assertLess(entry["size"], 110592 * 1024)
+            self.assertEqual(18, len(report["config_audit"]["hard_gates"]))
+            for entry in report["config_audit"]["hard_gates"]:
+                self.assertEqual("enabled", entry["state"], entry)
+            self.assertIn(Path(IPK_PATH).name, report["package_list"])
+            feeds = json.loads(
+                (artifact / "feeds-lock.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(4, len(feeds))
+            for feed in feeds:
+                self.assertEqual(
+                    feed["locked_revision"], feed["built_revision"], feed["id"]
+                )
+            hashes = (artifact / "images" / "SHA256SUMS").read_text(encoding="utf-8")
+            self.assertIn(FACTORY_NAME, hashes)
+            self.assertIn(SYSUPGRADE_NAME, hashes)
+
+    def test_a_build_that_only_configured_is_never_published(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prepared = self.prepare(tmp)
+            # The compile stage of the stub leaves no image behind at all.
+            prepared["env"]["FIXTURE_NO_IMAGES"] = "1"
+            result = self.run_build(prepared)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("no factory image", result.stderr)
+            self.assertFalse(
+                (prepared["artifacts"] / "build-report.json").exists()
+            )
+            self.assertTrue(
+                (prepared["artifacts"] / "logs" / "configure.log").is_file()
+            )
+
+
+class Nx30ProFirmwareArtifactTests(unittest.TestCase):
+    """Both image roles are resolved by pattern and inspected by content.
+
+    The exact file names are UNRESOLVED in the lock, so a role is resolved by
+    `*<profile segment>-<role suffix>`. A missing, empty, ambiguous, oversized
+    or wrongly typed image stops the build before anything is published.
+    """
+
+    def setUp(self):
+        self.helper = load_helper()
+        self.lock = proven_lock()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.image_dir = Path(self.tmp.name) / "images"
+        self.image_dir.mkdir()
+        self.addCleanup(self.tmp.cleanup)
+
+    def fill(self, factory=True, sysupgrade=True):
+        if factory:
+            factory_image(self.image_dir / FACTORY_NAME)
+        if sysupgrade:
+            sysupgrade_image(self.image_dir / SYSUPGRADE_NAME)
+        return self.image_dir
+
+    def resolve(self, lock=None, image_dir=None):
+        return self.helper.resolve_artifacts(
+            lock if lock is not None else self.lock,
+            image_dir if image_dir is not None else self.image_dir,
+        )
+
+    def test_both_roles_are_resolved_by_their_pattern_and_content(self):
+        artifacts = self.resolve(image_dir=self.fill())
+        self.assertEqual(["factory", "sysupgrade"], [a["role"] for a in artifacts])
+        self.assertEqual(FACTORY_NAME, artifacts[0]["name"])
+        self.assertEqual(SYSUPGRADE_NAME, artifacts[1]["name"])
+        self.assertEqual(262144, artifacts[0]["size"])
+        self.assertEqual(["h3c,nx30pro"], artifacts[1]["supported_devices"])
+
+    def test_the_locked_patterns_are_the_manifest_patterns(self):
+        manifest = json.loads(
+            (ROOT / "manifests" / "devices" / "nx30pro.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        roles = self.helper.artifact_roles(self.lock)
+        self.assertEqual(
+            sorted(
+                "bin/targets/mediatek/mt7981/" + roles[role]["pattern"]
+                for role in roles
+            ),
+            sorted(manifest["artifact_patterns"]),
+        )
+
+    def test_a_missing_factory_image_is_refused(self):
+        self.fill(factory=False)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("no factory image", str(caught.exception))
+
+    def test_a_missing_sysupgrade_image_is_refused(self):
+        self.fill(sysupgrade=False)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("no sysupgrade image", str(caught.exception))
+
+    def test_an_empty_image_is_refused(self):
+        self.fill()
+        (self.image_dir / SYSUPGRADE_NAME).write_bytes(b"")
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("empty", str(caught.exception))
+
+    def test_a_second_matching_image_is_refused_as_ambiguous(self):
+        self.fill()
+        factory_image(self.image_dir / ("earlier-" + FACTORY_NAME))
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("ambiguous", str(caught.exception))
+
+    def test_an_oversized_factory_image_is_refused(self):
+        self.fill()
+        oversized = self.image_dir / FACTORY_NAME
+        oversized.unlink()
+        oversized.write_bytes(b"UBI#")
+        os.truncate(str(oversized), (110592 + 1) * 1024)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("image limit", str(caught.exception))
+
+    def test_a_factory_image_that_is_not_a_ubi_image_is_refused(self):
+        self.fill()
+        path = self.image_dir / FACTORY_NAME
+        path.unlink()
+        sysupgrade_image(path)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("UBI erase counter magic", str(caught.exception))
+
+    def test_a_sysupgrade_image_that_is_a_raw_ubi_image_is_refused(self):
+        self.fill()
+        path = self.image_dir / SYSUPGRADE_NAME
+        path.unlink()
+        factory_image(path)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("swapped", str(caught.exception))
+
+    def test_a_factory_image_that_is_a_sysupgrade_tar_is_refused(self):
+        self.fill()
+        path = self.image_dir / FACTORY_NAME
+        path.unlink()
+        blob = bytearray(262144)
+        blob[0:4] = b"UBI#"
+        blob[257:262] = b"ustar"
+        path.write_bytes(bytes(blob))
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("swapped", str(caught.exception))
+
+    def test_a_sysupgrade_image_without_metadata_is_refused(self):
+        self.fill()
+        path = self.image_dir / SYSUPGRADE_NAME
+        path.unlink()
+        sysupgrade_image(path, metadata=False)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("metadata", str(caught.exception))
+
+    def test_a_sysupgrade_image_of_another_board_is_refused(self):
+        self.fill()
+        path = self.image_dir / SYSUPGRADE_NAME
+        path.unlink()
+        sysupgrade_image(path, supported="cmcc,rax3000m")
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("h3c,nx30pro", str(caught.exception))
+
+    def test_a_factory_image_that_is_not_block_aligned_is_refused(self):
+        self.fill()
+        path = self.image_dir / FACTORY_NAME
+        path.unlink()
+        factory_image(path, size=262144 + 2048)
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve()
+        self.assertIn("erase block", str(caught.exception))
+
+    def test_two_roles_that_resolve_to_one_pattern_are_refused(self):
+        lock = copy.deepcopy(self.lock)
+        lock["image"]["artifact_naming"]["sysupgrade_suffix"] = "factory.bin"
+        with self.assertRaises(self.helper.LockError) as caught:
+            self.helper.artifact_roles(lock)
+        self.assertIn("same pattern", str(caught.exception))
+
+    def test_an_image_directory_the_build_never_created_is_refused(self):
+        with self.assertRaises(self.helper.ArtifactError) as caught:
+            self.resolve(image_dir=Path(self.tmp.name) / "nowhere")
+        self.assertIn("no image directory", str(caught.exception))

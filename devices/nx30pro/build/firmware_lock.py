@@ -29,9 +29,12 @@ another board, the stock 64M table or an approximate size fails.
 """
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -91,6 +94,85 @@ class LockError(Exception):
 
 class ConfigError(Exception):
     """The built configuration does not match the lock."""
+
+
+class ArtifactError(Exception):
+    """The build produced no publishable firmware candidate."""
+
+
+# A ubinize image starts with the erase counter header of the first physical
+# erase block, whose magic is the four ASCII bytes `UBI#` (mtd-utils
+# libubigen, UBI_EC_HDR_MAGIC 0x55424923). A sysupgrade image of this profile
+# is a POSIX tar archive (`sysupgrade-tar`), whose format magic sits at offset
+# 257. Both facts make the two image roles distinguishable by content, so a
+# file can never be published under the other role.
+UBI_MAGIC = b"UBI#"
+TAR_MAGIC = b"ustar"
+TAR_MAGIC_OFFSET = 257
+
+# The metadata trailer `append-metadata` writes with `fwtool -I` is the JSON of
+# `metadata_json` (include/image-commands.mk of the pinned source), which names
+# `metadata_version` and the `supported_devices` of the profile.
+METADATA_VERSION_KEY = b'"metadata_version"'
+
+# Secret and deployment value detection. The spellings mirror the ones
+# tests/structure/test_nx30pro_firmware_contract.py uses for the committed
+# overlay: the build gate scans the overlay that is really copied into the
+# image, the contract test scans the one that is committed.
+OVERLAY_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")
+OVERLAY_PRIVATE_KEY = re.compile(r"BEGIN [A-Z ]*PRIVATE KEY")
+OVERLAY_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9+/=.-])[A-Za-z0-9+/=]{24,}(?![A-Za-z0-9+/=.-])"
+)
+OVERLAY_MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+OVERLAY_MAC_PLACEHOLDER = "aa:bb:cc:dd:ee:ff"
+OVERLAY_ASSIGNMENT = re.compile(
+    r"""(?xim)
+    (?:
+        ^\s*(?P<shell>[A-Za-z_][\w]*)\s*=
+      | \buci[^\n]*\bset\s+\S*\.(?P<uci>\w+)\s*=
+      | ^\s*(?:option|list)\s+(?P<config>\w+)
+      | ^\s*(?P<yaml>[A-Za-z_][\w-]*)\s*:
+    )
+    (?P<value>[^\n]*)
+    """,
+)
+OVERLAY_DEPLOYMENT_OPTIONS = frozenset(
+    (
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "passphrase",
+        "key",
+        "psk",
+        "private_key",
+        "credentials_file",
+        "origincert",
+        "account",
+        "api_key",
+        "subscription",
+        "domain",
+        "lookup_host",
+        "username",
+        "server_addr",
+        "ssid",
+        "mac",
+        "ipaddr",
+    )
+)
+# Address literals that carry no deployment information: the unspecified and
+# the loopback address, netmasks and the two broadcast forms.
+OVERLAY_IPV4_ALLOWED = frozenset(
+    (
+        "0.0.0.0",
+        "127.0.0.1",
+        "255.255.255.0",
+        "255.255.255.255",
+    )
+)
+# An assignment value that switches something off carries no secret.
+OVERLAY_EMPTY_VALUES = frozenset(("", "''", '""', "0", "'0'", '"0"', "off", "false"))
 
 
 def sha256_of(path):
@@ -857,6 +939,565 @@ def verify_config(text, lock):
     }
 
 
+def git_head(path):
+    """Return the commit a checkout is at."""
+    result = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise LockError(
+            "%s is not a git checkout: %s" % (path, result.stderr.strip())
+        )
+    return result.stdout.strip()
+
+
+def git_status(path):
+    """Return the local changes of a checkout, one line per path."""
+    result = subprocess.run(
+        ["git", "-C", str(path), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise LockError(
+            "%s cannot be inspected for local changes: %s"
+            % (path, result.stderr.strip())
+        )
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def patch_applies(source_dir, patch_path):
+    """Dry run one device patch against the checkout."""
+    result = subprocess.run(
+        ["git", "-C", str(source_dir), "apply", "--check", str(patch_path)],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0, (result.stderr or "").strip()
+
+
+def locked_patches(lock, repo_root):
+    """Return the recorded device patches in their locked application order."""
+    port = lock.get("device_port") or {}
+    records = port.get("patches") or []
+    if not records:
+        raise LockError("the lock records no device patch")
+    ordered = sorted(records, key=lambda entry: Path(entry.get("path", "")).name)
+    resolved = []
+    for entry in ordered:
+        path = Path(repo_root) / entry["path"]
+        if not path.is_file():
+            raise LockError("the lock names a device patch that is missing: %s" % path)
+        applies_to = entry.get("applies_to_commit")
+        if applies_to and applies_to != lock["source"]["revision"]:
+            raise LockError(
+                "the device patch %s is recorded for %s, the lock pins %s"
+                % (path.name, applies_to, lock["source"]["revision"])
+            )
+        resolved.append({"path": path, "record": entry})
+    return resolved
+
+
+def preflight(lock, source_dir, feed_dir, repo_root=None):
+    """Run every check that has to pass before anything is downloaded.
+
+    The gate covers the checkout identity, a dirty tree, the output of an
+    earlier build, the revision of every pinned feed and the applicability of
+    every recorded device patch. It only reads; the patches are applied by
+    configure.sh, which runs after this gate and before `make download`.
+    """
+    errors = validate_lock(lock)
+    if errors:
+        raise LockError("; ".join(errors))
+
+    repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[3]
+    source_dir = Path(source_dir)
+    feed_dir = Path(feed_dir)
+    revision = lock["source"]["revision"]
+
+    if not (source_dir / ".git").exists():
+        raise LockError("the source directory is not a git checkout: %s" % source_dir)
+    head = git_head(source_dir)
+    if head != revision:
+        raise LockError(
+            "the source checkout is at %s, the lock pins %s" % (head, revision)
+        )
+    dirty = git_status(source_dir)
+    if dirty:
+        raise LockError(
+            "the source checkout carries local changes: %s" % ", ".join(dirty[:5])
+        )
+    for leftover in ("bin", "build_dir", "staging_dir", "dl"):
+        if (source_dir / leftover).exists():
+            raise LockError(
+                "the source directory holds output of an earlier build: %s"
+                % leftover
+            )
+
+    feeds = []
+    for feed in lock.get("feeds") or []:
+        path = feed_dir / feed["id"]
+        if not path.is_dir():
+            raise LockError("the pinned feed %s is missing: %s" % (feed["id"], path))
+        actual = git_head(path)
+        if actual != feed["revision"]:
+            raise LockError(
+                "the feed %s is at %s, the lock pins %s"
+                % (feed["id"], actual, feed["revision"])
+            )
+        feeds.append(
+            {
+                "id": feed["id"],
+                "repository": feed["repository"],
+                "locked_revision": feed["revision"],
+                "checked_out_revision": actual,
+            }
+        )
+
+    # The two recorded patches touch disjoint files (the lock states that in
+    # device_port.order_note), so each one is dry run against the pristine
+    # tree; configure.sh applies them in the same order for real.
+    patches = []
+    for entry in locked_patches(lock, repo_root):
+        applies, detail = patch_applies(source_dir, entry["path"])
+        if not applies:
+            raise LockError(
+                "the device patch does not apply to the locked source: %s (%s)"
+                % (entry["path"].name, detail or "git apply --check failed")
+            )
+        patches.append(
+            {
+                "path": str(entry["path"].relative_to(repo_root)),
+                "upstream_files": entry["record"].get("upstream_files") or [],
+                "applies": True,
+            }
+        )
+
+    return {
+        "source_revision": revision,
+        "checked_out_revision": head,
+        "feeds": feeds,
+        "patches": patches,
+    }
+
+
+def overlay_findings(overlay_dir):
+    """Return every secret or deployment value one overlay file carries."""
+    overlay_dir = Path(overlay_dir)
+    findings = []
+    for path in sorted(overlay_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            findings.append(
+                {
+                    "file": str(path.relative_to(overlay_dir)),
+                    "finding": "a binary file cannot be scanned for secrets",
+                }
+            )
+            continue
+        relative = str(path.relative_to(overlay_dir))
+        if OVERLAY_PRIVATE_KEY.search(text):
+            findings.append(
+                {"file": relative, "finding": "private key material"}
+            )
+        for literal in OVERLAY_MAC.findall(text):
+            if literal.lower() != OVERLAY_MAC_PLACEHOLDER:
+                findings.append(
+                    {"file": relative, "finding": "a MAC address: %s" % literal}
+                )
+        for literal in OVERLAY_IPV4.findall(text):
+            if literal not in OVERLAY_IPV4_ALLOWED:
+                findings.append(
+                    {"file": relative, "finding": "an address literal: %s" % literal}
+                )
+        for match in OVERLAY_ASSIGNMENT.finditer(text):
+            name = (match.group("shell") or match.group("uci")
+                    or match.group("config") or match.group("yaml") or "")
+            value = (match.group("value") or "").strip().strip("'\"")
+            if name.lower() not in OVERLAY_DEPLOYMENT_OPTIONS:
+                continue
+            if value.strip("'\"") in OVERLAY_EMPTY_VALUES:
+                continue
+            findings.append(
+                {
+                    "file": relative,
+                    "finding": "the deployment option %s carries the value %r"
+                    % (name, value),
+                }
+            )
+        for literal in OVERLAY_TOKEN.findall(text):
+            findings.append({"file": relative, "finding": "a token shaped literal"})
+            break
+    return findings
+
+
+def verify_overlay(overlay_dir):
+    """Refuse an overlay that would put a secret into the image."""
+    overlay_dir = Path(overlay_dir)
+    if not overlay_dir.is_dir():
+        raise LockError("the overlay directory is missing: %s" % overlay_dir)
+    findings = overlay_findings(overlay_dir)
+    files = sum(1 for path in overlay_dir.rglob("*") if path.is_file())
+    if findings:
+        raise LockError(
+            "the overlay carries deployment data and must not enter the image: "
+            + "; ".join(
+                "%s: %s" % (item["file"], item["finding"]) for item in findings[:8]
+            )
+        )
+    return {"overlay_dir": str(overlay_dir), "files": files, "findings": []}
+
+
+def artifact_roles(lock):
+    """Return the resolution pattern of every firmware image role.
+
+    The final prefix of an image name is `$(IMG_PREFIX)-$(1)-$(2)` and
+    IMG_PREFIX carries build time version variables, so the exact names are
+    UNRESOLVED in the lock and only the role suffix plus the profile segment
+    are known. A role is therefore resolved by the pattern
+    `*<profile_segment>-<suffix>`, which is the same wildcard the device
+    manifest records in `artifact_patterns`.
+    """
+    image = lock.get("image") or {}
+    naming = image.get("artifact_naming") or {}
+    profile = naming.get("profile_segment") or (lock.get("target") or {}).get("profile")
+    if not profile:
+        raise LockError("the lock names no profile segment for the artifact names")
+    roles = {}
+    for role in ("factory", "sysupgrade"):
+        suffix = naming.get("%s_suffix" % role) or image.get("%s_image" % role)
+        if not suffix:
+            raise LockError("the lock names no %s image suffix" % role)
+        roles[role] = {
+            "suffix": suffix,
+            "pattern": "*%s-%s" % (profile, suffix),
+            "rule": image.get("%s_rule" % role),
+            "role": image.get("%s_role" % role),
+        }
+    if roles["factory"]["pattern"] == roles["sysupgrade"]["pattern"]:
+        raise LockError("the two image roles resolve to the same pattern")
+    return roles
+
+
+def image_dir_for(lock, source_dir):
+    """The buildroot output directory of the locked target and subtarget."""
+    target = (lock.get("target") or {}).get("target")
+    subtarget = (lock.get("target") or {}).get("subtarget")
+    if not target or not subtarget:
+        raise LockError("the lock names no target or subtarget")
+    return Path(source_dir) / "bin" / "targets" / target / subtarget
+
+
+def read_head(path, length):
+    with open(path, "rb") as handle:
+        return handle.read(length)
+
+
+def has_tar_magic(path):
+    return read_head(path, TAR_MAGIC_OFFSET + len(TAR_MAGIC))[
+        TAR_MAGIC_OFFSET:TAR_MAGIC_OFFSET + len(TAR_MAGIC)
+    ] == TAR_MAGIC
+
+
+def inspect_factory_image(path, max_size, blocksize_kib):
+    """Classify one candidate as the raw UBI image of the ubi partition."""
+    size = path.stat().st_size
+    if size == 0:
+        raise ArtifactError("the factory image %s is empty" % path.name)
+    if size > max_size:
+        raise ArtifactError(
+            "the factory image %s is %d bytes and exceeds the %d byte image limit"
+            % (path.name, size, max_size)
+        )
+    if read_head(path, len(UBI_MAGIC)) != UBI_MAGIC:
+        raise ArtifactError(
+            "the factory image %s does not start with the UBI erase counter magic, "
+            "so it is not the raw UBI image of the ubi partition" % path.name
+        )
+    if has_tar_magic(path):
+        raise ArtifactError(
+            "the factory image %s is a sysupgrade tar archive, the two image "
+            "roles are swapped" % path.name
+        )
+    block = blocksize_kib * 1024
+    if size % block:
+        raise ArtifactError(
+            "the factory image %s is %d bytes and not a multiple of the %d byte "
+            "erase block" % (path.name, size, block)
+        )
+    return {"image": "factory", "size": size, "sha256": sha256_of(path), "ubi": True}
+
+
+def inspect_sysupgrade_image(path, max_size, supported_devices):
+    """Classify one candidate as the sysupgrade tar with its metadata."""
+    size = path.stat().st_size
+    if size == 0:
+        raise ArtifactError("the sysupgrade image %s is empty" % path.name)
+    if size > max_size:
+        raise ArtifactError(
+            "the sysupgrade image %s is %d bytes and exceeds the %d byte image limit"
+            % (path.name, size, max_size)
+        )
+    if read_head(path, len(UBI_MAGIC)) == UBI_MAGIC:
+        raise ArtifactError(
+            "the sysupgrade image %s is a raw UBI image, the two image roles "
+            "are swapped" % path.name
+        )
+    if not has_tar_magic(path):
+        raise ArtifactError(
+            "the sysupgrade image %s is not a sysupgrade tar archive" % path.name
+        )
+    blob = path.read_bytes()
+    if METADATA_VERSION_KEY not in blob:
+        raise ArtifactError(
+            "the sysupgrade image %s carries no append-metadata trailer" % path.name
+        )
+    for device in supported_devices or []:
+        if device.encode("utf-8") not in blob:
+            raise ArtifactError(
+                "the sysupgrade image %s metadata does not support %s"
+                % (path.name, device)
+            )
+    return {
+        "image": "sysupgrade",
+        "size": size,
+        "sha256": sha256_of(path),
+        "metadata_version": True,
+        "supported_devices": list(supported_devices or []),
+    }
+
+
+def resolve_artifacts(lock, image_dir):
+    """Resolve and inspect both firmware image roles before anything is copied.
+
+    A missing, empty, ambiguous, oversized or wrongly typed image stops the
+    build here, and the two roles are told apart by their content, so the
+    factory image can never be published as the sysupgrade image or the other
+    way round.
+    """
+    image_dir = Path(image_dir)
+    if not image_dir.is_dir():
+        raise ArtifactError(
+            "the build produced no image directory: %s, so there is no factory "
+            "image and no sysupgrade image to publish" % image_dir
+        )
+    roles = artifact_roles(lock)
+    image = lock["image"]
+    max_size = int(image["image_size_kib"]) * 1024
+    blocksize_kib = parse_size_kib(image.get("blocksize"))
+    supported = (lock.get("target") or {}).get("supported_devices") or ""
+    supported_devices = [item for item in supported.split() if item]
+
+    candidates = sorted(path for path in image_dir.iterdir() if path.is_file())
+    resolved = []
+    for role in ("factory", "sysupgrade"):
+        entry = roles[role]
+        matches = [
+            path for path in candidates
+            if fnmatch.fnmatchcase(path.name, entry["pattern"])
+        ]
+        if not matches:
+            raise ArtifactError(
+                "the build produced no %s image matching %s in %s"
+                % (role, entry["pattern"], image_dir)
+            )
+        if len(matches) > 1:
+            raise ArtifactError(
+                "the %s pattern %s is ambiguous, the image directory holds %s. "
+                "Build in a clean checkout so an earlier image cannot be published "
+                "as this one."
+                % (role, entry["pattern"], ", ".join(path.name for path in matches))
+            )
+        path = matches[0]
+        if path.stat().st_size == 0:
+            raise ArtifactError("the %s image %s is empty" % (role, path.name))
+        if role == "factory":
+            info = inspect_factory_image(path, max_size, blocksize_kib)
+        else:
+            info = inspect_sysupgrade_image(path, max_size, supported_devices)
+        info["role"] = role
+        info["kind"] = role
+        info["name"] = path.name
+        info["file"] = path.name
+        info["path"] = str(path)
+        info["pattern"] = entry["pattern"]
+        info["size_limit"] = max_size
+        resolved.append(info)
+    return resolved
+
+
+def parse_size_kib(text):
+    """Read a buildroot size such as `128k` as kibibytes."""
+    match = re.match(r"^(\d+)k$", str(text or ""), re.I)
+    if not match:
+        raise LockError("the lock records no parseable block size: %r" % (text,))
+    return int(match.group(1))
+
+
+def feed_lock_evidence(lock, feed_dir):
+    """Record the revision every feed really was checked out at."""
+    evidence = []
+    for feed in lock.get("feeds") or []:
+        path = Path(feed_dir) / feed["id"]
+        if not path.is_dir():
+            raise ArtifactError(
+                "the feed %s the build used is gone: %s" % (feed["id"], path)
+            )
+        actual = git_head(path)
+        if actual != feed["revision"]:
+            raise ArtifactError(
+                "the feed %s moved to %s, the lock pins %s"
+                % (feed["id"], actual, feed["revision"])
+            )
+        evidence.append(
+            {
+                "id": feed["id"],
+                "repository": feed["repository"],
+                "locked_revision": feed["revision"],
+                "built_revision": actual,
+            }
+        )
+    return evidence
+
+
+def image_roles_text(lock):
+    """The human readable statement of what the two published images are."""
+    image = lock["image"]
+    return """These files are firmware candidates built from the pinned source. They
+were not verified on hardware and they are not boot loader images.
+
+factory image: %s
+  %s
+sysupgrade image: %s
+  %s
+
+The exact file name prefix is resolved by the buildroot at build time and is
+recorded as UNRESOLVED in the lock, so both images are resolved by their role
+suffix and profile segment instead of by a hard coded name.
+
+The boot loader images (BL2 and FIP) are built by
+devices/nx30pro/build/build-uboot.sh and are not part of this build. The
+partition offsets of the boot loader contract are NMBM logical addresses, not
+physical NAND addresses. No command in this artifact directory writes to a
+flash device.
+""" % (
+        image.get("factory_image"),
+        image.get("factory_role"),
+        image.get("sysupgrade_image"),
+        image.get("sysupgrade_role"),
+    )
+
+
+def require_evidence(path, what, non_empty=True):
+    """Refuse to publish an evidence bundle with a missing member.
+
+    A log has to exist but may legitimately be short, while the final
+    configuration and the package manifest carry the evidence themselves and
+    are refused when they are empty.
+    """
+    path = Path(path)
+    if not path.is_file():
+        raise ArtifactError("the evidence bundle has no %s: %s" % (what, path))
+    if non_empty and path.stat().st_size == 0:
+        raise ArtifactError("the %s of the evidence bundle is empty: %s" % (what, path))
+    return path
+
+
+REQUIRED_LOGS = (
+    "build-plan.json",
+    "preflight.json",
+    "configure.log",
+    "download.log",
+    "build.log",
+    "artifacts.json",
+)
+
+
+def publish_candidate(
+    lock,
+    artifact_dir,
+    image_dir,
+    source_dir,
+    feed_dir,
+    build_env,
+    packages,
+    logs_dir,
+):
+    """Publish the inspected images together with their provenance.
+
+    Packaging is the last stage and it re-reads the evidence instead of
+    trusting the earlier exit codes: a successful configuration alone can never
+    be published as a candidate build, because the images, the final
+    configuration audit, the package manifest, the feed revisions, the hashes
+    and the logs are all required here.
+    """
+    artifact_dir = Path(artifact_dir)
+    source_dir = Path(source_dir)
+    artifacts = resolve_artifacts(lock, image_dir)
+
+    final_config = require_evidence(source_dir / ".config", "final .config")
+    audit = verify_config(final_config.read_text(encoding="utf-8"), lock)
+    package_list = require_evidence(packages, "package manifest")
+    logs_dir = Path(logs_dir)
+    logs = {
+        name: str(
+            require_evidence(
+                logs_dir / name, "build log %s" % name, non_empty=False
+            )
+        )
+        for name in REQUIRED_LOGS
+    }
+    feeds = feed_lock_evidence(lock, feed_dir)
+
+    images = artifact_dir / "images"
+    images.mkdir(parents=True, exist_ok=True)
+    sums = []
+    for item in artifacts:
+        target = images / item["name"]
+        shutil.copyfile(item["path"], target)
+        target.chmod(0o644)
+        sums.append("%s  %s" % (item["sha256"], item["name"]))
+    (images / "SHA256SUMS").write_text(
+        "\n".join(sorted(sums)) + "\n", encoding="utf-8"
+    )
+
+    shutil.copyfile(final_config, artifact_dir / "final.config")
+    shutil.copyfile(package_list, artifact_dir / "packages.txt")
+    (artifact_dir / "feeds-lock.json").write_text(
+        json.dumps(feeds, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    report = build_report(
+        lock,
+        artifacts,
+        build_env,
+        {
+            "config_audit": audit,
+            "package_list": package_list.read_text(encoding="utf-8"),
+            "feeds_checked_out": feeds,
+            "evidence": {
+                "final_config": "final.config",
+                "packages": "packages.txt",
+                "feed_lock": "feeds-lock.json",
+                "image_hashes": "images/SHA256SUMS",
+                "logs": sorted(logs),
+            },
+        },
+    )
+    (artifact_dir / "build-report.json").write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (artifact_dir / "IMAGE-ROLES.txt").write_text(
+        image_roles_text(lock), encoding="utf-8"
+    )
+    return report
+
+
 def build_report(lock, artifacts, build_env, extra=None):
     """Assemble the build report of one firmware build."""
     reported = []
@@ -1013,28 +1654,80 @@ def command_verify_image_rules(args):
     return 0
 
 
-def command_report(args):
+def command_preflight(args):
+    lock = load_lock(args.lock)
+    report = preflight(
+        lock, args.source_dir, args.feed_dir, repo_root=args.repo_root or None
+    )
+    write_json(report, args.out)
+    return 0
+
+
+def command_verify_overlay(args):
+    report = verify_overlay(args.overlay_dir)
+    write_json(report, args.out)
+    return 0
+
+
+def command_artifacts(args):
+    lock = load_lock(args.lock)
+    image_dir = args.image_dir or (
+        str(image_dir_for(lock, args.source_dir)) if args.source_dir else ""
+    )
+    if not image_dir:
+        raise ArtifactError("the artifact check needs --image-dir or --source-dir")
+    artifacts = resolve_artifacts(lock, image_dir)
+    write_json({"image_dir": image_dir, "artifacts": artifacts}, args.out)
+    return 0
+
+
+def command_publish(args):
     lock = load_lock(args.lock)
     errors = validate_lock(lock)
     if errors:
         for error in errors:
             print("Error: %s" % error, file=sys.stderr)
         return BUILD_NOT_READY
-    artifacts = []
-    for spec in args.artifact:
-        role, path = spec.split(":", 1)
-        artifacts.append({"role": role, "path": path})
+    image_dir = args.image_dir or image_dir_for(lock, args.source_dir)
     build_env = json.loads(args.build_env) if args.build_env else {}
-    extra = {}
-    if args.packages:
-        extra["package_list"] = Path(args.packages).read_text(encoding="utf-8")
-    if args.final_config:
-        extra["final_config"] = Path(args.final_config).read_text(encoding="utf-8")
-    report = build_report(lock, artifacts, build_env, extra)
-    Path(args.out).write_text(
-        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    report = publish_candidate(
+        lock,
+        args.artifact_dir,
+        image_dir,
+        args.source_dir,
+        args.feed_dir,
+        build_env,
+        args.packages,
+        args.logs_dir,
+    )
+    Path(args.artifact_dir, "source-lock.json").write_text(
+        Path(args.lock).read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    print(
+        json.dumps(
+            {
+                "status": report["status"],
+                "artifacts": [
+                    {"role": item["role"], "file": item["file"], "sha256": item["sha256"]}
+                    for item in report["artifacts"]
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
     )
     return 0
+
+
+def write_json(report, out=""):
+    """Print one evidence report and copy it into the log directory."""
+    text = json.dumps(report, indent=2, sort_keys=True)
+    print(text)
+    if out:
+        path = Path(out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="utf-8")
+    return report
 
 
 def main(argv=None):
@@ -1084,19 +1777,51 @@ def main(argv=None):
     )
     verify_rules.set_defaults(handler=command_verify_image_rules)
 
-    report = subparsers.add_parser("report", help="write the build report")
+    report = subparsers.add_parser(
+        "preflight", help="verify the checkout, the feeds and the device patches"
+    )
     report.add_argument("--lock", required=True)
-    report.add_argument("--out", required=True)
-    report.add_argument("--build-env", default="")
-    report.add_argument("--artifact", action="append", default=[], help="role:path")
-    report.add_argument("--packages", default="")
-    report.add_argument("--final-config", default="")
-    report.set_defaults(handler=command_report)
+    report.add_argument("--source-dir", required=True)
+    report.add_argument("--feed-dir", required=True)
+    report.add_argument("--repo-root", default="")
+    report.add_argument("--out", default="")
+    report.set_defaults(handler=command_preflight)
+
+    overlay = subparsers.add_parser(
+        "verify-overlay", help="refuse an overlay that carries a secret"
+    )
+    overlay.add_argument("--overlay-dir", required=True)
+    overlay.add_argument("--out", default="")
+    overlay.set_defaults(handler=command_verify_overlay)
+
+    artifacts = subparsers.add_parser(
+        "artifacts", help="resolve and inspect both firmware image roles"
+    )
+    artifacts.add_argument("--lock", required=True)
+    artifacts.add_argument("--image-dir", default="")
+    artifacts.add_argument(
+        "--source-dir", default="", help="the lock names the image directory inside it"
+    )
+    artifacts.add_argument("--out", default="")
+    artifacts.set_defaults(handler=command_artifacts)
+
+    publish = subparsers.add_parser(
+        "publish", help="package the inspected images and their evidence"
+    )
+    publish.add_argument("--lock", required=True)
+    publish.add_argument("--artifact-dir", required=True)
+    publish.add_argument("--source-dir", required=True)
+    publish.add_argument("--feed-dir", required=True)
+    publish.add_argument("--image-dir", default="")
+    publish.add_argument("--packages", required=True)
+    publish.add_argument("--logs-dir", required=True)
+    publish.add_argument("--build-env", default="")
+    publish.set_defaults(handler=command_publish)
 
     args = parser.parse_args(argv)
     try:
         return args.handler(args)
-    except LockError as error:
+    except (LockError, ArtifactError) as error:
         print("Error: %s" % error, file=sys.stderr)
         return BUILD_NOT_READY
     except ConfigError as error:
