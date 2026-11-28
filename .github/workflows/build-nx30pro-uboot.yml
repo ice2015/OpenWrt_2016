@@ -36,7 +36,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential bison device-tree-compiler flex gcc-aarch64-linux-gnu \
             libssl-dev python3 npm
-          aarch64-linux-gnu-gcc --version | head -1
+          aarch64-linux-gnu-gcc --version | awk 'NR==1'
           node --version
           npm --version
           python3 --version

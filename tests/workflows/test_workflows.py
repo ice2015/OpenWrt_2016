@@ -396,6 +396,19 @@ class WorkflowContractTests(unittest.TestCase):
             workflow.index("--source-dir"),
         )
 
+    def test_nx30pro_workflows_do_not_pipe_into_head_under_pipefail(self) -> None:
+        """`cmd | head -1` kills the run when pipefail is on.
+
+        Observed in the authorized probe run 46100116171: `make --version`
+        wrote more than the pipe buffer holds, `head` closed it, make reported
+        "write error: stdout" and the step exited 1 before the lock gate ran.
+        `awk 'NR==1'` reads the whole input, so no writer gets SIGPIPE.
+        """
+        for name in ("build-nx30pro.yml", "build-nx30pro-uboot.yml"):
+            workflow = self.workflow(name)
+            self.assertNotIn("| head -", workflow, name)
+            self.assertIn("set -Eeuo pipefail", workflow, name)
+
     def test_nx30pro_workflows_only_use_expressions_github_accepts(self) -> None:
         """The `runner` context is not available in a job level `env:`.
 

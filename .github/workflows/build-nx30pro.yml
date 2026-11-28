@@ -114,12 +114,12 @@ jobs:
           {
             printf 'runner-image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
             printf 'runner-kernel: %s\n' "$(uname -srmo)"
-            gcc --version | head -1
-            g++ --version | head -1
-            make --version | head -1
+            gcc --version | awk 'NR==1'
+            g++ --version | awk 'NR==1'
+            make --version | awk 'NR==1'
             python3 --version
             git --version
-            ccache --version | head -1
+            ccache --version | awk 'NR==1'
           } | tee "$GITHUB_WORKSPACE/firmware-artifact/logs/host-toolchain.txt"
 
       - name: Run the repository preflight and the lock gate
