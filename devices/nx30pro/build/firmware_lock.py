@@ -590,7 +590,17 @@ def symbol_state(symbols, name):
 
 
 def entry_state(symbols, names):
-    """Summarise the symbols of one package entry of the lock."""
+    """Summarise the symbols of one package entry of the lock.
+
+    An entry that names no symbol cannot be proven either way, so it is
+    reported as `unsymbolled` instead of vacuously passing as enabled.
+    """
+    if not names:
+        return {
+            "state": "unsymbolled",
+            "enabled_symbols": [],
+            "missing_symbols": [],
+        }
     states = {name: symbol_state(symbols, name) for name in names}
     enabled = sorted(name for name, state in states.items() if state == "enabled")
     missing = sorted(name for name, state in states.items() if state != "enabled")

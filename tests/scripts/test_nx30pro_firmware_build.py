@@ -1996,3 +1996,36 @@ class Nx30ProFirmwareDefconfigProbeTests(unittest.TestCase):
             )
         self.assertEqual(BUILD_NOT_READY, result.returncode)
         self.assertIn("unproven", result.stderr)
+
+
+class Nx30ProFirmwareSymbollessEntryTests(unittest.TestCase):
+    """An entry with no symbols must never be reported as enabled.
+
+    Probe run 46108752994 audited `sing-box` as enabled although the final
+    .config contains no sing-box symbol at all: the lock records the package
+    with an empty symbol list because the pinned feeds do not carry it, and
+    `entry_state` treated "no symbol is missing" as "everything is enabled".
+    """
+
+    def setUp(self):
+        self.helper = load_helper()
+
+    def test_an_entry_without_symbols_is_not_enabled(self):
+        summary = self.helper.entry_state({}, [])
+        self.assertEqual("unsymbolled", summary["state"])
+        self.assertEqual([], summary["enabled_symbols"])
+        self.assertEqual([], summary["missing_symbols"])
+
+    def test_the_audit_reports_a_symbolless_package_as_unsymbolled(self):
+        lock = proven_lock()
+        symbolless = [
+            entry for entry in lock["packages"]
+            if entry["package"] == "sing-box"
+        ]
+        self.assertEqual(1, len(symbolless), "the lock lost its sing-box entry")
+        self.assertEqual([], symbolless[0]["symbols"])
+        report = self.helper.verify_config(final_config(lock), lock)
+        states = {
+            entry["package"]: entry["state"] for entry in report["optional"]
+        }
+        self.assertEqual("unsymbolled", states["sing-box"])
