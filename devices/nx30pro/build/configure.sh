@@ -219,7 +219,13 @@ merge_layers() {
 TEMP_CONFIG=$(mktemp "$SOURCE_DIR/.config.nx30pro.XXXXXX")
 trap 'rm -f "$TEMP_CONFIG"' EXIT HUP INT TERM
 merge_layers "$TEMP_CONFIG"
-cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
+
+# The seed is NOT written to .config here. This base regenerates .config while
+# the feeds are updated and installed: probe run 46107709062 sampled .config
+# immediately before `make defconfig` and found 3287 lines with 552 `=y`
+# instead of the 133 line seed, so every device package request was silently
+# replaced by the base defaults. The seed is written after the feed steps and
+# immediately before `make defconfig`.
 
 # Evidence of what defconfig received. Without it a final configuration that
 # lost a requested package cannot be diagnosed: nothing shows whether the seed
@@ -238,6 +244,13 @@ keep_evidence "$TEMP_CONFIG" seed.config
 	# The feeds have to be installed into the package tree before defconfig,
 	# otherwise the packages of the requirement table do not exist as symbols.
 	./scripts/feeds install -a -f
+)
+
+# Only now that the feed steps have stopped rewriting it.
+cp "$TEMP_CONFIG" "$SOURCE_DIR/.config"
+
+(
+	cd "$SOURCE_DIR"
 	# Sampled here, not before the feed steps: this is the exact content
 	# defconfig receives, so a package the feed step dropped is distinguishable
 	# from one defconfig refused.
