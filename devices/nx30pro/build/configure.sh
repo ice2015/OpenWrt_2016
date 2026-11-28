@@ -231,7 +231,6 @@ keep_evidence() {
 	fi
 }
 keep_evidence "$TEMP_CONFIG" seed.config
-keep_evidence "$SOURCE_DIR/.config" pre-defconfig.config
 
 (
 	cd "$SOURCE_DIR"
@@ -239,6 +238,13 @@ keep_evidence "$SOURCE_DIR/.config" pre-defconfig.config
 	# The feeds have to be installed into the package tree before defconfig,
 	# otherwise the packages of the requirement table do not exist as symbols.
 	./scripts/feeds install -a -f
+	# Sampled here, not before the feed steps: this is the exact content
+	# defconfig receives, so a package the feed step dropped is distinguishable
+	# from one defconfig refused.
+	if [ -n "$LOG_DIR" ]; then
+		mkdir -p "$LOG_DIR"
+		cp .config "$LOG_DIR/pre-defconfig.config"
+	fi
 	make defconfig
 )
 
