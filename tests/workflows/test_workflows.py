@@ -12,6 +12,15 @@ class WorkflowContractTests(unittest.TestCase):
     def workflow(self, name: str) -> str:
         return (WORKFLOWS / name).read_text(encoding="utf-8")
 
+    def workflow_step(self, workflow: str, name: str) -> str:
+        """Return the body of one named step, up to the next step."""
+        match = re.search(
+            r"(?s)- name: %s\n(.*?)(?=\n      - name: |\Z)" % re.escape(name),
+            workflow,
+        )
+        self.assertIsNotNone(match, "the workflow has no %r step" % name)
+        return match.group(1)
+
     def test_validation_is_read_only_and_runs_repository_checks(self) -> None:
         workflow = self.workflow("validate.yml")
 
@@ -69,6 +78,7 @@ class WorkflowContractTests(unittest.TestCase):
                 "build-lite.yml",
                 "build-uboot.yml",
                 "build-nx30pro-uboot.yml",
+                "build-nx30pro.yml",
             )
         )
 
@@ -229,6 +239,344 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"(?s)- name: Upload build logs.*?if: always\(\)")
         self.assertIn("firmware-artifact/images/", workflow)
         self.assertIn("firmware-artifact/logs/", workflow)
+
+    def nx30pro_firmware_lock(self) -> dict:
+        return json.loads(
+            (ROOT / "devices/nx30pro/source-lock.json").read_text(encoding="utf-8")
+        )
+
+    def test_nx30pro_firmware_workflow_names_the_candidate_and_its_acceptance_boundary(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        header = workflow.split("\non:\n", 1)[0]
+
+        self.assertIn("name: NX30 Pro 112M firmware candidate", workflow)
+        # The header states both boundaries of this workflow: a candidate is
+        # never accepted here, and the lock gate stops the job while any fact
+        # of the source lock is still UNRESOLVED.
+        self.assertRegex(header, r"(?i)accepting a candidate is a separate")
+        self.assertIn("devices/nx30pro/docs/TEST-REPORT.md", header)
+        self.assertIn("--check-only", header)
+        self.assertIn("build-not-ready status 3", header)
+
+    def test_nx30pro_firmware_workflow_has_only_a_manual_trigger(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        triggers = re.search(r"(?m)^on:\n((?:(?:[ \t].*|)\n)+?)\n(?=\S)", workflow)
+
+        self.assertIsNotNone(triggers, "the workflow does not declare its triggers")
+        block = triggers.group(1)
+        self.assertIn("workflow_dispatch:", block)
+        for forbidden in (
+            "push:",
+            "pull_request:",
+            "pull_request_target:",
+            "schedule:",
+            "release:",
+            "issues:",
+            "workflow_call:",
+            "workflow_run:",
+        ):
+            self.assertNotIn(forbidden, block)
+        # A dispatch takes no input: the lock, not an operator, picks the
+        # source, the feeds and the packages.
+        self.assertNotIn("inputs:", block)
+
+    def test_nx30pro_firmware_workflow_pins_every_action_by_sha(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        uses = re.findall(r"(?m)^\s*uses:\s*(\S+)", workflow)
+
+        self.assertNotEqual([], uses)
+        for reference in uses:
+            self.assertRegex(
+                reference,
+                r"^[^@]+@[0-9a-f]{40}$",
+                "%s is not pinned to a commit sha" % reference,
+            )
+
+    def test_nx30pro_firmware_workflow_frees_runner_disk_before_it_builds(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        cleanup = self.workflow_step(workflow, "Free runner disk space")
+        build_at = workflow.index("devices/nx30pro/build/build.sh")
+
+        # A full buildroot build of this base peaks around 35 to 45 GB on a
+        # runner that ships with about 20 GB free, so the documented failure is
+        # "No space left on device" in the middle of the compile stage. Every
+        # space hog the repository documents has to go, and all of it has to go
+        # before the build starts.
+        for hog in (
+            "/usr/local/lib/android",
+            "/usr/share/dotnet",
+            "/opt/ghc",
+            "/opt/hostedtoolcache",
+            "docker image prune",
+            "apt-get -qq clean",
+        ):
+            self.assertIn(hog, cleanup)
+            self.assertLess(workflow.index(hog), build_at)
+        # The freed space is evidence, and a runner that is still too small
+        # stops here instead of dying in the middle of the compile stage.
+        self.assertIn("df -h", cleanup)
+        self.assertIn('available_kb=$(df --output=avail -k "$RUNNER_TEMP" | tail -1)', cleanup)
+        self.assertIn('-lt 41943040', cleanup)
+        self.assertIn("exit 1", cleanup)
+
+    def test_nx30pro_firmware_workflow_installs_the_prerequisites_of_the_locked_source(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        step = self.workflow_step(workflow, "Install the build prerequisites")
+        # Only the install command counts: a package named in a comment is not
+        # installed.
+        lines = step.splitlines()
+        start = next(
+            index for index, line in enumerate(lines) if "apt-get install" in line
+        )
+        command = []
+        for line in lines[start:]:
+            command.append(line.strip().rstrip("\\"))
+            if not line.rstrip().endswith("\\"):
+                break
+        self.assertIn("--no-install-recommends", " ".join(command))
+        packages = set(" ".join(command).split("--no-install-recommends", 1)[1].split())
+
+        # include/prereq-build.mk of the locked source commit checks these host
+        # commands, and its TestHostCommand for python3-distutils is a hard
+        # gate: without that module the buildroot refuses to start at all.
+        for package in (
+            "build-essential",
+            "bison",
+            "bzip2",
+            "ccache",
+            "file",
+            "flex",
+            "gawk",
+            "gettext",
+            "git",
+            "libelf-dev",
+            "libncurses-dev",
+            "libssl-dev",
+            "patch",
+            "python3",
+            "python3-distutils",
+            "python3-setuptools",
+            "rsync",
+            "tar",
+            "unzip",
+            "wget",
+            "xz-utils",
+            "zlib1g-dev",
+        ):
+            self.assertIn(package, packages)
+        # The source and the feeds are fetched from GitHub over HTTPS.
+        self.assertIn("ca-certificates", packages)
+
+    def test_nx30pro_firmware_workflow_records_the_host_toolchain_identity(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        identity = self.workflow_step(workflow, "Record the host toolchain identity")
+
+        for probe in (
+            "gcc --version",
+            "g++ --version",
+            "make --version",
+            "python3 --version",
+            "git --version",
+            "ccache --version",
+        ):
+            self.assertIn(probe, identity)
+        # The identity lands in the log directory, so it survives a failed
+        # build and is uploaded with the diagnostics.
+        self.assertIn("firmware-artifact/logs/host-toolchain.txt", identity)
+        self.assertLess(
+            workflow.index("host-toolchain.txt"),
+            workflow.index("--source-dir"),
+        )
+
+    def test_nx30pro_firmware_workflow_caps_ccache_and_pins_no_foreign_cache_dir(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+
+        # An uncapped ccache is the second documented way this build fills the
+        # runner disk. The documented TR3000 failure was a CONFIG_CCACHE_DIR
+        # baked into the configuration that did not equal the runner's real
+        # cache directory, so this workflow names exactly one cache directory
+        # and no configuration layer pins another one.
+        self.assertRegex(
+            workflow,
+            r"CCACHE_DIR: \$\{\{ runner\.temp \}\}/nx30pro-firmware/ccache",
+        )
+        self.assertIn('mkdir -p "$CCACHE_DIR"', workflow)
+        self.assertIn("ccache -M 5G", workflow)
+        self.assertNotIn("CONFIG_CCACHE_DIR", workflow)
+        for layer in (
+            "configs/common/base.config",
+            "configs/common/packages.config",
+            "devices/nx30pro/config.config",
+        ):
+            self.assertNotIn(
+                "CONFIG_CCACHE_DIR",
+                (ROOT / layer).read_text(encoding="utf-8"),
+                layer,
+            )
+
+    def test_nx30pro_firmware_workflow_runs_repository_checks_before_the_build(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        build_at = workflow.index("--source-dir")
+
+        validate_at = workflow.index("bash scripts/validate.sh")
+        # The preflight is device scoped: another device's test set must not
+        # decide whether this firmware may be built, and the repository wide
+        # suite runs in validate.yml.
+        tests_at = workflow.index("tests.structure.test_nx30pro_firmware_contract")
+        self.assertIn("tests.scripts.test_nx30pro_firmware_build", workflow)
+        self.assertIn("tests.workflows.test_workflows", workflow)
+        self.assertNotIn("discover -s tests", workflow)
+        self.assertLess(validate_at, build_at)
+        self.assertLess(tests_at, build_at)
+        # The lock gate renders the build plan before any source or feed is
+        # fetched, and the plan has to name the locked source and profile.
+        gate_at = workflow.index("--check-only")
+        self.assertLess(gate_at, build_at)
+        # The rendered plan is kept and every locked fact of this job is read
+        # back from it, so the gate cannot be reduced to a no-op.
+        plan_file = "$RUNNER_TEMP/firmware-build-plan.json"
+        self.assertIn('--check-only | tee "%s"' % plan_file, workflow)
+        greps = re.findall(
+            r'(?m)^\s*grep -q .+ "%s"$' % re.escape(plan_file), workflow
+        )
+        self.assertEqual(5, len(greps))
+        lock = self.nx30pro_firmware_lock()
+        self.assertIn(lock["source"]["repository"], workflow)
+        self.assertIn(lock["target"]["profile"], workflow)
+        # The plan has to carry the 112M partition contract of the boot loader,
+        # so the gate reads the locked ubi partition instead of a constant.
+        ubi = next(
+            entry
+            for entry in lock["partition_contract"]["partitions"]
+            if entry["label"] == "ubi"
+        )
+        self.assertIn('"label": "ubi"', workflow)
+        self.assertIn('"size": %d' % ubi["size"], workflow)
+        # build.sh owns the buildroot: the workflow runs no buildroot target,
+        # no feed script and no configuration generation of its own.
+        self.assertNotIn("scripts/feeds", workflow)
+        self.assertNotIn("make defconfig", workflow)
+        self.assertNotIn("make download", workflow)
+        self.assertNotRegex(workflow, r"(?m)^\s*make\s+-j")
+
+    def test_nx30pro_firmware_workflow_calls_the_exact_build_interface(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+
+        # The interface of the build script, with its four required arguments
+        # and nothing else: no flag that changes the parallelism or the
+        # repository root the recorded device patches are read from.
+        self.assertRegex(
+            workflow,
+            r"sh devices/nx30pro/build/build\.sh \\\n"
+            r"\s+--lock devices/nx30pro/source-lock\.json \\\n"
+            r"\s+--source-dir [^\n]+\\\n"
+            r"\s+--feed-dir [^\n]+\\\n"
+            r"\s+--artifact-dir [^\n]+\n",
+        )
+        for flag in ("--jobs", "--repo-root"):
+            self.assertNotIn(flag, workflow)
+
+    def test_nx30pro_firmware_workflow_uploads_the_whole_evidence_set_on_success_only(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        candidates = self.workflow_step(
+            workflow, "Upload firmware candidates and provenance"
+        )
+
+        self.assertIn("if: success()", candidates)
+        self.assertIn("nx30pro-firmware-candidate-112m", candidates)
+        self.assertIn("if-no-files-found: error", candidates)
+        # A green job without its evidence is not a candidate: the images, the
+        # report, both locks, the image roles, the FINAL configuration, the
+        # package manifest and the feed lock are all required.
+        for evidence in (
+            "firmware-artifact/images/",
+            "firmware-artifact/build-report.json",
+            "firmware-artifact/source-lock.json",
+            "firmware-artifact/IMAGE-ROLES.txt",
+            "firmware-artifact/final.config",
+            "firmware-artifact/packages.txt",
+            "firmware-artifact/feeds-lock.json",
+        ):
+            self.assertIn(evidence, candidates)
+
+        diagnostics = self.workflow_step(workflow, "Upload build logs and diagnostics")
+        self.assertIn("if: always()", diagnostics)
+        self.assertIn("nx30pro-firmware-candidate-logs", diagnostics)
+        self.assertIn("firmware-artifact/logs/", diagnostics)
+
+    def test_nx30pro_firmware_workflow_has_no_flash_or_deploy_command(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+
+        for forbidden in (
+            "mtd write",
+            "mtd_debug",
+            "nandwrite",
+            "flash_erase",
+            "dd if=",
+            "/dev/mtd",
+            "ubiformat",
+            "ubiupdatevol",
+            "ubidetach",
+            "tftp ",
+            "scp ",
+            "ssh ",
+        ):
+            self.assertNotIn(forbidden, workflow)
+        # An image role may be named in prose; it may never be a command.
+        self.assertNotRegex(workflow, r"(?m)(?:^|[;&|]\s*|\bsudo\s+)sysupgrade\b")
+        self.assertNotIn("secrets:", workflow)
+        self.assertNotIn("pull_request_target", workflow)
+        self.assertRegex(workflow, r"permissions:\s*\n\s+contents: read")
+
+    def test_nx30pro_firmware_workflow_never_moves_a_source_or_feed_branch(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+        lock = self.nx30pro_firmware_lock()
+
+        # build.sh fetches the locked commits; the workflow performs no git
+        # operation of its own and names no feed repository that could drift.
+        self.assertNotRegex(
+            workflow, r"\bgit\s+(?:clone|checkout|fetch|pull|reset|merge)\b"
+        )
+        self.assertNotIn("src-git", workflow)
+        self.assertNotRegex(workflow, r"\b(?:master|main|openwrt-21\.02)\b")
+        for feed in lock["feeds"]:
+            self.assertNotIn(feed["repository"], workflow)
+        # The one revision the workflow pins is the locked 40 character commit.
+        pinned = re.search(r"SOURCE_REVISION: ([0-9a-f]{40})", workflow)
+        self.assertIsNotNone(pinned)
+        self.assertEqual(lock["source"]["revision"], pinned.group(1))
+
+    def test_nx30pro_firmware_workflow_writes_only_inside_its_own_artifact_tree(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+
+        # work/, output/ and cache/ hold generated content: a workflow that
+        # writes there edits something the repository does not own.
+        for generated in ("work", "output", "cache"):
+            self.assertNotRegex(workflow, rf"(?m)(?:^|[\s\"'/]){generated}/")
+        for target in re.findall(r"(?m)^\s*(?:sudo\s+)?mkdir -p (.+)$", workflow):
+            self.assertIn(
+                target.strip(),
+                ('"$GITHUB_WORKSPACE/firmware-artifact/logs"', '"$CCACHE_DIR"'),
+            )
+        for target in re.findall(r"\btee (\S+)", workflow):
+            self.assertRegex(
+                target, r'^"\$(?:RUNNER_TEMP|GITHUB_WORKSPACE/firmware-artifact)'
+            )
+
+    def test_nx30pro_firmware_workflow_builds_no_other_device_and_no_boot_loader(self) -> None:
+        workflow = self.workflow("build-nx30pro.yml")
+
+        for forbidden in (
+            "devices/tr3000",
+            "build-lite.sh",
+            "build-full.sh",
+            "build-uboot.sh",
+            "uboot-source-lock.json",
+            "devices/nx30pro/uboot",
+            "reusable-build.yml",
+            "scripts/build.sh",
+        ):
+            self.assertNotIn(forbidden, workflow)
 
     def test_full_workflow_has_typed_options_and_pinned_build_inputs(self) -> None:
         workflow = self.workflow("build-full.yml")

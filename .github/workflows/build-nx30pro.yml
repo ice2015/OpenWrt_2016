@@ -1,4 +1,15 @@
-name: NX30 Pro firmware
+name: NX30 Pro 112M firmware candidate
+
+# Manual only. This workflow builds a firmware candidate; it is never triggered
+# by a push, a pull request or a schedule, and it contains no flash, erase or
+# deploy command. Accepting a candidate is a separate, explicitly authorized
+# step recorded in devices/nx30pro/docs/TEST-REPORT.md.
+#
+# The lock gate runs before anything is fetched: `build.sh --check-only`
+# renders the build plan, or it stops with the repository's
+# build-not-ready status 3 while devices/nx30pro/source-lock.json still
+# records an UNRESOLVED fact. No source, no feed, no configuration and no
+# compilation happens before an authorized probe promotes the lock.
 
 on:
   workflow_dispatch:
@@ -15,13 +26,26 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
     env:
+      # The lock owns the source and the feeds. This pin exists so build.sh can
+      # refuse to run when this workflow drifted from the lock.
       SOURCE_REVISION: 740103d655bcee6da7bc3b49b1cfdfdee4cd5bb6
+      # One capped cache directory for the whole job. No configuration layer
+      # of this device pins a cache path of its own, so the documented
+      # mismatch between a baked-in path and the runner's real one cannot
+      # reappear here.
+      CCACHE_DIR: ${{ runner.temp }}/nx30pro-firmware/ccache
     steps:
       - name: Check out this build project
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Free runner disk space
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          # A full buildroot build of this base peaks around 35 to 45 GB while
+          # the runner ships with about 20 GB free, so the documented failure
+          # of an uncleaned runner is "No space left on device" in the middle
+          # of the compile stage.
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
@@ -33,27 +57,90 @@ jobs:
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
           df -h
+          # Stop here instead of two hours into the compile stage: the build
+          # peaks around 40 GiB, so a runner that is still below that after
+          # the cleanup cannot finish it.
+          available_kb=$(df --output=avail -k "$RUNNER_TEMP" | tail -1)
+          if [ "$available_kb" -lt 41943040 ]; then
+            printf 'only %s MiB free on the runner volume, about 40 GiB are needed\n' \
+              "$((available_kb / 1024))" >&2
+            exit 1
+          fi
 
-      - name: Install build dependencies
+      - name: Install the build prerequisites
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/firmware-artifact/logs"
           sudo apt-get update
+          # include/prereq-build.mk of the locked source commit checks these
+          # host commands, and its TestHostCommand for python3-distutils is a
+          # hard gate: without that module the buildroot refuses to start.
           sudo apt-get install -y --no-install-recommends \
-            build-essential ca-certificates ccache file gawk gettext git \
-            libncurses-dev libssl-dev perl python3 python3-distutils \
-            python3-setuptools rsync swig unzip wget zlib1g-dev \
-            device-tree-compiler flex bison
+            bc build-essential bison bzip2 ca-certificates ccache \
+            device-tree-compiler file flex gawk gettext git libelf-dev \
+            libncurses-dev libssl-dev patch python3 python3-distutils \
+            python3-setuptools rsync swig tar time unzip wget xz-utils \
+            zlib1g-dev
+          # An uncapped compiler cache is the second documented way this build
+          # fills the runner disk.
+          mkdir -p "$CCACHE_DIR"
+          ccache -M 5G
 
-      - name: Validate the repository
+      - name: Record the host toolchain identity
+        shell: bash
         run: |
+          set -Eeuo pipefail
+          # The build report names the source, the feeds and the images; the
+          # host environment that built them is recorded next to the logs, so a
+          # candidate can always be attributed to one runner toolchain. It is
+          # written before the build, so a failed run keeps it too.
+          {
+            printf 'runner-image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            printf 'runner-kernel: %s\n' "$(uname -srmo)"
+            gcc --version | head -1
+            g++ --version | head -1
+            make --version | head -1
+            python3 --version
+            git --version
+            ccache --version | head -1
+          } | tee "$GITHUB_WORKSPACE/firmware-artifact/logs/host-toolchain.txt"
+
+      - name: Run the repository preflight and the lock gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
           bash scripts/validate.sh
-          python3 -m unittest tests.structure.test_nx30pro_firmware_contract \
-            tests.scripts.test_nx30pro_firmware_build -v
+          # Device scoped on purpose: another device's test set must not decide
+          # whether this firmware may be built, and the repository wide suite
+          # runs in validate.yml. The contract module is the partition contract
+          # preflight as well: it compares the image partition table with the
+          # locked layout of the boot loader.
+          python3 -m unittest \
+            tests.structure.test_nx30pro_firmware_contract \
+            tests.scripts.test_nx30pro_firmware_build \
+            tests.workflows.test_workflows -v
+          # The lock gate renders the only description of what this job is
+          # allowed to build, or it stops before any source or feed is fetched.
+          sh devices/nx30pro/build/build.sh \
+            --lock devices/nx30pro/source-lock.json \
+            --check-only | tee "$RUNNER_TEMP/firmware-build-plan.json"
+          grep -q 'https://github.com/hanwckf/immortalwrt-mt798x' "$RUNNER_TEMP/firmware-build-plan.json"
+          grep -q 'h3c_nx30pro_112M' "$RUNNER_TEMP/firmware-build-plan.json"
+          grep -q "$SOURCE_REVISION" "$RUNNER_TEMP/firmware-build-plan.json"
+          grep -q '"label": "ubi"' "$RUNNER_TEMP/firmware-build-plan.json"
+          grep -q '"size": 117440512' "$RUNNER_TEMP/firmware-build-plan.json"
 
       - name: Build the firmware candidate
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p "$RUNNER_TEMP/nx30pro-firmware" "$GITHUB_WORKSPACE/firmware-artifact/logs"
+          # build.sh owns every buildroot step: it fetches the locked source and
+          # the locked feeds, applies the recorded device patches, merges the
+          # configuration layers, audits the FINAL configuration against the
+          # package contract, downloads, compiles, inspects both image roles and
+          # packages the evidence. A hard gate that the audit misses stops the
+          # job before anything is compiled.
           sh devices/nx30pro/build/build.sh \
             --lock devices/nx30pro/source-lock.json \
             --source-dir "$RUNNER_TEMP/nx30pro-firmware/source" \
@@ -64,12 +151,15 @@ jobs:
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: nx30pro-firmware-112m
+          name: nx30pro-firmware-candidate-112m
           path: |
             firmware-artifact/images/
             firmware-artifact/build-report.json
             firmware-artifact/source-lock.json
             firmware-artifact/IMAGE-ROLES.txt
+            firmware-artifact/final.config
+            firmware-artifact/packages.txt
+            firmware-artifact/feeds-lock.json
           if-no-files-found: error
           retention-days: 30
 
@@ -77,7 +167,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: nx30pro-firmware-logs
+          name: nx30pro-firmware-candidate-logs
           path: firmware-artifact/logs/
           if-no-files-found: warn
           retention-days: 30
